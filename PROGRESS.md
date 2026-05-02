@@ -10,7 +10,13 @@
 
 - ✅ 项目命名（`helm`）
 - ✅ 设计讨论（架构、技术栈、范围、抽象层）
-- ✅ `PROJECT_BLUEPRINT.md` 完整草稿（24 节，含 MVP-1/2/3 + Phase 2 路线图）
+- ✅ `PROJECT_BLUEPRINT.md` 完整草稿（24 节 + 三处增补）
+  - 含 MVP-1/2/3 + Phase 2 路线图
+  - 增补 §11.5 KnowledgeProvider 抽象（depscope 等外部知识源接入）
+  - 增补 §11.6 RelayBackend 抽象（Phase 2 mobile/PWA 通道，可复用 depscope server）
+  - 增补 §17.4 e2e 测试套件（用户级强制要求，攻击性视角）
+  - 增补 §19.5 日志与 Diagnostics（用户级强制要求，便于反馈问题）
+  - 增补 Phase 7.5 / 13 / 14 / 15 实现顺序条目
 - ✅ Git 仓库 init（`/Users/bytedance/projects/helm`，main 分支）
 - ✅ 目录骨架（electron / src / web / bin / tests / docs，含子目录）
 - ✅ `package.json`（含 dependencies、scripts、bin 入口）
@@ -54,8 +60,11 @@
 | 知识沉淀 | 用户主动触发 | 不自动识别意图 |
 | 老项目兼容 | 不兼容、不迁移 | 复制代码作为起点，TS 化，不读 `~/.agent2lark/`、`~/.relay/` |
 | IPC | localhost HTTP + WebSocket | renderer 复用 relay/web 的 useApi；二期 PWA 切换无成本 |
-| 测试栈 | Vitest | 统一 relay 现有栈 |
+| 测试栈 | Vitest + Playwright | 单元 + e2e，e2e 攻击性视角 |
 | Electron 体积 | 接受 ~200MB | 不为体积重写 |
+| 外部知识源 | KnowledgeProvider 抽象 | LocalRolesProvider（内置）+ DepscopeProvider（reference）；可扩展 wiki / 内部 SDK 文档站 |
+| 手机端通道 | RelayBackend 抽象（Phase 2） | DepscopeRelay（内部零配置）/ CloudflareTunnelRelay（开源默认）/ TailscaleRelay |
+| depscope 集成 | 部署层复用，概念层隔离 | depscope 进程内可加 /relay/* 路由用于 Phase 2，但与现有 ServiceSpec/分析逻辑互不耦合 |
 
 ## 待决定（Open Questions）
 

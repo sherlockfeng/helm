@@ -1,0 +1,57 @@
+{
+  "name": "helm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cursor chat steward — local watcher, remote bridge, agent orchestrator",
+  "type": "module",
+  "bin": {
+    "helm": "./bin/helm.mjs",
+    "helm-hook": "./bin/helm-hook.mjs"
+  },
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "dev:backend": "tsup --watch",
+    "dev:web": "pnpm --filter helm-web dev",
+    "dev:electron": "electron dist/electron/main.js",
+    "build:backend": "tsup",
+    "build:web": "pnpm --filter helm-web build",
+    "build": "pnpm build:backend && pnpm build:web",
+    "package": "pnpm build && electron-builder",
+    "package:dir": "pnpm build && electron-builder --dir",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:e2e": "vitest run tests/e2e",
+    "typecheck": "tsc --noEmit && pnpm --filter helm-web typecheck",
+    "lint": "echo \"(lint not yet configured)\"",
+    "clean": "rm -rf dist node_modules/.cache"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@cursor/sdk": "^0.1.0",
+    "@larksuite/cli": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "sqlite3"
+    ]
+  }
+}

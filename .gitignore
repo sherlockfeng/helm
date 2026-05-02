@@ -1,0 +1,16 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+*.log
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
+.vscode/
+.idea/
+.turbo/
+web/dist/
+playwright-report/
+test-results/

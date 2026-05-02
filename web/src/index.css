@@ -1,0 +1,12 @@
+/* Phase 0：占位。Phase 9 由 UI subagent（资深 Mac app 设计专家）正式设计。 */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f5f5f7;
+  color: #1d1d1f;
+}

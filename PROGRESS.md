@@ -2,9 +2,9 @@
 
 ## 当前阶段
 
-**Phase 0：仓库骨架（进行中，已暂停）**
+**Phase 0：仓库骨架 — ✅ 完成**
 
-设计阶段已完成，骨架文件创建被用户中断。
+下一步：Phase 1 数据层（SQLite schema + migrations）。
 
 ## 已完成
 
@@ -25,21 +25,21 @@
 - ✅ 目录骨架（electron / src / web / bin / tests / docs，含子目录）
 - ✅ `package.json`（含 dependencies、scripts、bin 入口）
 
-## 待补充（Phase 0 剩余）
+## Phase 0 已交付
 
-- [ ] `pnpm-workspace.yaml`
-- [ ] `.gitignore` / `.npmrc`
-- [ ] `tsconfig.json` / `tsconfig.base.json`
-- [ ] `tsup.config.ts`
-- [ ] `vitest.config.ts`
-- [ ] `electron-builder.config.cjs`
-- [ ] `electron/main.ts` / `preload.ts`（最小 stub）
-- [ ] `src/constants.ts` / `config.ts`（stub）
-- [ ] `bin/helm.mjs` / `bin/helm-hook.mjs`（stub）
-- [ ] `web/package.json` / `vite.config.ts` / `index.html` / `src/main.tsx` / `App.tsx`
-- [ ] `README.md`
-- [ ] `AGENTS.md`
-- [ ] `docs/ARCHITECTURE.md` / `ROADMAP.md` / `roles/*.md`
+- [x] `pnpm-workspace.yaml` / `.gitignore` / `.npmrc` / `.editorconfig`
+- [x] `tsconfig.json` / `tsconfig.base.json` / `tsup.config.ts` / `vitest.config.ts`
+- [x] `electron-builder.config.cjs`
+- [x] `electron/main.ts` + `preload.ts`（boot 一个空窗口的 stub）
+- [x] `src/constants.ts` + `config.ts`（路径常量 + AppConfig 类型 + 默认值）
+- [x] `bin/helm.mjs` + `bin/helm-hook.mjs`（带 fallback 的 stub）
+- [x] web workspace：`package.json` / `tsconfig.json` / `vite.config.ts` / `index.html` / `src/{main.tsx,App.tsx,index.css}`
+- [x] `README.md`
+- [x] `AGENTS.md`（含 e2e / 日志 / subagent / TS-only / git 分支等强制要求）
+- [x] `docs/ARCHITECTURE.md` + `ROADMAP.md`
+- [x] `docs/roles/{product,developer,tester}.md`
+- [x] `docs/tech/HOOK_FLOW.md`
+- [x] `tests/{unit,e2e,fixtures}/.gitkeep`
 
 ## 用户后续追加的强制要求（须写进 AGENTS.md / 测试策略）
 
@@ -78,7 +78,19 @@
 
 ## 下一步
 
-恢复 Phase 0 时按 `PROJECT_BLUEPRINT.md` §21 顺序补齐剩余骨架文件，然后进 Phase 1（数据层）。
+Phase 1：数据层
+
+- 选 SQLite 表清单（蓝图 §9）按模块分文件：`src/storage/{database,migrations,types,repos/*}.ts`
+- migrations 框架：`schema_migrations` 表 + numbered files
+- 单元测试覆盖每个表 CRUD + migration 幂等
+
+依赖（review 后再 install）：
+
+```bash
+pnpm install
+```
+
+需要 review 的依赖版本：`@cursor/sdk` / `@larksuite/cli` 是否能拉到正确包；`@modelcontextprotocol/sdk` 当前版本是否支持新 API。
 
 ---
 

@@ -10,12 +10,16 @@
 
 - ✅ 项目命名（`helm`）
 - ✅ 设计讨论（架构、技术栈、范围、抽象层）
-- ✅ `PROJECT_BLUEPRINT.md` 完整草稿（24 节 + 三处增补）
+- ✅ `PROJECT_BLUEPRINT.md` 完整草稿（24 节 + 增补 + 轻量化迭代）
   - 含 MVP-1/2/3 + Phase 2 路线图
   - 增补 §11.5 KnowledgeProvider 抽象（depscope 等外部知识源接入）
+    - **v1 轻量化**：app 内集中配置 mapping，零项目侵入；不读 .helm-project / 任何 monorepo 工具配置
+    - 接口最小化（4 方法），最长前缀命中，单 chat 单 scope
+    - 演进路径：v1.5 filePath 切换 → v2 .helm-project → v3 自动发现
   - 增补 §11.6 RelayBackend 抽象（Phase 2 mobile/PWA 通道，可复用 depscope server）
   - 增补 §17.4 e2e 测试套件（用户级强制要求，攻击性视角）
   - 增补 §19.5 日志与 Diagnostics（用户级强制要求，便于反馈问题）
+  - 增补 §14.2 Settings → 知识源 子页 UI 描述
   - 增补 Phase 7.5 / 13 / 14 / 15 实现顺序条目
 - ✅ Git 仓库 init（`/Users/bytedance/projects/helm`，main 分支）
 - ✅ 目录骨架（electron / src / web / bin / tests / docs，含子目录）

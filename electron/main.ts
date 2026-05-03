@@ -16,11 +16,10 @@ import { app, BrowserWindow } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-// CJS 兼容：tsup 输出 cjs，但保留 ESM-style 路径计算以备改 ESM
-const __filename = typeof __dirname === 'undefined'
-  ? fileURLToPath(import.meta.url)
-  : __filename;
-const __projectDir = path.dirname(__filename);
+// CJS 兼容：tsup 输出 cjs，Electron 主进程在 CJS 环境中 __dirname 始终可用
+const __projectDir = typeof __dirname !== 'undefined'
+  ? __dirname
+  : path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
 

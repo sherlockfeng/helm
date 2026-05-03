@@ -41,16 +41,38 @@ function parseJsonContent(result: { content: Array<{ type: string; text?: string
 }
 
 describe('MCP server — tool registration', () => {
-  it('lists all four phase-6 tools', async () => {
+  it('lists every helm + phase-7 tool', async () => {
     await bootServer();
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name).sort();
-    expect(names).toEqual([
-      'bind_to_remote_channel',
-      'get_active_chats',
-      'list_knowledge_providers',
-      'query_knowledge',
-    ]);
+    // Phase 6: helm-specific (4)
+    expect(names).toContain('bind_to_remote_channel');
+    expect(names).toContain('get_active_chats');
+    expect(names).toContain('list_knowledge_providers');
+    expect(names).toContain('query_knowledge');
+    // Phase 7: workflow (8)
+    expect(names).toContain('init_workflow');
+    expect(names).toContain('get_cycle_state');
+    expect(names).toContain('create_tasks');
+    expect(names).toContain('get_my_tasks');
+    expect(names).toContain('complete_task');
+    expect(names).toContain('add_task_comment');
+    expect(names).toContain('create_bug_tasks');
+    expect(names).toContain('add_product_feedback');
+    expect(names).toContain('complete_cycle');
+    // Phase 7: doc-first
+    expect(names).toContain('update_doc_first');
+    // Phase 7: roles (4)
+    expect(names).toContain('list_roles');
+    expect(names).toContain('get_role');
+    expect(names).toContain('train_role');
+    expect(names).toContain('search_knowledge');
+    // Phase 7: requirements (2)
+    expect(names).toContain('capture_requirement');
+    expect(names).toContain('recall_requirement');
+    // Phase 7: summarizer (2)
+    expect(names).toContain('list_campaigns');
+    expect(names).toContain('summarize_campaign');
   });
 });
 

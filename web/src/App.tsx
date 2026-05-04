@@ -1,23 +1,25 @@
 /**
- * Helm renderer 入口 (Phase 0 stub)
- *
- * 后续 Phase 在此挂载：
- * - React Router routes：/chats /approvals /requirements /roles /campaigns /settings
- * - sidebar
- * - useApi / useWebSocket hooks
- *
- * 详见 PROJECT_BLUEPRINT.md §14。
+ * Helm renderer root — sets up the router; routes mount pages inside Layout.
  */
+
+import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+import { Layout } from './components/Layout.js';
+import { ApprovalsPage } from './pages/Approvals.js';
+import { ChatsPage } from './pages/Chats.js';
+import { CampaignsPage } from './pages/Campaigns.js';
 
 export default function App() {
   return (
-    <div style={{
-      fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro", sans-serif',
-      padding: '2rem',
-      color: '#1d1d1f',
-    }}>
-      <h1>Helm</h1>
-      <p>Phase 0 scaffold. UI lands in Phase 9.</p>
-    </div>
+    <Router>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<Navigate to="/approvals" replace />} />
+          <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/chats" element={<ChatsPage />} />
+          <Route path="/campaigns" element={<CampaignsPage />} />
+          <Route path="*" element={<Navigate to="/approvals" replace />} />
+        </Route>
+      </Routes>
+    </Router>
   );
 }

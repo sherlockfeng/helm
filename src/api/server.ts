@@ -1,0 +1,205 @@
+/**
+ * Helm HTTP API.
+ *
+ * Bound to 127.0.0.1 only (per §19 — never exposed). REST endpoints for the
+ * renderer and any future PWA. WebSocket / SSE comes in Phase 9 if needed;
+ * for v1 the renderer polls.
+ *
+ * Endpoints:
+ *
+ *   GET  /api/health                       — { ok, version }
+ *   GET  /api/active-chats                 — host_sessions where status=active
+ *   GET  /api/approvals                    — pending approvals
+ *   POST /api/approvals/:id/decide         — body { decision, reason? } → settle
+ *   GET  /api/campaigns                    — listCampaigns
+ *   GET  /api/campaigns/:id/cycles         — listCycles for a campaign
+ *
+ * Plain node:http with a tiny router. No framework dep on purpose —
+ * the surface is small and the renderer talks to it via fetch.
+ */
+
+import http from 'node:http';
+import type Database from 'better-sqlite3';
+import { listActiveSessions } from '../storage/repos/host-sessions.js';
+import { listCampaigns, listCycles } from '../storage/repos/campaigns.js';
+import type { ApprovalRegistry } from '../approval/registry.js';
+import type { Logger } from '../logger/index.js';
+
+export interface HttpApiDeps {
+  db: Database.Database;
+  registry: ApprovalRegistry;
+  /** Optional logger; defaults to no-op. */
+  logger?: Logger;
+  /** Server name + version for /api/health. */
+  appName?: string;
+  appVersion?: string;
+}
+
+export interface HttpApiOptions {
+  /** 127.0.0.1 by default. */
+  host?: string;
+  /** Random ephemeral port when 0 (default for tests). */
+  port?: number;
+}
+
+export interface HttpApiHandle {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  /** The actual port the server bound to (resolved after start). */
+  port(): number | null;
+}
+
+interface RouteContext {
+  url: URL;
+  request: http.IncomingMessage;
+  response: http.ServerResponse;
+  body: string;
+}
+
+async function readBody(req: http.IncomingMessage, limit = 1_000_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > limit) {
+        req.destroy();
+        reject(new Error('body too large'));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function send(res: http.ServerResponse, status: number, body: unknown): void {
+  const payload = typeof body === 'string' ? body : JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(payload);
+}
+
+function notFound(res: http.ServerResponse): void {
+  send(res, 404, { error: 'not_found' });
+}
+
+function methodNotAllowed(res: http.ServerResponse): void {
+  send(res, 405, { error: 'method_not_allowed' });
+}
+
+function badRequest(res: http.ServerResponse, message: string): void {
+  send(res, 400, { error: 'bad_request', message });
+}
+
+function internalError(res: http.ServerResponse, err: unknown): void {
+  send(res, 500, { error: 'internal', message: (err as Error).message });
+}
+
+export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): HttpApiHandle {
+  const host = options.host ?? '127.0.0.1';
+  const desiredPort = options.port ?? 0;
+  const appName = deps.appName ?? 'helm';
+  const appVersion = deps.appVersion ?? '0.1.0';
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : '';
+      const ctx: RouteContext = { url, request: req, response: res, body };
+
+      if (url.pathname === '/api/health') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { ok: true, name: appName, version: appVersion });
+      }
+
+      if (url.pathname === '/api/active-chats') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const sessions = listActiveSessions(deps.db);
+        return send(res, 200, { chats: sessions });
+      }
+
+      if (url.pathname === '/api/approvals') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { approvals: deps.registry.listPending() });
+      }
+
+      const decideMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/decide$/);
+      if (decideMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleDecide(ctx, deps, decideMatch[1]!);
+      }
+
+      if (url.pathname === '/api/campaigns') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { campaigns: listCampaigns(deps.db) });
+      }
+
+      const cyclesMatch = url.pathname.match(/^\/api\/campaigns\/([^/]+)\/cycles$/);
+      if (cyclesMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { cycles: listCycles(deps.db, cyclesMatch[1]!) });
+      }
+
+      return notFound(res);
+    } catch (err) {
+      deps.logger?.error('http handler threw', { data: { url: req.url, error: (err as Error).message } });
+      return internalError(res, err);
+    }
+  });
+
+  let actualPort: number | null = null;
+
+  return {
+    async start(): Promise<void> {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(desiredPort, host, () => {
+          server.off('error', reject);
+          const addr = server.address();
+          if (addr && typeof addr === 'object') actualPort = addr.port;
+          deps.logger?.info('http_api started', { data: { host, port: actualPort } });
+          resolve();
+        });
+      });
+    },
+    async stop(): Promise<void> {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      deps.logger?.info('http_api stopped');
+    },
+    port: () => actualPort,
+  };
+}
+
+function handleDecide(ctx: RouteContext, deps: HttpApiDeps, approvalId: string): void {
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { decision, reason } = parsed as { decision?: unknown; reason?: unknown };
+  if (decision !== 'allow' && decision !== 'deny') {
+    return badRequest(ctx.response, 'decision must be "allow" or "deny"');
+  }
+  if (reason !== undefined && typeof reason !== 'string') {
+    return badRequest(ctx.response, 'reason must be a string when provided');
+  }
+
+  const settled = deps.registry.settle(approvalId, {
+    permission: decision,
+    reason,
+    decidedBy: 'local-ui',
+  });
+  if (!settled) {
+    deps.logger?.warn('approval_decide_unknown_or_settled', { data: { approvalId } });
+    return send(ctx.response, 409, { error: 'already_settled_or_unknown' });
+  }
+
+  deps.logger?.info('approval_decide', { data: { approvalId, decision } });
+  return send(ctx.response, 200, { ok: true, approvalId });
+}

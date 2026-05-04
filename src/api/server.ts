@@ -2,8 +2,9 @@
  * Helm HTTP API.
  *
  * Bound to 127.0.0.1 only (per §19 — never exposed). REST endpoints for the
- * renderer and any future PWA. WebSocket / SSE comes in Phase 9 if needed;
- * for v1 the renderer polls.
+ * renderer and any future PWA, plus a Server-Sent Events stream so the UI
+ * gets push updates (new pending approvals, settle, sessions) without
+ * polling.
  *
  * Endpoints:
  *
@@ -13,9 +14,10 @@
  *   POST /api/approvals/:id/decide         — body { decision, reason? } → settle
  *   GET  /api/campaigns                    — listCampaigns
  *   GET  /api/campaigns/:id/cycles         — listCycles for a campaign
+ *   GET  /api/events                       — SSE stream of AppEvent
  *
  * Plain node:http with a tiny router. No framework dep on purpose —
- * the surface is small and the renderer talks to it via fetch.
+ * the surface is small and the renderer talks to it via fetch / EventSource.
  */
 
 import http from 'node:http';
@@ -24,10 +26,13 @@ import { listActiveSessions } from '../storage/repos/host-sessions.js';
 import { listCampaigns, listCycles } from '../storage/repos/campaigns.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
 import type { Logger } from '../logger/index.js';
+import type { EventBus } from '../events/bus.js';
 
 export interface HttpApiDeps {
   db: Database.Database;
   registry: ApprovalRegistry;
+  /** Optional event bus; when set, /api/events streams its emissions over SSE. */
+  events?: EventBus;
   /** Optional logger; defaults to no-op. */
   logger?: Logger;
   /** Server name + version for /api/health. */
@@ -105,9 +110,33 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
   const appName = deps.appName ?? 'helm';
   const appVersion = deps.appVersion ?? '0.1.0';
 
+  // Track open SSE clients so we can close them gracefully on stop().
+  const sseClients = new Set<http.ServerResponse>();
+  let unsubscribeFromBus: (() => void) | undefined;
+
+  if (deps.events) {
+    unsubscribeFromBus = deps.events.on((event) => {
+      const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+      for (const client of sseClients) {
+        try {
+          if (!client.writableEnded) client.write(payload);
+        } catch (err) {
+          deps.logger?.warn('sse_write_failed', { data: { error: (err as Error).message } });
+        }
+      }
+    });
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+      // SSE endpoint is special-cased before body read because it streams.
+      if (url.pathname === '/api/events') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return handleEvents(req, res, sseClients);
+      }
+
       const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : '';
       const ctx: RouteContext = { url, request: req, response: res, body };
 
@@ -152,6 +181,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
   });
 
   let actualPort: number | null = null;
+  let stopped = false;
 
   return {
     async start(): Promise<void> {
@@ -167,11 +197,38 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       });
     },
     async stop(): Promise<void> {
+      if (stopped) return;
+      stopped = true;
+      // Detach from event bus first so no new SSE messages queue while we close.
+      unsubscribeFromBus?.();
+      unsubscribeFromBus = undefined;
+      // End every open SSE stream so server.close() can resolve.
+      for (const client of sseClients) {
+        try { client.end(); } catch { /* socket already gone */ }
+      }
+      sseClients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       deps.logger?.info('http_api stopped');
     },
     port: () => actualPort,
   };
+}
+
+function handleEvents(req: http.IncomingMessage, res: http.ServerResponse, clients: Set<http.ServerResponse>): void {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  // Initial comment line establishes the stream and triggers EventSource onopen.
+  res.write(': connected\n\n');
+  clients.add(res);
+
+  const cleanup = (): void => { clients.delete(res); };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('error', cleanup);
 }
 
 function handleDecide(ctx: RouteContext, deps: HttpApiDeps, approvalId: string): void {

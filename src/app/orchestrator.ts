@@ -40,9 +40,10 @@ import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
-import { upsertHostSession, getHostSession } from '../storage/repos/host-sessions.js';
+import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
+import { createEventBus, type EventBus } from '../events/bus.js';
 
 export interface HelmAppDeps {
   db: Database.Database;
@@ -67,12 +68,21 @@ export interface HelmAppHandle {
   readonly channel: LocalChannel;
   readonly bridge: BridgeServer;
   readonly httpApi: HttpApiHandle;
+  readonly events: EventBus;
   /** Resolved port after start. */
   httpPort(): number | null;
 }
 
 export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const log: Logger = deps.loggers.module('app');
+
+  // Event bus — orchestrator publishes high-level events here; the HTTP API's
+  // /api/events SSE endpoint subscribes and forwards to the renderer.
+  const events = createEventBus({
+    onListenerError: (err, type) => log.warn('event_listener_threw', {
+      event: type, data: { error: err.message },
+    }),
+  });
 
   // Knowledge — register LocalRolesProvider over the seeded built-in roles.
   // Any future provider (DepscopeProvider in Phase 13) registers here too.
@@ -101,13 +111,16 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     },
   });
 
-  // Wire registry → channel (push) and channel → registry (settle).
+  // Wire registry → channel (push) + EventBus emission so the SSE stream
+  // notifies the renderer in real time.
   registry.onPendingCreated((req) => {
+    events.emit({ type: 'approval.pending', request: req });
     void channel.sendApprovalRequest(req).catch((err) => {
       log.warn('local_channel_push_failed', { data: { approvalId: req.id, err: (err as Error).message } });
     });
   });
   channel.onApprovalDecision((decision) => {
+    events.emit({ type: 'approval.decision_received', decision });
     const settled = registry.settle(decision.approvalId, {
       permission: decision.decision,
       reason: decision.reason,
@@ -115,7 +128,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
     if (!settled) {
       log.warn('local_channel_decision_no_pending', { data: { approvalId: decision.approvalId } });
+      return;
     }
+    events.emit({
+      type: 'approval.settled',
+      approvalId: decision.approvalId,
+      decision: decision.decision,
+      decidedBy: 'local-ui',
+      reason: decision.reason,
+    });
   });
 
   // Bridge handlers. Phase 8 wires only the two flows we have engines for:
@@ -144,6 +165,8 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       firstSeenAt: now,
       lastSeenAt: now,
     });
+    const persisted = getHostSession(deps.db, req.host_session_id);
+    if (persisted) events.emit({ type: 'session.started', session: persisted });
 
     if (!req.cwd) {
       log.session(req.host_session_id).info('session_start', {
@@ -179,14 +202,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
 
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
-    { db: deps.db, registry, logger: deps.loggers.module('api') },
+    { db: deps.db, registry, events, logger: deps.loggers.module('api') },
     { port: deps.httpPort ?? 0 },
   );
 
   let started = false;
 
   return {
-    knowledge, approval: registry, policy, channel, bridge, httpApi,
+    knowledge, approval: registry, policy, channel, bridge, httpApi, events,
     httpPort: () => httpApi.port(),
 
     async start(): Promise<void> {

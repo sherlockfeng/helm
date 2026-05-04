@@ -1,20 +1,26 @@
 /**
- * Helm — Electron 主进程入口（Phase 0 stub）
+ * Helm — Electron main process.
  *
- * Phase 0 仅启动一个空窗口，验证打包链路通。
- * 后续阶段在此挂载：
- * - bridge UDS server 启动 / 关闭
- * - HTTP API 启动
- * - MCP stdio server fork
- * - menubar tray
- * - 单实例锁
- * - HostAdapter / RemoteChannel 注册
- * 详见 PROJECT_BLUEPRINT.md §7.3 / §7.4。
+ * Thin shell on top of `createHelmApp`. The orchestrator owns all of the
+ * subsystems (bridge, channel, approval, knowledge, HTTP API) so they can be
+ * tested headless. This file only does Electron-specific work:
+ *   - app.whenReady → boot the orchestrator
+ *   - single-instance lock + second-instance focus
+ *   - main BrowserWindow (renderer side; Phase 9 builds out the UI)
+ *   - graceful shutdown on quit
+ *
+ * Menubar tray + status icon are deferred to Phase 9 alongside the renderer.
+ *
+ * See PROJECT_BLUEPRINT.md §7.3 / §7.4 for the full boot/shutdown sequence.
  */
 
 import { app, BrowserWindow } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { HelmDB } from '../src/storage/database.js';
+import { createLoggerFactory } from '../src/logger/index.js';
+import { createHelmApp, type HelmAppHandle } from '../src/app/orchestrator.js';
+import { PATHS } from '../src/constants.js';
 
 // CJS 兼容：tsup 输出 cjs，Electron 主进程在 CJS 环境中 __dirname 始终可用
 const __projectDir = typeof __dirname !== 'undefined'
@@ -22,6 +28,7 @@ const __projectDir = typeof __dirname !== 'undefined'
   : path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
+let helmApp: HelmAppHandle | null = null;
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -36,20 +43,31 @@ function createMainWindow(): void {
     },
   });
 
-  // Phase 0：先指向 web/dist/index.html 占位
-  // 实际开发期会指向 vite dev server (http://localhost:5173)
-  const isDev = process.env.HELM_DEV === '1';
+  const isDev = process.env['HELM_DEV'] === '1';
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    void mainWindow.loadURL('http://localhost:5173');
   } else {
-    mainWindow.loadFile(path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'));
+    void mainWindow.loadFile(path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'));
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-// 单实例锁
+async function bootHelm(): Promise<void> {
+  const helmDb = new HelmDB();
+  const loggers = createLoggerFactory({ rootDir: PATHS.logsDir });
+  helmApp = createHelmApp({ db: helmDb.sqlite, loggers });
+  await helmApp.start();
+}
+
+async function shutdownHelm(): Promise<void> {
+  if (helmApp) {
+    await helmApp.stop();
+    helmApp = null;
+  }
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -61,7 +79,8 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await bootHelm();
     createMainWindow();
 
     app.on('activate', () => {
@@ -71,5 +90,13 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('before-quit', async (event) => {
+    if (helmApp) {
+      event.preventDefault();
+      await shutdownHelm();
+      app.quit();
+    }
   });
 }

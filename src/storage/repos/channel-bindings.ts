@@ -55,6 +55,15 @@ export function listBindingsForSession(db: Database.Database, hostSessionId: str
   return (db.prepare(`SELECT * FROM channel_bindings WHERE host_session_id = ? ORDER BY created_at ASC`).all(hostSessionId) as Record<string, unknown>[]).map(rowToBinding);
 }
 
+export function listAllChannelBindings(db: Database.Database): ChannelBinding[] {
+  return (db.prepare(`SELECT * FROM channel_bindings ORDER BY created_at DESC`).all() as Record<string, unknown>[]).map(rowToBinding);
+}
+
+export function deleteChannelBinding(db: Database.Database, id: string): boolean {
+  const r = db.prepare(`DELETE FROM channel_bindings WHERE id = ?`).run(id);
+  return r.changes > 0;
+}
+
 export function updateChannelBinding(
   db: Database.Database,
   id: string,
@@ -143,6 +152,19 @@ export function getPendingBind(db: Database.Database, code: string): PendingBind
 
 export function deletePendingBind(db: Database.Database, code: string): void {
   db.prepare(`DELETE FROM pending_binds WHERE code = ?`).run(code);
+}
+
+export function listPendingBinds(db: Database.Database): PendingBind[] {
+  const now = new Date().toISOString();
+  return (db.prepare(
+    `SELECT * FROM pending_binds WHERE expires_at > ? ORDER BY expires_at ASC`,
+  ).all(now) as Record<string, unknown>[]).map((row) => ({
+    code: String(row['code']), channel: String(row['channel']),
+    externalChat: row['external_chat'] != null ? String(row['external_chat']) : undefined,
+    externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
+    externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
+    expiresAt: String(row['expires_at']),
+  }));
 }
 
 export function purgeExpiredPendingBinds(db: Database.Database): number {

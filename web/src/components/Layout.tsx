@@ -18,7 +18,9 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/approvals', label: 'Approvals' },
   { to: '/chats', label: 'Active Chats' },
+  { to: '/bindings', label: 'Bindings' },
   { to: '/campaigns', label: 'Campaigns' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export function Layout() {

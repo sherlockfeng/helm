@@ -32,9 +32,15 @@ import {
   listTasks,
 } from '../storage/repos/campaigns.js';
 import { listDocAuditsByTask } from '../storage/repos/doc-audit.js';
+import {
+  deleteChannelBinding,
+  listAllChannelBindings,
+  listPendingBinds,
+} from '../storage/repos/channel-bindings.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
 import type { Logger } from '../logger/index.js';
 import type { EventBus } from '../events/bus.js';
+import type { HelmConfig } from '../config/schema.js';
 
 export interface HttpApiDeps {
   db: Database.Database;
@@ -52,6 +58,22 @@ export interface HttpApiDeps {
    * this to src/diagnostics/bundle.ts; tests inject fakes.
    */
   createDiagnosticsBundle?: () => { bundleDir: string; manifest: unknown };
+  /**
+   * GET /api/config returns whatever this getter produces. Orchestrator
+   * passes the live HelmConfig; tests pass fakes. When undefined the
+   * endpoint returns 501 so the renderer's Settings page knows config
+   * editing isn't wired up here.
+   */
+  getConfig?: () => HelmConfig;
+  /**
+   * PUT /api/config invokes this with the validated body. Orchestrator
+   * wires it to saveHelmConfig — UI changes are persisted to
+   * `~/.helm/config.json`. Returning the saved value lets the renderer
+   * show the post-save state.
+   */
+  saveConfig?: (input: unknown) => HelmConfig;
+  /** Consume a pending_binds row and create a channel_bindings row. */
+  consumePendingBind?: (code: string, hostSessionId: string) => { id: string } | null;
 }
 
 export interface HttpApiOptions {
@@ -218,6 +240,76 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         } catch (err) {
           return internalError(res, err);
         }
+      }
+
+      if (url.pathname === '/api/config') {
+        if (req.method === 'GET') {
+          if (!deps.getConfig) {
+            return send(res, 501, { error: 'not_implemented', message: 'config read disabled' });
+          }
+          return send(res, 200, deps.getConfig());
+        }
+        if (req.method === 'PUT') {
+          if (!deps.saveConfig) {
+            return send(res, 501, { error: 'not_implemented', message: 'config save disabled' });
+          }
+          let parsed: unknown;
+          try { parsed = JSON.parse(ctx.body); }
+          catch { return badRequest(res, 'invalid JSON'); }
+          try {
+            const saved = deps.saveConfig(parsed);
+            deps.logger?.info('config_saved');
+            return send(res, 200, saved);
+          } catch (err) {
+            // Zod validation errors → 400 (user fixable); other errors → 500.
+            const msg = (err as Error).message;
+            if (msg.includes('parse') || msg.includes('expected')) {
+              return badRequest(res, msg);
+            }
+            return internalError(res, err);
+          }
+        }
+        return methodNotAllowed(res);
+      }
+
+      if (url.pathname === '/api/bindings') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { bindings: listAllChannelBindings(deps.db) });
+      }
+
+      if (url.pathname === '/api/bindings/pending') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { pending: listPendingBinds(deps.db) });
+      }
+
+      if (url.pathname === '/api/bindings/consume') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.consumePendingBind) {
+          return send(res, 501, { error: 'not_implemented', message: 'consume disabled' });
+        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(ctx.body); }
+        catch { return badRequest(res, 'invalid JSON'); }
+        if (!parsed || typeof parsed !== 'object') {
+          return badRequest(res, 'body must be a JSON object');
+        }
+        const { code, hostSessionId } = parsed as { code?: unknown; hostSessionId?: unknown };
+        if (typeof code !== 'string' || !code) return badRequest(res, 'code (string) required');
+        if (typeof hostSessionId !== 'string' || !hostSessionId) {
+          return badRequest(res, 'hostSessionId (string) required');
+        }
+        const created = deps.consumePendingBind(code, hostSessionId);
+        if (!created) return send(res, 404, { error: 'unknown_or_expired_code' });
+        return send(res, 200, { binding: created });
+      }
+
+      const bindingMatch = url.pathname.match(/^\/api\/bindings\/([^/]+)$/);
+      if (bindingMatch && bindingMatch[1] !== 'pending' && bindingMatch[1] !== 'consume') {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        const removed = deleteChannelBinding(deps.db, bindingMatch[1]!);
+        if (!removed) return send(res, 404, { error: 'unknown_binding' });
+        deps.events?.emit({ type: 'binding.removed', bindingId: bindingMatch[1]! });
+        return send(res, 200, { ok: true });
       }
 
       return notFound(res);

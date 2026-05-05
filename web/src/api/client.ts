@@ -6,9 +6,12 @@
 import type {
   ActiveChat,
   Campaign,
+  ChannelBinding,
   Cycle,
   DocAuditEntry,
+  HelmConfig,
   PendingApproval,
+  PendingBind,
   Task,
 } from './types.js';
 
@@ -67,6 +70,24 @@ export const helmApi = {
   task: (taskId: string) =>
     request<{ task: Task; auditLog: DocAuditEntry[] }>(
       'GET', `/api/tasks/${encodeURIComponent(taskId)}`,
+    ),
+
+  // ── Settings ──
+  getConfig: () => request<HelmConfig>('GET', '/api/config'),
+  saveConfig: (config: HelmConfig) => request<HelmConfig>('PUT', '/api/config', config),
+
+  // ── Bindings ──
+  bindings: () => request<{ bindings: ChannelBinding[] }>('GET', '/api/bindings'),
+  pendingBinds: () => request<{ pending: PendingBind[] }>('GET', '/api/bindings/pending'),
+  consumePendingBind: (code: string, hostSessionId: string) =>
+    request<{ binding: { id: string } }>('POST', '/api/bindings/consume', { code, hostSessionId }),
+  unbind: (bindingId: string) =>
+    request<{ ok: true }>('DELETE', `/api/bindings/${encodeURIComponent(bindingId)}`),
+
+  // ── Diagnostics ──
+  exportDiagnostics: () =>
+    request<{ bundleDir: string; manifest: { generatedAt: string; warnings: string[] } }>(
+      'POST', '/api/diagnostics',
     ),
 };
 

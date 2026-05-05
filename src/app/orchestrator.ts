@@ -35,15 +35,23 @@ import type {
 import { BridgeServer } from '../bridge/server.js';
 import { LocalChannel } from '../channel/local/adapter.js';
 import { type Notifier } from '../channel/local/notifier.js';
+import { LarkChannel } from '../channel/lark/adapter.js';
+import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
+import {
+  dequeueMessages,
+  listBindingsForSession,
+} from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
+import { attachLarkChannel, type LarkWiringHandle } from './lark-wiring.js';
+import type { HostStopRequest, HostStopResponse } from '../bridge/protocol.js';
 
 export interface HelmAppDeps {
   db: Database.Database;
@@ -56,6 +64,22 @@ export interface HelmAppDeps {
   httpPort?: number;
   /** Override approval default timeout (ms). Defaults to DEFAULT_TIMEOUTS.approvalMs. */
   approvalTimeoutMs?: number;
+  /**
+   * Lark channel — opt-in. When provided, the orchestrator builds a LarkChannel
+   * and wires its events into the registry / approval policy / channel queue.
+   * Tests inject a pre-built channel; production reads `helm config` and
+   * fills in `cliCommand` / env to hand to createLarkCliRunner.
+   */
+  lark?: {
+    channel?: LarkChannel;
+    cliCommand?: string;
+    env?: NodeJS.ProcessEnv;
+  };
+  /**
+   * host_stop wait-poll budget (ms). Defaults to DEFAULT_TIMEOUTS.waitPollMs
+   * (10 minutes). Tests dial it down so the long-poll resolves promptly.
+   */
+  waitPollMs?: number;
 }
 
 export interface HelmAppHandle {
@@ -66,6 +90,7 @@ export interface HelmAppHandle {
   readonly approval: ApprovalRegistry;
   readonly policy: ApprovalPolicyEngine;
   readonly channel: LocalChannel;
+  readonly larkChannel: LarkChannel | null;
   readonly bridge: BridgeServer;
   readonly httpApi: HttpApiHandle;
   readonly events: EventBus;
@@ -200,6 +225,41 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     return approvalHandler(req);
   });
 
+  // host_stop — drains channel_message_queue and returns followup_message.
+  // Long-polls via the EventBus so a channel-side message arriving mid-poll
+  // resolves the request immediately instead of waiting for the next poll tick.
+  const waitPollMs = deps.waitPollMs ?? DEFAULT_TIMEOUTS.waitPollMs;
+  bridge.registerHandler('host_stop', async (req: HostStopRequest): Promise<HostStopResponse> => {
+    return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
+  });
+
+  // ── Lark channel (opt-in) ───────────────────────────────────────────────
+
+  let larkChannel: LarkChannel | null = null;
+  let larkWiring: LarkWiringHandle | null = null;
+  if (deps.lark) {
+    larkChannel = deps.lark.channel ?? new LarkChannel({
+      cli: createLarkCliRunner({
+        command: deps.lark.cliCommand,
+        env: deps.lark.env ?? process.env,
+      }),
+      onListenerError: (err, where) => deps.loggers.module('channel.lark').warn('listener_error', {
+        event: where, data: { error: err.message },
+      }),
+      onListenerStatus: (status) => deps.loggers.module('channel.lark').info('listener_status', {
+        event: status,
+      }),
+    });
+    larkWiring = attachLarkChannel({
+      db: deps.db,
+      channel: larkChannel,
+      registry,
+      policy,
+      events,
+      log: deps.loggers.module('channel.lark.wiring'),
+    });
+  }
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     { db: deps.db, registry, events, logger: deps.loggers.module('api') },
@@ -209,7 +269,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   let started = false;
 
   return {
-    knowledge, approval: registry, policy, channel, bridge, httpApi, events,
+    knowledge, approval: registry, policy, channel, larkChannel, bridge, httpApi, events,
     httpPort: () => httpApi.port(),
 
     async start(): Promise<void> {
@@ -219,6 +279,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       log.info('bridge_started', { data: { socket: deps.bridgeSocketPath ?? PATHS.bridgeSocket } });
       await channel.start();
       log.info('local_channel_started');
+      if (larkChannel) {
+        await larkChannel.start();
+        log.info('lark_channel_started');
+      }
       await httpApi.start();
       log.info('http_api_started', { data: { port: httpApi.port() } });
       started = true;
@@ -229,6 +293,8 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       if (!started) return;
       log.info('shutdown_start');
       await httpApi.stop();
+      if (larkWiring) larkWiring.detach();
+      if (larkChannel) await larkChannel.stop();
       await channel.stop();
       // Settle pendings BEFORE tearing down the bridge so any awaiting
       // host_approval_request handler can flush its response back through
@@ -244,4 +310,67 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       log.info('shutdown_complete');
     },
   };
+}
+
+/**
+ * host_stop long-poll. Returns immediately when there's already a queued
+ * message; otherwise waits up to `waitPollMs` for `channel.message_enqueued`
+ * to fire for any binding tied to this host_session.
+ *
+ * Multiple queued messages collapse into a single `followup_message` joined
+ * by blank lines so Cursor sees them as one prompt-injection block.
+ */
+async function runHostStopLongPoll(
+  db: Database.Database,
+  events: EventBus,
+  hostSessionId: string,
+  waitPollMs: number,
+): Promise<HostStopResponse> {
+  const drain = (): string | null => {
+    const bindings = listBindingsForSession(db, hostSessionId);
+    const lines: string[] = [];
+    for (const binding of bindings) {
+      const messages = dequeueMessages(db, binding.id);
+      for (const m of messages) {
+        if (m.text) lines.push(m.text);
+      }
+    }
+    return lines.length === 0 ? null : lines.join('\n\n');
+  };
+
+  // Drain once up-front so a message that arrived between two host_stop
+  // calls returns immediately.
+  const immediate = drain();
+  if (immediate) return { followup_message: immediate };
+
+  // Index the bindings we care about so the listener match is O(1).
+  const watchedBindings = new Set(
+    listBindingsForSession(db, hostSessionId).map((b) => b.id),
+  );
+  if (watchedBindings.size === 0) {
+    // No bindings → nothing can ever enqueue for us. Resolve fast.
+    return {};
+  }
+
+  return new Promise<HostStopResponse>((resolve) => {
+    const finish = (response: HostStopResponse): void => {
+      cleanup();
+      resolve(response);
+    };
+
+    const timer = setTimeout(() => finish({}), waitPollMs);
+    timer.unref?.();
+
+    const unsubscribe = events.on((event) => {
+      if (event.type !== 'channel.message_enqueued') return;
+      if (!watchedBindings.has(event.bindingId)) return;
+      const drained = drain();
+      if (drained) finish({ followup_message: drained });
+    });
+
+    function cleanup(): void {
+      clearTimeout(timer);
+      unsubscribe();
+    }
+  });
 }

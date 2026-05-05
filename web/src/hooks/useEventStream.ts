@@ -56,6 +56,8 @@ export function useEventStream(
         'session.started',
         'session.closed',
         'binding.created',
+        'binding.removed',
+        'channel.message_enqueued',
       ];
       for (const t of knownTypes) wireType(t);
 

@@ -6,6 +6,7 @@
  */
 
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 
@@ -57,13 +58,26 @@ function CampaignCycles({ campaignId }: { campaignId: string }) {
   return (
     <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
       {data.cycles.map((cy) => (
-        <div key={cy.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
+        <Link
+          key={cy.id}
+          to={`/cycles/${cy.id}`}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            padding: '6px 4px',
+            borderRadius: 'var(--radius-sm)',
+            color: 'inherit',
+            textDecoration: 'none',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
+        >
           <span>Cycle {cy.cycleNum}</span>
           <span className="helm-status">
             <span className="dot" />
             {cy.status}
           </span>
-        </div>
+        </Link>
       ))}
     </div>
   );

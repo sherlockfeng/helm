@@ -23,7 +23,15 @@
 import http from 'node:http';
 import type Database from 'better-sqlite3';
 import { listActiveSessions } from '../storage/repos/host-sessions.js';
-import { listCampaigns, listCycles } from '../storage/repos/campaigns.js';
+import {
+  getCampaign,
+  getCycle,
+  getTask,
+  listCampaigns,
+  listCycles,
+  listTasks,
+} from '../storage/repos/campaigns.js';
+import { listDocAuditsByTask } from '../storage/repos/doc-audit.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
 import type { Logger } from '../logger/index.js';
 import type { EventBus } from '../events/bus.js';
@@ -171,6 +179,25 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (cyclesMatch) {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return send(res, 200, { cycles: listCycles(deps.db, cyclesMatch[1]!) });
+      }
+
+      const cycleMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)$/);
+      if (cycleMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const cycle = getCycle(deps.db, cycleMatch[1]!);
+        if (!cycle) return notFound(res);
+        const campaign = getCampaign(deps.db, cycle.campaignId);
+        const tasks = listTasks(deps.db, cycle.id);
+        return send(res, 200, { cycle, campaign, tasks });
+      }
+
+      const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+      if (taskMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const task = getTask(deps.db, taskMatch[1]!);
+        if (!task) return notFound(res);
+        const auditLog = listDocAuditsByTask(deps.db, task.id);
+        return send(res, 200, { task, auditLog });
       }
 
       return notFound(res);

@@ -51,6 +51,30 @@ export interface Cycle {
   completedAt?: string;
 }
 
+export interface Task {
+  id: string;
+  cycleId: string;
+  role: 'dev' | 'test';
+  title: string;
+  description?: string;
+  acceptance?: string[];
+  e2eScenarios?: string[];
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+  result?: string;
+  docAuditToken?: string;
+  comments?: string[];
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface DocAuditEntry {
+  token: string;
+  taskId?: string;
+  filePath: string;
+  contentHash: string;
+  createdAt: string;
+}
+
 // SSE event shapes — must mirror src/events/bus.ts AppEvent.
 export type AppEvent =
   | { type: 'approval.pending'; request: PendingApproval }

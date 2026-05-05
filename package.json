@@ -23,7 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
-    "test:e2e": "vitest run tests/e2e",
+    "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
     "typecheck": "tsc --noEmit && pnpm --filter helm-web typecheck",
     "lint": "echo \"(lint not yet configured)\"",
     "clean": "rm -rf dist node_modules/.cache"

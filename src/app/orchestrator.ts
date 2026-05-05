@@ -39,7 +39,9 @@ import { LarkChannel } from '../channel/lark/adapter.js';
 import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
-import { KnowledgeProviderRegistry } from '../knowledge/types.js';
+import { DepscopeProvider } from '../knowledge/depscope-provider.js';
+import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
+import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
@@ -80,6 +82,13 @@ export interface HelmAppDeps {
    * (10 minutes). Tests dial it down so the long-poll resolves promptly.
    */
   waitPollMs?: number;
+  /**
+   * Optional config (from `~/.helm/config.json`). When set, registers
+   * configured KnowledgeProviders (DepscopeProvider et al.) into the
+   * registry alongside the always-on LocalRolesProvider. Tests usually
+   * skip this and add providers manually via `app.knowledge.register`.
+   */
+  config?: HelmConfig;
 }
 
 export interface HelmAppHandle {
@@ -109,19 +118,24 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     }),
   });
 
-  // Knowledge — register LocalRolesProvider over the seeded built-in roles.
-  // Any future provider (DepscopeProvider in Phase 13) registers here too.
+  // Knowledge — LocalRolesProvider always on; additional providers come from
+  // `deps.config.knowledge.providers` (Phase 14 wires DepscopeProvider).
   const knowledge = new KnowledgeProviderRegistry();
   knowledge.register(new LocalRolesProvider({
     db: deps.db,
     embedFn: makePseudoEmbedFn(),
   }));
+  for (const provider of buildConfiguredProviders(deps, log)) {
+    knowledge.register(provider);
+  }
 
   // Approval policy + registry. Registry restores any pending rows that survived
   // a previous restart so the user still sees the in-flight UI items.
   const policy = new ApprovalPolicyEngine(deps.db);
   const registry = new ApprovalRegistry(deps.db, {
-    defaultTimeoutMs: deps.approvalTimeoutMs ?? DEFAULT_TIMEOUTS.approvalMs,
+    defaultTimeoutMs: deps.approvalTimeoutMs
+      ?? deps.config?.approval?.defaultTimeoutMs
+      ?? DEFAULT_TIMEOUTS.approvalMs,
     onWarning: (msg, ctx) => deps.loggers.module('approval.registry').warn(msg, { data: ctx }),
   });
   registry.reloadFromDatabase();
@@ -228,7 +242,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // host_stop — drains channel_message_queue and returns followup_message.
   // Long-polls via the EventBus so a channel-side message arriving mid-poll
   // resolves the request immediately instead of waiting for the next poll tick.
-  const waitPollMs = deps.waitPollMs ?? DEFAULT_TIMEOUTS.waitPollMs;
+  const waitPollMs = deps.waitPollMs
+    ?? deps.config?.approval?.waitPollMs
+    ?? DEFAULT_TIMEOUTS.waitPollMs;
   bridge.registerHandler('host_stop', async (req: HostStopRequest): Promise<HostStopResponse> => {
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
   });
@@ -237,11 +253,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
 
   let larkChannel: LarkChannel | null = null;
   let larkWiring: LarkWiringHandle | null = null;
-  if (deps.lark) {
-    larkChannel = deps.lark.channel ?? new LarkChannel({
+  const larkRequested = Boolean(deps.lark) || Boolean(deps.config?.lark?.enabled);
+  if (larkRequested) {
+    larkChannel = deps.lark?.channel ?? new LarkChannel({
       cli: createLarkCliRunner({
-        command: deps.lark.cliCommand,
-        env: deps.lark.env ?? process.env,
+        command: deps.lark?.cliCommand ?? deps.config?.lark?.cliCommand,
+        env: deps.lark?.env ?? deps.config?.lark?.env ?? process.env,
       }),
       onListenerError: (err, where) => deps.loggers.module('channel.lark').warn('listener_error', {
         event: where, data: { error: err.message },
@@ -263,7 +280,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     { db: deps.db, registry, events, logger: deps.loggers.module('api') },
-    { port: deps.httpPort ?? 0 },
+    { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
 
   let started = false;
@@ -373,4 +390,40 @@ async function runHostStopLongPoll(
       unsubscribe();
     }
   });
+}
+
+/**
+ * Materialize KnowledgeProviders declared in config.knowledge.providers.
+ *
+ * Validation errors per-provider don't crash the boot: log a warning and skip.
+ * The local-roles provider is always registered separately by the caller.
+ */
+function buildConfiguredProviders(deps: HelmAppDeps, log: Logger): KnowledgeProvider[] {
+  const decls = deps.config?.knowledge?.providers ?? [];
+  const providers: KnowledgeProvider[] = [];
+
+  for (const decl of decls) {
+    if (!decl.enabled) continue;
+    if (decl.id === 'depscope') {
+      const parsed = DepscopeProviderConfigSchema.safeParse(decl.config ?? {});
+      if (!parsed.success) {
+        log.warn('knowledge_provider_config_invalid', {
+          data: { id: decl.id, issues: parsed.error.issues },
+        });
+        continue;
+      }
+      providers.push(new DepscopeProvider({
+        endpoint: parsed.data.endpoint,
+        authToken: parsed.data.authToken,
+        mappings: parsed.data.mappings,
+        cacheTtlMs: parsed.data.cacheTtlMs,
+        requestTimeoutMs: parsed.data.requestTimeoutMs,
+        onWarning: (msg, ctx) => deps.loggers.module('knowledge.depscope').warn(msg, { data: ctx }),
+      }));
+      continue;
+    }
+    log.warn('knowledge_provider_unknown_id', { data: { id: decl.id } });
+  }
+
+  return providers;
 }

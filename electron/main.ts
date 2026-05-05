@@ -20,6 +20,7 @@ import path from 'node:path';
 import { HelmDB } from '../src/storage/database.js';
 import { createLoggerFactory } from '../src/logger/index.js';
 import { createHelmApp, type HelmAppHandle } from '../src/app/orchestrator.js';
+import { loadHelmConfig } from '../src/config/loader.js';
 import { PATHS } from '../src/constants.js';
 
 // CJS 兼容：tsup 输出 cjs，Electron 主进程在 CJS 环境中 __dirname 始终可用
@@ -57,7 +58,14 @@ function createMainWindow(): void {
 async function bootHelm(): Promise<void> {
   const helmDb = new HelmDB();
   const loggers = createLoggerFactory({ rootDir: PATHS.logsDir });
-  helmApp = createHelmApp({ db: helmDb.sqlite, loggers });
+  const configLog = loggers.module('config');
+  const { config, loaded } = loadHelmConfig({
+    onError: (err, ctx) => configLog.warn('config_load_failed', {
+      event: ctx.phase, data: { path: ctx.path, error: err.message },
+    }),
+  });
+  configLog.info('config_loaded', { data: { loaded, path: PATHS.configFile } });
+  helmApp = createHelmApp({ db: helmDb.sqlite, loggers, config });
   await helmApp.start();
 }
 

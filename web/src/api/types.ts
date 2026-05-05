@@ -75,6 +75,48 @@ export interface DocAuditEntry {
   createdAt: string;
 }
 
+export interface ChannelBinding {
+  id: string;
+  channel: string;
+  hostSessionId: string;
+  externalChat?: string;
+  externalThread?: string;
+  externalRoot?: string;
+  waitEnabled: boolean;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface PendingBind {
+  code: string;
+  channel: string;
+  externalChat?: string;
+  externalThread?: string;
+  externalRoot?: string;
+  expiresAt: string;
+}
+
+// Mirror of src/config/schema.ts HelmConfig — kept loose so the renderer
+// doesn't need Zod. Backend rejects unknown keys; renderer just edits what
+// it knows about.
+export interface DepscopeMappingConfig {
+  cwdPrefix: string;
+  scmName: string;
+}
+
+export interface KnowledgeProviderConfig {
+  id: string;
+  enabled: boolean;
+  config?: Record<string, unknown>;
+}
+
+export interface HelmConfig {
+  server: { port: number };
+  approval: { defaultTimeoutMs: number; waitPollMs: number };
+  lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
+  knowledge: { providers: KnowledgeProviderConfig[] };
+}
+
 // SSE event shapes — must mirror src/events/bus.ts AppEvent.
 export type AppEvent =
   | { type: 'approval.pending'; request: PendingApproval }

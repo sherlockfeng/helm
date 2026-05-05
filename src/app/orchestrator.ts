@@ -44,6 +44,9 @@ import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/
 import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
+import { saveHelmConfig } from '../config/loader.js';
+import { HelmConfigSchema } from '../config/schema.js';
+import { consumePendingBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
 import {
@@ -278,11 +281,27 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   }
 
+  // Live config snapshot the renderer reads / writes via /api/config. Mutates
+  // in place when the renderer PUTs new settings so subsequent GETs reflect
+  // the saved state without a server restart. (Provider hot-reload — actually
+  // re-registering DepscopeProvider when mappings change — is a future
+  // refinement; for now Settings tells the user "restart to apply".)
+  let liveConfig = deps.config ?? HelmConfigSchema.parse({});
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
       db: deps.db, registry, events, logger: deps.loggers.module('api'),
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
+      getConfig: () => liveConfig,
+      saveConfig: (input) => {
+        liveConfig = saveHelmConfig(input);
+        return liveConfig;
+      },
+      consumePendingBind: (code, hostSessionId) => {
+        const created = consumePendingBind(deps.db, events, code, hostSessionId);
+        return created ? { id: created.id } : null;
+      },
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );

@@ -275,6 +275,177 @@ describe('POST /api/diagnostics', () => {
   });
 });
 
+describe('/api/config', () => {
+  it('GET returns the configured value', async () => {
+    await api.stop();
+    const fakeConfig = { server: { port: 19999 } };
+    api = createHttpApi({ db, registry, getConfig: () => fakeConfig as never });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/config');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual(fakeConfig);
+  });
+
+  it('PUT validates + persists; returns the saved value', async () => {
+    await api.stop();
+    let saved: unknown = null;
+    api = createHttpApi({
+      db, registry,
+      saveConfig: (input) => {
+        saved = input;
+        return { server: { port: 20000 } } as never;
+      },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server: { port: 20000 } }),
+    });
+    expect(r.status).toBe(200);
+    expect(saved).toEqual({ server: { port: 20000 } });
+  });
+
+  it('attack: PUT with invalid JSON returns 400', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, saveConfig: () => ({} as never) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/config', { method: 'PUT', body: '{not json' });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: PUT validation error → 400 with message', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      saveConfig: () => { throw new Error('expected number, received string'); },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server: { port: 'nope' } }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('GET → 501 when getConfig is not provided', async () => {
+    const r = await fetchJson('/api/config');
+    expect(r.status).toBe(501);
+  });
+
+  it('PUT → 501 when saveConfig is not provided', async () => {
+    const r = await fetchJson('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(r.status).toBe(501);
+  });
+});
+
+describe('/api/bindings', () => {
+  it('GET returns rows from listAllChannelBindings', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('s1', 'cursor', 'active', now, now);
+    db.prepare(`INSERT INTO channel_bindings (id, channel, host_session_id, external_chat, external_thread, wait_enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('b1', 'lark', 's1', 'oc_a', 'om_t', 1, now);
+
+    const r = await fetchJson('/api/bindings');
+    expect(r.status).toBe(200);
+    expect((r.body as { bindings: Array<{ id: string }> }).bindings[0]?.id).toBe('b1');
+  });
+
+  it('GET /api/bindings/pending returns active pending codes only', async () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    db.prepare(`INSERT INTO pending_binds (code, channel, expires_at) VALUES (?, ?, ?)`)
+      .run('FUTURE', 'lark', future);
+    db.prepare(`INSERT INTO pending_binds (code, channel, expires_at) VALUES (?, ?, ?)`)
+      .run('STALE', 'lark', past);
+
+    const r = await fetchJson('/api/bindings/pending');
+    expect(r.status).toBe(200);
+    const codes = (r.body as { pending: Array<{ code: string }> }).pending.map((p) => p.code);
+    expect(codes).toEqual(['FUTURE']);
+  });
+
+  it('POST /api/bindings/consume invokes consumePendingBind', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      consumePendingBind: (code, sid) => code === 'GOOD' ? { id: `bnd_${sid}` } : null,
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/bindings/consume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'GOOD', hostSessionId: 's1' }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { binding: { id: string } }).binding.id).toBe('bnd_s1');
+  });
+
+  it('attack: POST consume with unknown code → 404', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      consumePendingBind: () => null,
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/bindings/consume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'NOPE', hostSessionId: 's1' }),
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it('attack: POST consume missing fields → 400', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, consumePendingBind: () => ({ id: 'b' }) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/bindings/consume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'X' }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('DELETE /api/bindings/:id removes the row', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('s1', 'cursor', 'active', now, now);
+    db.prepare(`INSERT INTO channel_bindings (id, channel, host_session_id, wait_enabled, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('b1', 'lark', 's1', 1, now);
+
+    const r = await fetchJson('/api/bindings/b1', { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect(db.prepare(`SELECT 1 FROM channel_bindings WHERE id = 'b1'`).get()).toBeUndefined();
+  });
+
+  it('attack: DELETE unknown binding → 404', async () => {
+    const r = await fetchJson('/api/bindings/ghost', { method: 'DELETE' });
+    expect(r.status).toBe(404);
+  });
+});
+
 describe('attack: only binds 127.0.0.1', () => {
   it('default host is 127.0.0.1 (loopback only)', () => {
     expect(api.port()).toBeGreaterThan(0);

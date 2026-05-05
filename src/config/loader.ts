@@ -7,7 +7,8 @@
  * the Phase 8 logger to record + `helm doctor` to surface.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { PATHS } from '../constants.js';
 import { HelmConfigSchema, type HelmConfig } from './schema.js';
 
@@ -54,4 +55,27 @@ export function loadHelmConfig(options: LoadHelmConfigOptions = {}): LoadHelmCon
     return { config: HelmConfigSchema.parse({}), loaded: false };
   }
   return { config: result.data, loaded: true };
+}
+
+export interface SaveHelmConfigOptions {
+  path?: string;
+}
+
+/**
+ * Validate + write a config back to disk. Throws on validation failure so the
+ * caller (HTTP API / CLI) can surface a clear error rather than silently
+ * persisting a broken config.
+ *
+ * Atomic write: a sibling `.tmp` file gets renamed into place so a crash
+ * mid-write can't leave a half-written file the loader will reject next boot.
+ */
+export function saveHelmConfig(config: unknown, options: SaveHelmConfigOptions = {}): HelmConfig {
+  const path = options.path ?? PATHS.configFile;
+  const validated = HelmConfigSchema.parse(config);
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(validated, null, 2) + '\n', 'utf8');
+  // rename is atomic on POSIX when src + dst live on the same fs.
+  renameSync(tmp, path);
+  return validated;
 }

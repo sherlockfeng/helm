@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadHelmConfig } from '../../../src/config/loader.js';
+import { loadHelmConfig, saveHelmConfig } from '../../../src/config/loader.js';
 import { HelmConfigSchema, DepscopeProviderConfigSchema } from '../../../src/config/schema.js';
 
 let dir: string;
@@ -97,5 +97,38 @@ describe('loadHelmConfig', () => {
     const r = loadHelmConfig({ path, onError: (_err, ctx) => errors.push(ctx) });
     expect(r.loaded).toBe(false);
     expect(errors[0]?.phase).toBe('validate');
+  });
+});
+
+describe('saveHelmConfig', () => {
+  it('writes a validated config to disk and returns the parsed value', () => {
+    const saved = saveHelmConfig({ server: { port: 18000 } }, { path });
+    expect(existsSync(path)).toBe(true);
+    expect(saved.server.port).toBe(18000);
+    const onDisk = JSON.parse(readFileSync(path, 'utf8')) as { server: { port: number } };
+    expect(onDisk.server.port).toBe(18000);
+  });
+
+  it('fills in defaults for unspecified fields', () => {
+    const saved = saveHelmConfig({}, { path });
+    expect(saved.server.port).toBe(17317);
+    expect(saved.lark.enabled).toBe(false);
+  });
+
+  it('attack: invalid input throws (config not written)', () => {
+    expect(() => saveHelmConfig({ server: { port: 'nope' } }, { path })).toThrow();
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('attack: unknown top-level key rejected (strict)', () => {
+    expect(() => saveHelmConfig({ extra: 'x' }, { path })).toThrow();
+  });
+
+  it('atomically replaces an existing file', () => {
+    saveHelmConfig({ server: { port: 17317 } }, { path });
+    saveHelmConfig({ server: { port: 19999 } }, { path });
+    expect(JSON.parse(readFileSync(path, 'utf8')).server.port).toBe(19999);
+    // No leftover .tmp file
+    expect(existsSync(`${path}.tmp`)).toBe(false);
   });
 });

@@ -13,8 +13,8 @@
 
 const SENSITIVE_KEY_NAMES: ReadonlySet<string> = new Set([
   'apikey', 'api_key', 'authorization', 'token', 'access_token',
-  'refresh_token', 'secret', 'password', 'cookie', 'set-cookie',
-  'x-api-key', 'lark_app_secret', 'anthropic_api_key',
+  'refresh_token', 'authtoken', 'auth_token', 'secret', 'password',
+  'cookie', 'set-cookie', 'x-api-key', 'lark_app_secret', 'anthropic_api_key',
 ]);
 
 const TOKEN_PATTERNS: RegExp[] = [

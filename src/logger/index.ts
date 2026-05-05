@@ -23,6 +23,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { redact } from './redact.js';
+import { maybeRotate, type RotateOptions } from './rotate.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -51,6 +52,12 @@ export interface LoggerFactoryOptions {
   echo?: (record: LogRecord) => void;
   /** When set, errors during file IO are reported here instead of swallowed silently. */
   onIoError?: (err: Error, path: string) => void;
+  /**
+   * Per-§19.5.5 rotation tuning. Defaults to maybeRotate's defaults
+   * (10MB per file, 500MB archive total, archive at `<rootDir>/archive/`).
+   * Disable rotation entirely by setting `rotate: false`.
+   */
+  rotate?: false | RotateOptions;
 }
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -82,12 +89,19 @@ interface InternalCtx {
   minLevel: LogLevel;
   echo?: (record: LogRecord) => void;
   onIoError: (err: Error, path: string) => void;
+  rotate: false | RotateOptions;
   sink?: LogRecord[];
 }
 
 function writeJsonLine(filePath: string, record: LogRecord, ctx: InternalCtx): void {
   try {
     mkdirSync(dirname(filePath), { recursive: true });
+    if (ctx.rotate !== false) {
+      maybeRotate(filePath, {
+        ...ctx.rotate,
+        onError: (err, c) => ctx.onIoError(err, `${c.phase}:${c.path}`),
+      });
+    }
     appendFileSync(filePath, JSON.stringify(record) + '\n');
   } catch (err) {
     ctx.onIoError(err as Error, filePath);
@@ -155,6 +169,7 @@ export function createLoggerFactory(options: LoggerFactoryOptions): LoggerFactor
     minLevel: options.minLevel ?? 'info',
     echo: options.echo,
     onIoError: options.onIoError ?? (() => {}),
+    rotate: options.rotate ?? {},
   };
   const cache = new Map<string, Logger>();
 
@@ -180,6 +195,7 @@ export function createCapturingLoggerFactory(options: Partial<LoggerFactoryOptio
     rootDir: '/dev/null/helm-test',
     minLevel: options.minLevel ?? 'debug',
     onIoError: () => { /* never fires; we don't write */ },
+    rotate: false,
     sink,
   };
   const cache = new Map<string, Logger>();

@@ -7,7 +7,9 @@ import type {
   ActiveChat,
   Campaign,
   Cycle,
+  DocAuditEntry,
   PendingApproval,
+  Task,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -56,6 +58,16 @@ export const helmApi = {
 
   campaignCycles: (campaignId: string) =>
     request<{ cycles: Cycle[] }>('GET', `/api/campaigns/${encodeURIComponent(campaignId)}/cycles`),
+
+  cycle: (cycleId: string) =>
+    request<{ cycle: Cycle; campaign: Campaign | null; tasks: Task[] }>(
+      'GET', `/api/cycles/${encodeURIComponent(cycleId)}`,
+    ),
+
+  task: (taskId: string) =>
+    request<{ task: Task; auditLog: DocAuditEntry[] }>(
+      'GET', `/api/tasks/${encodeURIComponent(taskId)}`,
+    ),
 };
 
 export type HelmApi = typeof helmApi;

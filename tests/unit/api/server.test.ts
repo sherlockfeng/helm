@@ -155,6 +155,78 @@ describe('GET /api/campaigns + /:id/cycles', () => {
   });
 });
 
+describe('GET /api/cycles/:id', () => {
+  it('returns the cycle, its campaign, and its tasks', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C1', 'brief');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+    engine.createTasks(cycle.id, [
+      { role: 'dev', title: 'dev task' },
+      { role: 'test', title: 'test task' },
+    ]);
+
+    const r = await fetchJson(`/api/cycles/${cycle.id}`);
+    expect(r.status).toBe(200);
+    const body = r.body as {
+      cycle: { id: string; cycleNum: number };
+      campaign: { id: string; title: string };
+      tasks: Array<{ role: string; title: string }>;
+    };
+    expect(body.cycle.id).toBe(cycle.id);
+    expect(body.campaign.title).toBe('C1');
+    expect(body.tasks.map((t) => t.role).sort()).toEqual(['dev', 'test']);
+  });
+
+  it('attack: unknown cycleId returns 404', async () => {
+    const r = await fetchJson('/api/cycles/cyc_ghost');
+    expect(r.status).toBe(404);
+  });
+
+  it('attack: POST is rejected as 405', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C1');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+    const r = await fetchJson(`/api/cycles/${cycle.id}`, { method: 'POST' });
+    expect(r.status).toBe(405);
+  });
+});
+
+describe('GET /api/tasks/:id', () => {
+  it('returns the task with its empty audit log when nothing has been recorded', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C1');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+    const [task] = engine.createTasks(cycle.id, [{ role: 'dev', title: 'D1' }]);
+
+    const r = await fetchJson(`/api/tasks/${task!.id}`);
+    expect(r.status).toBe(200);
+    const body = r.body as { task: { id: string; title: string }; auditLog: unknown[] };
+    expect(body.task.id).toBe(task!.id);
+    expect(body.auditLog).toEqual([]);
+  });
+
+  it('surfaces doc-first audit-log entries written for the task', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C1');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+    const [task] = engine.createTasks(cycle.id, [{ role: 'dev', title: 'D1' }]);
+    db.prepare(`INSERT INTO doc_audit_log (token, task_id, file_path, content_hash, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('tok_a', task!.id, '/proj/docs/a.md', 'hash1', new Date().toISOString());
+    db.prepare(`INSERT INTO doc_audit_log (token, task_id, file_path, content_hash, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('tok_b', task!.id, '/proj/docs/b.md', 'hash2', new Date().toISOString());
+
+    const r = await fetchJson(`/api/tasks/${task!.id}`);
+    const body = r.body as { auditLog: Array<{ token: string; filePath: string }> };
+    expect(body.auditLog).toHaveLength(2);
+    expect(body.auditLog.map((e) => e.filePath).sort()).toEqual(['/proj/docs/a.md', '/proj/docs/b.md']);
+  });
+
+  it('attack: unknown taskId returns 404', async () => {
+    const r = await fetchJson('/api/tasks/task_ghost');
+    expect(r.status).toBe(404);
+  });
+});
+
 describe('attack: unknown route', () => {
   it('returns 404 for unknown path', async () => {
     const r = await fetchJson('/api/nope');

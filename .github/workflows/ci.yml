@@ -35,3 +35,9 @@ jobs:
 
       - name: Unit tests
         run: pnpm test:unit
+
+      - name: E2e tests
+        run: pnpm test:e2e
+
+      - name: Web build
+        run: pnpm build:web

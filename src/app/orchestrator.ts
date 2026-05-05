@@ -43,6 +43,7 @@ import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
 import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
+import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
 import {
@@ -279,7 +280,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
 
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
-    { db: deps.db, registry, events, logger: deps.loggers.module('api') },
+    {
+      db: deps.db, registry, events, logger: deps.loggers.module('api'),
+      createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
+    },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
 

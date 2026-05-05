@@ -234,6 +234,47 @@ describe('attack: unknown route', () => {
   });
 });
 
+describe('POST /api/diagnostics', () => {
+  it('returns 200 with bundleDir + manifest when factory configured', async () => {
+    await api.stop();
+    const fakeBundle = { bundleDir: '/tmp/helm-fake', manifest: { generatedAt: 'now', files: [] } };
+    api = createHttpApi({
+      db, registry,
+      createDiagnosticsBundle: () => fakeBundle,
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/diagnostics', { method: 'POST' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject(fakeBundle);
+  });
+
+  it('attack: returns 501 when no factory configured', async () => {
+    const r = await fetchJson('/api/diagnostics', { method: 'POST' });
+    expect(r.status).toBe(501);
+  });
+
+  it('attack: GET is rejected as 405', async () => {
+    const r = await fetchJson('/api/diagnostics');
+    expect(r.status).toBe(405);
+  });
+
+  it('attack: factory throw surfaces as 500', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      createDiagnosticsBundle: () => { throw new Error('disk full'); },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/diagnostics', { method: 'POST' });
+    expect(r.status).toBe(500);
+    expect((r.body as { message: string }).message).toContain('disk full');
+  });
+});
+
 describe('attack: only binds 127.0.0.1', () => {
   it('default host is 127.0.0.1 (loopback only)', () => {
     expect(api.port()).toBeGreaterThan(0);

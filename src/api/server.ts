@@ -46,6 +46,12 @@ export interface HttpApiDeps {
   /** Server name + version for /api/health. */
   appName?: string;
   appVersion?: string;
+  /**
+   * Optional diagnostics-bundle factory. When set, POST /api/diagnostics
+   * invokes it and returns `{ bundleDir, manifest }`. Orchestrator wires
+   * this to src/diagnostics/bundle.ts; tests inject fakes.
+   */
+  createDiagnosticsBundle?: () => { bundleDir: string; manifest: unknown };
 }
 
 export interface HttpApiOptions {
@@ -198,6 +204,20 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!task) return notFound(res);
         const auditLog = listDocAuditsByTask(deps.db, task.id);
         return send(res, 200, { task, auditLog });
+      }
+
+      if (url.pathname === '/api/diagnostics') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.createDiagnosticsBundle) {
+          return send(res, 501, { error: 'not_implemented', message: 'diagnostics bundle disabled' });
+        }
+        try {
+          const result = deps.createDiagnosticsBundle();
+          deps.logger?.info('diagnostics_bundle_created', { data: { bundleDir: result.bundleDir } });
+          return send(res, 200, result);
+        } catch (err) {
+          return internalError(res, err);
+        }
       }
 
       return notFound(res);

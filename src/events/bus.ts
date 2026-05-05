@@ -19,7 +19,9 @@ export type AppEvent =
   | { type: 'approval.decision_received'; decision: ApprovalDecision }
   | { type: 'session.started'; session: HostSession }
   | { type: 'session.closed'; hostSessionId: string }
-  | { type: 'binding.created'; binding: ChannelBinding };
+  | { type: 'binding.created'; binding: ChannelBinding }
+  | { type: 'binding.removed'; bindingId: string }
+  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number };
 
 export type AppEventType = AppEvent['type'];
 export type AppEventOf<T extends AppEventType> = Extract<AppEvent, { type: T }>;

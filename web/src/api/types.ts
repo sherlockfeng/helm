@@ -58,6 +58,8 @@ export type AppEvent =
   | { type: 'approval.decision_received'; decision: { channel: string; approvalId: string; decision: 'allow' | 'deny'; reason?: string } }
   | { type: 'session.started'; session: ActiveChat }
   | { type: 'session.closed'; hostSessionId: string }
-  | { type: 'binding.created'; binding: { id: string; channel: string } };
+  | { type: 'binding.created'; binding: { id: string; channel: string } }
+  | { type: 'binding.removed'; bindingId: string }
+  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number };
 
 export type AppEventType = AppEvent['type'];

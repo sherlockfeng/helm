@@ -8,9 +8,12 @@
  *   - Diagnostics: export bundle button
  *
  * Save sends PUT /api/config which validates server-side; field errors
- * surface as a banner. Provider hot-reload is a future refinement; for now
- * we tell the user "restart Helm to apply provider changes". Save success
- * banner auto-dismisses after 4s (P1-8).
+ * surface as a banner. Phase 27 (D4) added knowledge-provider hot-reload —
+ * the orchestrator drops + re-registers configured providers on save, so
+ * Depscope mapping/endpoint changes take effect on the next session_start
+ * without a restart. The HTTP-port change still needs a restart (the bound
+ * server can't rebind without one). Save success banner auto-dismisses
+ * after 4s (P1-8).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -91,7 +94,7 @@ export function SettingsPage() {
       const saved = await helmApi.saveConfig(draft);
       setDraft(clone(saved));
       setDirty(false);
-      setSaveOk('Saved. Provider changes apply on next Helm restart.');
+      setSaveOk('Saved. Knowledge provider changes apply immediately; HTTP port change requires a restart.');
       // P1-8: auto-dismiss after 4 seconds
       if (okTimerRef.current) clearTimeout(okTimerRef.current);
       okTimerRef.current = setTimeout(() => setSaveOk(null), 4000);
@@ -119,8 +122,8 @@ export function SettingsPage() {
     <>
       <h2>Settings</h2>
       <p className="muted">
-        Lives in <code>~/.helm/config.json</code>. Provider hot-reload is not yet wired; restart
-        Helm after enabling a new provider for it to take effect.
+        Lives in <code>~/.helm/config.json</code>. Knowledge-provider changes apply immediately on save;
+        HTTP port changes require a Helm restart.
       </p>
 
       {saveOk && (

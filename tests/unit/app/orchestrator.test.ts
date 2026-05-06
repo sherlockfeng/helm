@@ -1,5 +1,5 @@
 import BetterSqlite3 from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -133,6 +133,119 @@ describe('createHelmApp — bridge handlers', () => {
 
       const bridgeRes = await bridgeP;
       expect(bridgeRes.decision).toBe('allow');
+    } finally {
+      await app.stop();
+    }
+  });
+});
+
+describe('createHelmApp — provider hot-reload (Phase 27 / D4)', () => {
+  it('PUT /api/config swaps configured KnowledgeProviders without a restart', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const configPath = join(tmpDir, 'config.json');
+    const initialConfig = {
+      knowledge: {
+        providers: [{
+          id: 'depscope',
+          enabled: true,
+          config: {
+            endpoint: 'http://depscope.test',
+            mappings: [{ cwdPrefix: '/old', scmName: 'org/old' }],
+          },
+        }],
+      },
+    };
+    const app = createHelmApp({
+      db, loggers,
+      bridgeSocketPath: socketPath,
+      configPath,
+      // Cast through unknown — intentionally partial to exercise the schema's
+      // defaults-fill behavior; the orchestrator parses this via HelmConfigSchema.
+      config: initialConfig as unknown as Parameters<typeof createHelmApp>[0]['config'],
+    });
+    await app.start();
+    try {
+      // Boot lands depscope alongside the always-on LocalRoles + RequirementsArchive.
+      const initialIds = app.knowledge.list().map((p) => p.id).sort();
+      expect(initialIds).toContain('depscope');
+      expect(initialIds).toContain('local-roles');
+      expect(initialIds).toContain('requirements-archive');
+
+      // Disable depscope via /api/config — should drop it on the spot.
+      const port = app.httpPort();
+      let res = await fetch(`http://127.0.0.1:${port}/api/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          knowledge: { providers: [{ id: 'depscope', enabled: false, config: {} }] },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const afterDisable = app.knowledge.list().map((p) => p.id).sort();
+      expect(afterDisable).not.toContain('depscope');
+      expect(afterDisable).toContain('local-roles');
+      expect(afterDisable).toContain('requirements-archive');
+
+      // Re-enable with new mappings — should re-register a fresh DepscopeProvider.
+      res = await fetch(`http://127.0.0.1:${port}/api/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          knowledge: {
+            providers: [{
+              id: 'depscope',
+              enabled: true,
+              config: {
+                endpoint: 'http://depscope.test',
+                mappings: [{ cwdPrefix: '/new', scmName: 'org/new' }],
+              },
+            }],
+          },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const afterReEnable = app.knowledge.list().map((p) => p.id).sort();
+      expect(afterReEnable).toContain('depscope');
+
+      // The persisted file matches what we just sent (atomic-write target).
+      const onDisk = JSON.parse(readFileSync(configPath, 'utf8')) as {
+        knowledge: { providers: Array<{ id: string; enabled: boolean }> };
+      };
+      const dep = onDisk.knowledge.providers.find((p) => p.id === 'depscope')!;
+      expect(dep.enabled).toBe(true);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('attack: invalid provider config skips the offender — registry survives', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const configPath = join(tmpDir, 'config.json');
+    const app = createHelmApp({
+      db, loggers,
+      bridgeSocketPath: socketPath,
+      configPath,
+    });
+    await app.start();
+    try {
+      const port = app.httpPort();
+      // depscope with a bogus endpoint (not a URL) — schema rejects per-provider,
+      // orchestrator logs a warning and skips. Always-on providers stay alive.
+      const res = await fetch(`http://127.0.0.1:${port}/api/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          knowledge: {
+            providers: [{ id: 'depscope', enabled: true, config: { endpoint: 'not-a-url' } }],
+          },
+        }),
+      });
+      // Top-level config still parses (per-provider config blob is loose);
+      // the per-provider DepscopeProviderConfigSchema is what rejects the URL.
+      expect(res.status).toBe(200);
+      const ids = app.knowledge.list().map((p) => p.id);
+      expect(ids).not.toContain('depscope');
+      expect(ids).toContain('local-roles');
     } finally {
       await app.stop();
     }

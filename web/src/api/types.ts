@@ -115,6 +115,21 @@ export interface HelmConfig {
   approval: { defaultTimeoutMs: number; waitPollMs: number };
   lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
   knowledge: { providers: KnowledgeProviderConfig[] };
+  docFirst: { enforce: boolean };
+}
+
+export interface BugTaskInput {
+  title: string;
+  description?: string;
+  expected?: string;
+  actual?: string;
+  screenshotDescription?: string;
+}
+
+export interface CycleScreenshotInput {
+  filePath: string;
+  description: string;
+  capturedAt?: string;
 }
 
 // SSE event shapes — must mirror src/events/bus.ts AppEvent.

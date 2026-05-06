@@ -23,6 +23,17 @@ describe('HelmConfigSchema defaults', () => {
     expect(c.approval.waitPollMs).toBe(10 * 60 * 1000);
     expect(c.lark.enabled).toBe(false);
     expect(c.knowledge.providers).toEqual([]);
+    // B4: doc-first defaults to enforce=true (matches §12.3)
+    expect(c.docFirst.enforce).toBe(true);
+  });
+
+  it('docFirst.enforce can be turned off via config', () => {
+    const c = HelmConfigSchema.parse({ docFirst: { enforce: false } });
+    expect(c.docFirst.enforce).toBe(false);
+  });
+
+  it('attack: docFirst rejects unknown nested keys', () => {
+    expect(() => HelmConfigSchema.parse({ docFirst: { extra: true } })).toThrow();
   });
 
   it('attack: rejects unknown top-level keys (strict)', () => {

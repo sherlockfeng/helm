@@ -176,6 +176,24 @@ export function SettingsPage() {
         </label>
       </article>
 
+      <h3>Doc-first workflow</h3>
+      <article className="helm-card">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={draft.docFirst.enforce}
+            onChange={(e) => update((c) => { c.docFirst.enforce = e.target.checked; })}
+          />
+          Enforce <code>update_doc_first</code> before completing dev tasks
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+          When on, dev tasks need a fresh docAuditToken to complete. Disable for
+          casual / one-off Cursor sessions where the doc-first cadence isn't
+          worth the friction. Takes effect on the next task completion — no
+          restart required.
+        </p>
+      </article>
+
       <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

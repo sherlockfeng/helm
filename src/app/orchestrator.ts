@@ -39,6 +39,7 @@ import { LarkChannel } from '../channel/lark/adapter.js';
 import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
+import { trainRole } from '../roles/library.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -342,6 +343,13 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // the key is absent, which the HTTP layer maps to 500. Tests bypass
       // this by overriding deps.summarizeCampaign with a fake.
       summarizeCampaign: summarizeFn(),
+      // B3: train the same roles LocalRolesProvider reads from. The shared
+      // pseudo-embed function keeps the embeddings consistent between
+      // training-time and search-time so the chunks match.
+      trainRole: async (input) => trainRole(deps.db, {
+        ...input,
+        embedFn: makePseudoEmbedFn(),
+      }),
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );

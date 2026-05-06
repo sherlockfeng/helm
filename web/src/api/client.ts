@@ -15,7 +15,12 @@ import type {
   HelmConfig,
   PendingApproval,
   PendingBind,
+  Requirement,
+  Role,
+  RoleChunk,
+  RoleSummary,
   Task,
+  TrainRoleInput,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -110,6 +115,28 @@ export const helmApi = {
     request<{ binding: { id: string } }>('POST', '/api/bindings/consume', { code, hostSessionId }),
   unbind: (bindingId: string) =>
     request<{ ok: true }>('DELETE', `/api/bindings/${encodeURIComponent(bindingId)}`),
+
+  // ── Roles (B3) ──
+  roles: () => request<{ roles: RoleSummary[] }>('GET', '/api/roles'),
+  role: (roleId: string) =>
+    request<{ role: Role; chunks: RoleChunk[] }>(
+      'GET', `/api/roles/${encodeURIComponent(roleId)}`,
+    ),
+  trainRole: (roleId: string, input: TrainRoleInput) =>
+    request<{ role: Role }>(
+      'POST', `/api/roles/${encodeURIComponent(roleId)}/train`, input,
+    ),
+
+  // ── Requirements (B3) ──
+  requirements: (query?: string) =>
+    request<{ requirements: Requirement[] }>(
+      'GET',
+      query ? `/api/requirements?q=${encodeURIComponent(query)}` : '/api/requirements',
+    ),
+  requirement: (id: string) =>
+    request<{ requirement: Requirement }>(
+      'GET', `/api/requirements/${encodeURIComponent(id)}`,
+    ),
 
   // ── Diagnostics ──
   exportDiagnostics: () =>

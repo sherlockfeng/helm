@@ -37,6 +37,13 @@ import {
   listAllChannelBindings,
   listPendingBinds,
 } from '../storage/repos/channel-bindings.js';
+import {
+  getChunksForRole,
+  getRole as getRoleRow,
+  listRoles as listRolesRepo,
+} from '../storage/repos/roles.js';
+import { recallRequirements } from '../requirements/recall.js';
+import { getRequirement } from '../storage/repos/requirements.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
 import type { Logger } from '../logger/index.js';
 import type { EventBus } from '../events/bus.js';
@@ -87,6 +94,18 @@ export interface HttpApiDeps {
    * returns 501 so the UI can prompt the user to set the key in Settings.
    */
   summarizeCampaign?: (campaignId: string) => Promise<unknown>;
+  /**
+   * Train (or re-train) a role from documents (B3). When undefined, the
+   * Roles page's POST /api/roles/:id/train endpoint returns 501. Tests
+   * inject a stub; the orchestrator wires it via the same embedFn used
+   * by LocalRolesProvider.
+   */
+  trainRole?: (input: {
+    roleId: string;
+    name: string;
+    documents: Array<{ filename: string; content: string }>;
+    baseSystemPrompt?: string;
+  }) => Promise<unknown>;
 }
 
 export interface HttpApiOptions {
@@ -278,6 +297,51 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!task) return notFound(res);
         const auditLog = listDocAuditsByTask(deps.db, task.id);
         return send(res, 200, { task, auditLog });
+      }
+
+      // ── Roles (B3) ──────────────────────────────────────────────────
+      if (url.pathname === '/api/roles') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const roles = listRolesRepo(deps.db).map((r) => ({
+          ...r,
+          chunkCount: getChunksForRole(deps.db, r.id).length,
+        }));
+        return send(res, 200, { roles });
+      }
+      const roleTrainMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/train$/);
+      if (roleTrainMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleTrainRole(ctx, deps, roleTrainMatch[1]!);
+      }
+      const roleMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
+      if (roleMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const role = getRoleRow(deps.db, roleMatch[1]!);
+        if (!role) return notFound(res);
+        const chunks = getChunksForRole(deps.db, role.id).map((c) => ({
+          // Strip the embedding Float32Array — it's binary + huge + not
+          // useful in the UI; the renderer just needs sourceFile + chunkText.
+          id: c.id,
+          sourceFile: c.sourceFile,
+          chunkText: c.chunkText,
+          createdAt: c.createdAt,
+        }));
+        return send(res, 200, { role, chunks });
+      }
+
+      // ── Requirements (B3) ───────────────────────────────────────────
+      if (url.pathname === '/api/requirements') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const query = url.searchParams.get('q') ?? undefined;
+        const requirements = recallRequirements(deps.db, query);
+        return send(res, 200, { requirements });
+      }
+      const reqMatch = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
+      if (reqMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const requirement = getRequirement(deps.db, reqMatch[1]!);
+        if (!requirement) return notFound(res);
+        return send(res, 200, { requirement });
       }
 
       if (url.pathname === '/api/diagnostics') {
@@ -539,4 +603,59 @@ function handleCreateBugTasks(ctx: RouteContext, deps: HttpApiDeps, cycleId: str
     if (msg.includes('not found')) return send(ctx.response, 404, { error: 'not_found', message: msg });
     return badRequest(ctx.response, msg);
   }
+}
+
+function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): void {
+  if (!deps.trainRole) {
+    return send(ctx.response, 501, { error: 'not_implemented', message: 'role training not wired' });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { name, documents, baseSystemPrompt } = parsed as {
+    name?: unknown; documents?: unknown; baseSystemPrompt?: unknown;
+  };
+  if (typeof name !== 'string' || !name.trim()) {
+    return badRequest(ctx.response, 'name (non-empty string) required');
+  }
+  if (!Array.isArray(documents) || documents.length === 0) {
+    return badRequest(ctx.response, 'documents must be a non-empty array');
+  }
+  const docs: Array<{ filename: string; content: string }> = [];
+  for (const raw of documents) {
+    if (!raw || typeof raw !== 'object') {
+      return badRequest(ctx.response, 'each document must be an object with filename + content');
+    }
+    const d = raw as Record<string, unknown>;
+    if (typeof d['filename'] !== 'string' || !d['filename']) {
+      return badRequest(ctx.response, 'each document requires a non-empty filename');
+    }
+    if (typeof d['content'] !== 'string') {
+      return badRequest(ctx.response, 'each document requires a string content');
+    }
+    docs.push({ filename: d['filename'], content: d['content'] });
+  }
+  if (baseSystemPrompt !== undefined && typeof baseSystemPrompt !== 'string') {
+    return badRequest(ctx.response, 'baseSystemPrompt must be a string when provided');
+  }
+
+  // Async-execute; need to wrap because `handleX` functions are sync.
+  void (async () => {
+    try {
+      const role = await deps.trainRole!({
+        roleId,
+        name,
+        documents: docs,
+        baseSystemPrompt: baseSystemPrompt as string | undefined,
+      });
+      deps.logger?.info('role_trained', { data: { roleId, docCount: docs.length } });
+      send(ctx.response, 200, { role });
+    } catch (err) {
+      deps.logger?.error('role_train_failed', { data: { roleId, error: (err as Error).message } });
+      internalError(ctx.response, err);
+    }
+  })();
 }

@@ -20,7 +20,9 @@ import { getActiveChats } from './tools/get-active-chats.js';
 import { bindToRemoteChannel } from './tools/bind-to-remote-channel.js';
 import { listKnowledgeProviders } from './tools/list-knowledge-providers.js';
 import { queryKnowledge } from './tools/query-knowledge.js';
+import { startRelayChatSession } from './tools/start-relay-chat-session.js';
 import { makePseudoEmbedFn } from './embed.js';
+import type { CursorAgentSpawner } from '../spawner/cursor-spawner.js';
 
 import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { WorkflowEngine } from '../workflow/engine.js';
@@ -49,6 +51,12 @@ export interface McpServerDeps {
   knowledge?: KnowledgeProviderRegistry;
   /** LLM client used by summarize_campaign. When absent, the tool errors out. */
   llm?: LlmClient;
+  /**
+   * Spawner used by start_relay_chat_session (Phase 26). When absent (e.g.
+   * cloud mode without CURSOR_API_KEY), the tool errors out so the calling
+   * agent gets an actionable message.
+   */
+  spawner?: CursorAgentSpawner;
   /** Override the embedder used by train_role / search_knowledge (defaults to pseudo). */
   embedFn?: (text: string) => Promise<Float32Array>;
   /** Base directory for update_doc_first relative-path resolution. Defaults to process.cwd(). */
@@ -395,6 +403,38 @@ export function createMcpServer(
       id: c.id, title: c.title, status: c.status,
       brief: c.brief?.slice(0, 200), startedAt: c.startedAt,
     })));
+  });
+
+  // ── Spawner (Phase 26) ──────────────────────────────────────────────────
+
+  server.registerTool('start_relay_chat_session', {
+    description:
+      'Spawn a fresh Cursor agent against a project directory. Returns the new '
+      + 'agentId so the caller (or the user via Active Chats) can address it. '
+      + 'When `prompt` is provided, the agent starts working immediately; '
+      + 'otherwise it stays idle and the caller messages it later via the SDK.',
+    inputSchema: {
+      projectPath: z.string(),
+      prompt: z.string().optional(),
+      name: z.string().optional(),
+      modelId: z.string().optional(),
+    },
+  }, async ({ projectPath, prompt, name, modelId }) => {
+    if (!deps.spawner) {
+      return errorResult(
+        'start_relay_chat_session requires a Cursor spawner. In cloud mode '
+        + 'this means CURSOR_API_KEY is missing; in local mode the Cursor '
+        + 'app must be installed and signed in.',
+      );
+    }
+    try {
+      const result = await startRelayChatSession(deps.spawner, {
+        projectPath, prompt, name, modelId,
+      });
+      return jsonResult(result);
+    } catch (err) {
+      return errorResult(`Failed to spawn agent: ${(err as Error).message}`);
+    }
   });
 
   server.registerTool('summarize_campaign', {

@@ -146,6 +146,55 @@ export interface CycleScreenshotInput {
   capturedAt?: string;
 }
 
+export interface Role {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  docPath?: string;
+  isBuiltin: boolean;
+  createdAt: string;
+}
+
+export interface RoleSummary extends Role {
+  chunkCount: number;
+}
+
+export interface RoleChunk {
+  id: string;
+  sourceFile?: string;
+  chunkText: string;
+  createdAt: string;
+}
+
+export interface TrainRoleInput {
+  name: string;
+  documents: Array<{ filename: string; content: string }>;
+  baseSystemPrompt?: string;
+}
+
+export interface RequirementTodo {
+  id: string;
+  text: string;
+  done: boolean;
+  createdAt: string;
+}
+
+export interface Requirement {
+  id: string;
+  name: string;
+  purpose?: string;
+  context: string;
+  summary?: string;
+  relatedDocs?: string[];
+  changes?: string[];
+  tags?: string[];
+  todos?: RequirementTodo[];
+  projectPath?: string;
+  status: 'draft' | 'confirmed';
+  createdAt: string;
+  updatedAt: string;
+}
+
 // SSE event shapes — must mirror src/events/bus.ts AppEvent.
 export type AppEvent =
   | { type: 'approval.pending'; request: PendingApproval }

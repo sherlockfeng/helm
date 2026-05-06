@@ -20,6 +20,8 @@ const NAV: NavItem[] = [
   { to: '/chats', label: 'Active Chats' },
   { to: '/bindings', label: 'Bindings' },
   { to: '/campaigns', label: 'Campaigns' },
+  { to: '/roles', label: 'Roles' },
+  { to: '/requirements', label: 'Requirements' },
   { to: '/settings', label: 'Settings' },
 ];
 

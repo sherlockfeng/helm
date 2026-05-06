@@ -11,6 +11,8 @@ import { CycleDetailPage } from './pages/CycleDetail.js';
 import { TaskDetailPage } from './pages/TaskDetail.js';
 import { BindingsPage } from './pages/Bindings.js';
 import { SettingsPage } from './pages/Settings.js';
+import { RolesPage } from './pages/Roles.js';
+import { RequirementsPage } from './pages/Requirements.js';
 
 export default function App() {
   return (
@@ -24,6 +26,8 @@ export default function App() {
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/cycles/:cycleId" element={<CycleDetailPage />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
+          <Route path="/roles" element={<RolesPage />} />
+          <Route path="/requirements" element={<RequirementsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/approvals" replace />} />
         </Route>

@@ -644,6 +644,192 @@ describe('/api/campaigns/:id/summarize (B2)', () => {
   });
 });
 
+describe('/api/roles (B3)', () => {
+  it('GET returns roles with chunkCount', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('product', 'Product Agent', 'be a PM', 1, now);
+    db.prepare(`INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('c1', 'product', 'a.md', 'foo', new Uint8Array(0), now);
+
+    const r = await fetchJson('/api/roles');
+    expect(r.status).toBe(200);
+    const body = r.body as { roles: Array<{ id: string; chunkCount: number }> };
+    expect(body.roles).toHaveLength(1);
+    expect(body.roles[0]?.chunkCount).toBe(1);
+  });
+
+  it('GET /api/roles/:id returns role + chunks (no embedding)', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('dev', 'Dev', 'p', 0, now);
+    db.prepare(`INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('c1', 'dev', 'a.md', 'hello', new Uint8Array(0), now);
+
+    const r = await fetchJson('/api/roles/dev');
+    expect(r.status).toBe(200);
+    const body = r.body as { role: { id: string }; chunks: Array<{ chunkText: string; embedding?: unknown }> };
+    expect(body.role.id).toBe('dev');
+    expect(body.chunks).toHaveLength(1);
+    expect(body.chunks[0]?.chunkText).toBe('hello');
+    // embedding intentionally stripped from API response
+    expect(body.chunks[0]).not.toHaveProperty('embedding');
+  });
+
+  it('attack: GET unknown role → 404', async () => {
+    const r = await fetchJson('/api/roles/ghost');
+    expect(r.status).toBe(404);
+  });
+
+  it('POST /api/roles/:id/train invokes the factory', async () => {
+    await api.stop();
+    let received: unknown = null;
+    api = createHttpApi({
+      db, registry,
+      trainRole: async (input) => {
+        received = input;
+        return { id: input.roleId, name: input.name, systemPrompt: 'x', isBuiltin: false, createdAt: new Date().toISOString() };
+      },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/expert/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Expert',
+        documents: [{ filename: 'a.md', content: 'hello world' }],
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect((received as { roleId: string }).roleId).toBe('expert');
+    expect((received as { documents: unknown[] }).documents).toHaveLength(1);
+  });
+
+  it('attack: POST train without factory → 501', async () => {
+    const r = await fetchJson('/api/roles/x/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x', documents: [{ filename: 'a.md', content: '...' }] }),
+    });
+    expect(r.status).toBe(501);
+  });
+
+  it('attack: POST train missing name → 400', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      trainRole: async () => ({}),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/x/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documents: [{ filename: 'a.md', content: '...' }] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: POST train empty documents → 400', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      trainRole: async () => ({}),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/x/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'X', documents: [] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: POST train doc missing filename → 400', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      trainRole: async () => ({}),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/x/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'X', documents: [{ content: 'no filename' }] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: trainRole factory throws → 500', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      trainRole: async () => { throw new Error('embed crashed'); },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/x/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'X', documents: [{ filename: 'a.md', content: '...' }] }),
+    });
+    // Wait for the async-execute path to complete
+    await new Promise((r) => setTimeout(r, 30));
+    expect(r.status).toBe(500);
+  });
+});
+
+describe('/api/requirements (B3)', () => {
+  it('GET returns the recalled requirements', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO requirements (id, name, context, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('r1', 'Login redesign', 'users want sso', 'confirmed', now, now);
+
+    const r = await fetchJson('/api/requirements');
+    expect(r.status).toBe(200);
+    const body = r.body as { requirements: Array<{ id: string }> };
+    expect(body.requirements).toHaveLength(1);
+    expect(body.requirements[0]?.id).toBe('r1');
+  });
+
+  it('GET ?q= filters', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO requirements (id, name, context, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('r1', 'Login redesign', 'users want sso', 'confirmed', now, now);
+    db.prepare(`INSERT INTO requirements (id, name, context, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('r2', 'Approvals UX', 'allow/deny buttons', 'confirmed', now, now);
+
+    const r = await fetchJson('/api/requirements?q=login');
+    expect(r.status).toBe(200);
+    const body = r.body as { requirements: Array<{ id: string }> };
+    expect(body.requirements).toHaveLength(1);
+    expect(body.requirements[0]?.id).toBe('r1');
+  });
+
+  it('GET /api/requirements/:id returns the row', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO requirements (id, name, context, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('r1', 'Login', 'ctx', 'draft', now, now);
+
+    const r = await fetchJson('/api/requirements/r1');
+    expect(r.status).toBe(200);
+    expect((r.body as { requirement: { id: string } }).requirement.id).toBe('r1');
+  });
+
+  it('attack: unknown id → 404', async () => {
+    const r = await fetchJson('/api/requirements/ghost');
+    expect(r.status).toBe(404);
+  });
+});
+
 describe('attack: only binds 127.0.0.1', () => {
   it('default host is 127.0.0.1 (loopback only)', () => {
     expect(api.port()).toBeGreaterThan(0);

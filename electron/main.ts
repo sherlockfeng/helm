@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { HelmDB } from '../src/storage/database.js';
 import { createLoggerFactory } from '../src/logger/index.js';
+import { createStderrEcho, resolveStderrEchoLevel } from '../src/logger/stderr-echo.js';
 import { createHelmApp, type HelmAppHandle } from '../src/app/orchestrator.js';
 import { loadHelmConfig } from '../src/config/loader.js';
 import { ElectronNotifier } from '../src/channel/local/electron-notifier.js';
@@ -80,7 +81,15 @@ function navigateRenderer(route: string): void {
 
 async function bootHelm(): Promise<void> {
   const helmDb = new HelmDB();
-  const loggers = createLoggerFactory({ rootDir: PATHS.logsDir });
+  // Phase 28 (C4): mirror warn/error (or info+ in HELM_DEV=1) to stderr so
+  // `pnpm dev` users don't have to tail ~/.helm/logs/main.log to see what
+  // the orchestrator is doing. Returns null when level=off — the LoggerFactory
+  // echo callback is optional.
+  const stderrEcho = createStderrEcho({ level: resolveStderrEchoLevel() });
+  const loggers = createLoggerFactory({
+    rootDir: PATHS.logsDir,
+    ...(stderrEcho ? { echo: stderrEcho } : {}),
+  });
   const configLog = loggers.module('config');
   const { config, loaded } = loadHelmConfig({
     onError: (err, ctx) => configLog.warn('config_load_failed', {

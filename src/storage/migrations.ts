@@ -207,6 +207,14 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_event_session ON host_event_log(host_session_id, created_at);
     `,
   },
+  {
+    version: 3,
+    description: 'host_sessions.role_id — Phase 25 chat ↔ role binding for sessionStart auto-inject',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN role_id TEXT REFERENCES roles(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_host_sessions_role ON host_sessions(role_id) WHERE role_id IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

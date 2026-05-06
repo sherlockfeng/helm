@@ -121,6 +121,9 @@ export interface HostSession {
   composerMode?: string;
   campaignId?: string;
   cycleId?: string;
+  /** Phase 25: optional role binding; LocalRolesProvider injects this role's
+   * system prompt + chunks at sessionStart. */
+  roleId?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

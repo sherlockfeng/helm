@@ -22,7 +22,11 @@
 
 import http from 'node:http';
 import type Database from 'better-sqlite3';
-import { listActiveSessions } from '../storage/repos/host-sessions.js';
+import {
+  getHostSession,
+  listActiveSessions,
+  setHostSessionRole,
+} from '../storage/repos/host-sessions.js';
 import {
   getCampaign,
   getCycle,
@@ -217,6 +221,15 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (req.method !== 'GET') return methodNotAllowed(res);
         const sessions = listActiveSessions(deps.db);
         return send(res, 200, { chats: sessions });
+      }
+
+      // Phase 25: bind / unbind a chat to a role. The next session_start hook
+      // will inject this role's system prompt + chunks via LocalRolesProvider's
+      // resolveRoleId callback (orchestrator wires it to read host_sessions.role_id).
+      const chatRoleMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/role$/);
+      if (chatRoleMatch) {
+        if (req.method !== 'PUT') return methodNotAllowed(res);
+        return handleSetChatRole(ctx, deps, chatRoleMatch[1]!);
       }
 
       if (url.pathname === '/api/approvals') {
@@ -604,6 +617,34 @@ function handleCreateBugTasks(ctx: RouteContext, deps: HttpApiDeps, cycleId: str
     if (msg.includes('not found')) return send(ctx.response, 404, { error: 'not_found', message: msg });
     return badRequest(ctx.response, msg);
   }
+}
+
+function handleSetChatRole(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: string): void {
+  const session = getHostSession(deps.db, hostSessionId);
+  if (!session) {
+    return send(ctx.response, 404, { error: 'not_found', message: 'unknown host session' });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { roleId } = parsed as { roleId?: unknown };
+  if (roleId !== null && typeof roleId !== 'string') {
+    return badRequest(ctx.response, 'roleId must be a string or null');
+  }
+  if (typeof roleId === 'string' && roleId.length > 0) {
+    const role = getRoleRow(deps.db, roleId);
+    if (!role) {
+      return send(ctx.response, 404, { error: 'not_found', message: `unknown role ${roleId}` });
+    }
+  }
+  const next = (typeof roleId === 'string' && roleId.length > 0) ? roleId : null;
+  setHostSessionRole(deps.db, hostSessionId, next);
+  deps.logger?.info('chat_role_set', { data: { hostSessionId, roleId: next } });
+  const refreshed = getHostSession(deps.db, hostSessionId);
+  return send(ctx.response, 200, { chat: refreshed });
 }
 
 function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): void {

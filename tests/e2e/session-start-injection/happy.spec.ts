@@ -9,6 +9,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootE2e, runHookViaBridge, type E2eHarness } from '../_helpers/setup.js';
+import { setHostSessionRole, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { insertChunk, upsertRole } from '../../../src/storage/repos/roles.js';
 
 let harness: E2eHarness;
 
@@ -19,13 +21,13 @@ beforeEach(async () => {
 afterEach(async () => { await harness.shutdown(); });
 
 describe('session-start-injection happy', () => {
-  it('returns empty when only LocalRolesProvider is registered (no resolver wired)', async () => {
+  it('returns empty when chat is unbound — Phase 25 resolver finds no role on the host_session', async () => {
     const r = await runHookViaBridge(harness, {
       event: 'sessionStart',
       payload: { session_id: 'sess_a', cwd: '/proj' },
     }) as Record<string, unknown>;
-    // LocalRolesProvider's getSessionContext returns null without a roleResolver,
-    // so the response carries no additional_context.
+    // The orchestrator wires resolveRoleId to read host_sessions.role_id.
+    // Brand-new chat has no binding, so getSessionContext is a no-op.
     expect(r['additional_context']).toBeUndefined();
   });
 
@@ -85,6 +87,53 @@ describe('session-start-injection happy', () => {
     ).get('sess_d') as { id: string; cwd: string; composer_mode: string } | undefined;
 
     expect(row).toMatchObject({ id: 'sess_d', cwd: '/some/proj', composer_mode: 'agent' });
+  });
+
+  it('Phase 25: chat ↔ role binding auto-injects role prompt + chunks at sessionStart', async () => {
+    // Seed a role with one knowledge chunk.
+    upsertRole(harness.db, {
+      id: 'role-pm',
+      name: 'Product Manager',
+      systemPrompt: 'You are a meticulous PM. Always restate the goal first.',
+      isBuiltin: true,
+      createdAt: new Date().toISOString(),
+    });
+    insertChunk(harness.db, {
+      id: 'chunk-1',
+      roleId: 'role-pm',
+      sourceFile: 'pm-handbook.md',
+      chunkText: 'Always validate the customer pain before shipping.',
+      createdAt: new Date().toISOString(),
+    });
+    // Pre-create the host_session row and bind the role; mimics the user
+    // picking the role in the Chats UI before the next sessionStart.
+    const now = new Date().toISOString();
+    upsertHostSession(harness.db, {
+      id: 'sess_role',
+      host: 'cursor',
+      cwd: '/proj',
+      status: 'active',
+      firstSeenAt: now,
+      lastSeenAt: now,
+    });
+    setHostSessionRole(harness.db, 'sess_role', 'role-pm');
+
+    const r = await runHookViaBridge(harness, {
+      event: 'sessionStart',
+      payload: { session_id: 'sess_role', cwd: '/proj' },
+    }) as { additional_context?: string };
+
+    expect(r.additional_context).toBeDefined();
+    expect(r.additional_context).toContain('## Local Roles');
+    expect(r.additional_context).toContain('# Role: Product Manager');
+    expect(r.additional_context).toContain('You are a meticulous PM');
+    expect(r.additional_context).toContain('Always validate the customer pain');
+
+    // The session_start hook fired again with new lastSeenAt — binding survives.
+    const refreshed = harness.db.prepare(
+      `SELECT role_id FROM host_sessions WHERE id = ?`,
+    ).get('sess_role') as { role_id: string };
+    expect(refreshed.role_id).toBe('role-pm');
   });
 
   it('emits session.started SSE event after the hook completes', async () => {

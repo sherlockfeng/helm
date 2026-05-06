@@ -55,6 +55,14 @@ describe('migrations', () => {
     expect(() => runMigrations(db)).not.toThrow();
   });
 
+  it('Phase 25 migration: host_sessions.role_id column + index', () => {
+    runMigrations(db);
+    const cols = (db.prepare(`PRAGMA table_info(host_sessions)`).all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain('role_id');
+    const indexes = (db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='host_sessions'`).all() as { name: string }[]).map((i) => i.name);
+    expect(indexes).toContain('idx_host_sessions_role');
+  });
+
   it('attack: foreign_keys pragma is respected by runMigrations (FK violation throws)', () => {
     runMigrations(db);
     // WAL is not available in :memory: databases; foreign_keys should be enforced

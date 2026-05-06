@@ -13,6 +13,8 @@ export interface ActiveChat {
   composerMode?: string;
   campaignId?: string;
   cycleId?: string;
+  /** Phase 25: chat → role binding for sessionStart auto-inject. */
+  roleId?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

@@ -81,6 +81,12 @@ export interface HttpApiDeps {
    * change takes effect on the next call without a server restart.
    */
   workflowEngine?: import('../workflow/engine.js').WorkflowEngine;
+  /**
+   * Summarize a campaign with the configured LLM (B2). When undefined
+   * (no API key in config / env), POST /api/campaigns/:id/summarize
+   * returns 501 so the UI can prompt the user to set the key in Settings.
+   */
+  summarizeCampaign?: (campaignId: string) => Promise<unknown>;
 }
 
 export interface HttpApiOptions {
@@ -214,6 +220,33 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (cyclesMatch) {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return send(res, 200, { cycles: listCycles(deps.db, cyclesMatch[1]!) });
+      }
+
+      const summarizeMatch = url.pathname.match(/^\/api\/campaigns\/([^/]+)\/summarize$/);
+      if (summarizeMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.summarizeCampaign) {
+          return send(res, 501, {
+            error: 'not_implemented',
+            message: 'Anthropic API key not configured — set helm config anthropic.apiKey or ANTHROPIC_API_KEY env var',
+          });
+        }
+        try {
+          const summary = await deps.summarizeCampaign(summarizeMatch[1]!);
+          deps.logger?.info('campaign_summarized', { data: { campaignId: summarizeMatch[1] } });
+          return send(res, 200, { summary });
+        } catch (err) {
+          const msg = (err as Error).message;
+          // Live-config check: orchestrator factory throws this when the key
+          // wasn't set or got cleared via Settings between calls. Same UX
+          // signal as the 501 above so the renderer's prompt stays accurate.
+          if (msg.includes('API key not configured')) {
+            return send(res, 501, { error: 'not_implemented', message: msg });
+          }
+          if (msg.includes('not found')) return send(res, 404, { error: 'not_found', message: msg });
+          deps.logger?.error('summarize_failed', { data: { campaignId: summarizeMatch[1], error: msg } });
+          return internalError(res, err);
+        }
       }
 
       const cycleCompleteMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/complete$/);

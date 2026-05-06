@@ -575,6 +575,75 @@ describe('/api/cycles/:id/bug-tasks (B1)', () => {
   });
 });
 
+describe('/api/campaigns/:id/summarize (B2)', () => {
+  it('returns 200 + summary when factory wired', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      summarizeCampaign: async (id) => ({ id, why: 'because', cycles: [], keyDecisions: [], overallPath: 'X→Y' }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
+    expect(r.status).toBe(200);
+    const body = r.body as { summary: { why: string } };
+    expect(body.summary.why).toBe('because');
+  });
+
+  it('returns 501 when factory absent', async () => {
+    const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
+    expect(r.status).toBe(501);
+  });
+
+  it('returns 501 when factory throws "API key not configured" (live-config check)', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      summarizeCampaign: async () => {
+        throw new Error('Anthropic API key not configured');
+      },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
+    expect(r.status).toBe(501);
+    expect((r.body as { message: string }).message).toMatch(/API key not configured/);
+  });
+
+  it('attack: GET → 405', async () => {
+    const r = await fetchJson('/api/campaigns/c1/summarize');
+    expect(r.status).toBe(405);
+  });
+
+  it('attack: factory throws "Campaign not found" → 404', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      summarizeCampaign: async () => { throw new Error('Campaign not found: c1'); },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
+    expect(r.status).toBe(404);
+  });
+
+  it('attack: factory throws unknown error → 500', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      summarizeCampaign: async () => { throw new Error('rate limit exceeded'); },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
+    expect(r.status).toBe(500);
+  });
+});
+
 describe('attack: only binds 127.0.0.1', () => {
   it('default host is 127.0.0.1 (loopback only)', () => {
     expect(api.port()).toBeGreaterThan(0);

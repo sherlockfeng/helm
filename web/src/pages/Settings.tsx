@@ -194,6 +194,42 @@ export function SettingsPage() {
         </p>
       </article>
 
+      <h3>Anthropic (campaign summarization)</h3>
+      <article className="helm-card">
+        <label className="helm-form-row">
+          <div className="muted">API key</div>
+          <input
+            type="password"
+            value={draft.anthropic.apiKey ?? ''}
+            placeholder="sk-ant-… (or set ANTHROPIC_API_KEY env var)"
+            onChange={(e) => update((c) => { c.anthropic.apiKey = e.target.value || undefined; })}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Model</div>
+          <input
+            type="text"
+            value={draft.anthropic.model}
+            onChange={(e) => update((c) => { c.anthropic.model = e.target.value; })}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Max tokens</div>
+          <input
+            type="number"
+            min={1}
+            value={draft.anthropic.maxTokens}
+            onChange={(e) => update((c) => { c.anthropic.maxTokens = Number(e.target.value); })}
+            style={{ width: 140 }}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+          Powers the Summarize button on Campaigns. Without a key, summarize
+          falls back to "not configured" — the env var alternative works too.
+          Settings save takes effect on the next click; no restart needed.
+        </p>
+      </article>
+
       <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

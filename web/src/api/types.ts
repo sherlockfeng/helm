@@ -116,6 +116,20 @@ export interface HelmConfig {
   lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
   knowledge: { providers: KnowledgeProviderConfig[] };
   docFirst: { enforce: boolean };
+  anthropic: { apiKey?: string; model: string; maxTokens: number };
+}
+
+export interface CampaignSummary {
+  why: string;
+  cycles: Array<{
+    cycleNum: number;
+    productBrief?: string;
+    devWork: string[];
+    testResults: string;
+    screenshots: Array<{ description: string }>;
+  }>;
+  keyDecisions: string[];
+  overallPath: string;
 }
 
 export interface BugTaskInput {

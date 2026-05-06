@@ -7,6 +7,7 @@ import type {
   ActiveChat,
   BugTaskInput,
   Campaign,
+  CampaignSummary,
   ChannelBinding,
   Cycle,
   CycleScreenshotInput,
@@ -90,6 +91,12 @@ export const helmApi = {
       'POST',
       `/api/cycles/${encodeURIComponent(cycleId)}/bug-tasks`,
       { bugs },
+    ),
+
+  summarizeCampaign: (campaignId: string) =>
+    request<{ summary: CampaignSummary }>(
+      'POST',
+      `/api/campaigns/${encodeURIComponent(campaignId)}/summarize`,
     ),
 
   // ── Settings ──

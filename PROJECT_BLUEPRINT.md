@@ -1409,6 +1409,62 @@ doc-first 规则、role 边界、vibe coding loop 不变。
 - 老 npm 包 `@sherlockfeng/lark2cursor` 不再发布新版本；新项目用新名字发包
 - 新项目 README 第一段说明它是这两个项目的合并 / 演进版
 
+## 25. MVP-3 之后的精修路线（Refinement）
+
+> 状态：Phase 0–15（蓝图核心阶段）完成后，剩余工作不再是新的"phase chunks"而是分类精修。每条都对应一个独立 PR；按字母序优先级松散排列，可并行。
+
+### 25.1 A：用户能装能跑能配置（硬性缺口）
+
+蓝图里有但 MVP-3 实现里 defer 过的东西，缺了任一条都会让用户被迫"手编 JSON / 跑 SQL / 装不上"。优先级最高。
+
+| 子项 | 内容 | 涉及 |
+|---|---|---|
+| **A1** | Settings 页面 — Lark / Depscope 开关 + 字段编辑、HTTP 端口、Diagnostics 导出按钮 | renderer + `GET/PUT /api/config` + `saveHelmConfig` 原子写 |
+| **A2** | Bind UI — `pending_binds` 列表 + chat 选择器 + "Bind" 按钮；active bindings 列表 + Unbind | renderer + `GET /api/bindings{,/pending}` + `POST /api/bindings/consume` + `DELETE /api/bindings/:id` |
+| **A3** | Menubar tray + status icon — 蓝图 §14.1（macOS 一等公民）；icon 状态：灰 / 蓝 / 黄+角标 / 红 | `electron/tray.ts` + 纯逻辑 `src/app/tray-state.ts` |
+| **A4** | Electron 真实 Notification — 替换 `NoopNotifier`；点击通知 → 唤起主窗口 | `src/channel/local/electron-notifier.ts` |
+| **A5** | DMG 打包 + 代码签名 — `electron-builder.config.cjs` 当前 stub；至少 ad-hoc sign | electron-builder 配置 + `pnpm package` 打通 |
+| **A6** | `helm doctor` CLI — 蓝图 §16/§19；探测 bridge socket / hooks.json / config / lark-cli 健康 | `bin/helm.mjs` + `commander` 子命令 |
+
+A1 + A2 落地于 #17（Phase 16）；A3 + A4 计划落地于 Phase 17；A5 + A6 计划落地于 Phase 18。
+
+### 25.2 B：MCP 已有但 UI 没接的功能
+
+| 子项 | 内容 |
+|---|---|
+| **B1** | Cycle complete 按钮 + bug 回流入口（`complete_cycle` / `create_bug_tasks` MCP 工具已就绪，UI 当前只读） |
+| **B2** | Summarize Campaign 按钮（需要 Anthropic SDK 真接到 `summarizeCampaign`；当前 LLM 客户端是 deps 接口） |
+| **B3** | Roles 页面（`list_roles` / `train_role`）+ Requirements 页面（`capture_requirement` / `recall_requirement`） |
+| **B4** | Doc-first 强制配置开关 — §12.3 说"可由 config 关闭"，加 `config.docFirst.enforce` 字段 + Settings 切换 |
+
+### 25.3 C：质量与可信度
+
+| 子项 | 内容 |
+|---|---|
+| **C1** | 设计 subagent UI polish pass — AGENTS.md §3 强制，把当前结构性 UI 一次性交给资深 Mac 设计 subagent 重新审视 |
+| **C2** | e2e 套件补齐 — AGENTS.md §1（每用户流程 happy + ≥3 attack）。已有：approval-roundtrip / session-start-injection。还需：lark-bind-handshake / cycle-complete-with-bug-followup / mcp-tool-roundtrip / host-stop-message-injection / knowledge-aggregator-cap |
+| **C3** | Spawner 真接 Cursor SDK — `src/spawner/index.ts` 当前 stub，`start_relay_chat_session` 拿不到真 chat |
+| **C4** | Logger 反向桥到 dev console — 错误日志只进文件，开发期看不到；接 `process.stderr` echo |
+
+### 25.4 D：用户多半会要但不在原蓝图
+
+| 子项 | 内容 |
+|---|---|
+| **D1** | 崩溃恢复 e2e — 验证 `registry.reloadFromDatabase()` + 重启后 UI 能看到在跑 approval（infrastructure 已有，缺 e2e） |
+| **D2** | 多用户 / 团队 mapping 共享 — §11.5.7 列为 v2 演进，可提前 |
+| **D3** | 更智能的 redact — 当前仅 key 名白名单 + 几个 token 正则；用户拖任意 JSON 可能漏 |
+| **D4** | Provider 配置热重载 — 当前 PUT `/api/config` 只更新 live snapshot，DepscopeProvider 不重新注册；需要 reload signal |
+
+### 25.5 推荐节奏
+
+1. **Phase 16**：A1 + A2（Settings + Bind UI）✅ #17
+2. **Phase 17**：A3 + A4（tray + notification）— Mac 一等公民
+3. **Phase 18**：A5 + A6（DMG + helm doctor）— 能交付安装包
+4. **Phase 19**：C1（设计 subagent 一次过）
+5. 之后按用户优先级挑 B / C / D
+
+D2 / D4 标注为可选 — 不阻塞 MVP-3 落地。
+
 ---
 
 > 草稿 v0.1，欢迎 review。下一步动作：定项目名、git init 新仓库、按 Phase 0 起骨架。

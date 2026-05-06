@@ -33,7 +33,6 @@
     "clean": "rm -rf dist node_modules/.cache"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.30.0",
     "@cursor/sdk": "^1.0.12",
     "@larksuite/cli": "^1.0.4",
     "@modelcontextprotocol/sdk": "^1.29.0",

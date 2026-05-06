@@ -57,18 +57,19 @@ const DocFirstConfigSchema = z.object({
 }).strict();
 
 /**
- * Anthropic API key + model for `summarize_campaign` (B2). When apiKey is
- * absent the orchestrator skips wiring the LLM client; the summarize HTTP
- * endpoint returns 501 and the UI hints at Settings.
+ * Cursor SDK config for `summarize_campaign` (Phase 24, replaces Phase 22's
+ * Anthropic block).
  *
- * apiKey resolution at the orchestrator layer falls back to the
- * ANTHROPIC_API_KEY env var, so dev shells / CI don't need this in
- * config.json.
+ * - mode 'local' (default): uses the Cursor app's local auth on this machine.
+ *   Zero config when the user has Cursor installed + signed in.
+ * - mode 'cloud': uses CURSOR_API_KEY env var or the apiKey field. Falls
+ *   back to env when apiKey is omitted, so CI / dev shells don't need it in
+ *   config.json.
  */
-const AnthropicConfigSchema = z.object({
+const CursorConfigSchema = z.object({
   apiKey: z.string().optional(),
-  model: z.string().default('claude-sonnet-4-6'),
-  maxTokens: z.number().int().positive().default(2048),
+  model: z.string().default('auto'),
+  mode: z.enum(['local', 'cloud']).default('local'),
 }).strict();
 
 export const HelmConfigSchema = z.object({
@@ -77,7 +78,7 @@ export const HelmConfigSchema = z.object({
   lark: LarkConfigSchema.default({}),
   knowledge: KnowledgeConfigSchema.default({}),
   docFirst: DocFirstConfigSchema.default({}),
-  anthropic: AnthropicConfigSchema.default({}),
+  cursor: CursorConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

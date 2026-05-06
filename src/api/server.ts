@@ -247,7 +247,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!deps.summarizeCampaign) {
           return send(res, 501, {
             error: 'not_implemented',
-            message: 'Anthropic API key not configured — set helm config anthropic.apiKey or ANTHROPIC_API_KEY env var',
+            message: 'summarize factory not wired',
           });
         }
         try {
@@ -256,10 +256,11 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           return send(res, 200, { summary });
         } catch (err) {
           const msg = (err as Error).message;
-          // Live-config check: orchestrator factory throws this when the key
-          // wasn't set or got cleared via Settings between calls. Same UX
-          // signal as the 501 above so the renderer's prompt stays accurate.
-          if (msg.includes('API key not configured')) {
+          // Phase 24: CursorLlmClient cloud mode throws "API key required"
+          // when CURSOR_API_KEY is missing. Surface as 501 so the renderer's
+          // Settings prompt is the right next step. Local mode never throws
+          // this.
+          if (msg.includes('API key') && (msg.includes('CURSOR_API_KEY') || msg.includes('cloud mode'))) {
             return send(res, 501, { error: 'not_implemented', message: msg });
           }
           if (msg.includes('not found')) return send(res, 404, { error: 'not_found', message: msg });

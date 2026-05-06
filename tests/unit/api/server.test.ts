@@ -596,12 +596,12 @@ describe('/api/campaigns/:id/summarize (B2)', () => {
     expect(r.status).toBe(501);
   });
 
-  it('returns 501 when factory throws "API key not configured" (live-config check)', async () => {
+  it('Phase 24: cloud-mode missing key throws → 501 (live-config check)', async () => {
     await api.stop();
     api = createHttpApi({
       db, registry,
       summarizeCampaign: async () => {
-        throw new Error('Anthropic API key not configured');
+        throw new Error('CursorLlmClient cloud mode requires an API key — pass options.apiKey or set CURSOR_API_KEY in env.');
       },
     });
     await api.start();
@@ -609,7 +609,7 @@ describe('/api/campaigns/:id/summarize (B2)', () => {
 
     const r = await fetchJson('/api/campaigns/c1/summarize', { method: 'POST' });
     expect(r.status).toBe(501);
-    expect((r.body as { message: string }).message).toMatch(/API key not configured/);
+    expect((r.body as { message: string }).message).toMatch(/CURSOR_API_KEY/);
   });
 
   it('attack: GET → 405', async () => {

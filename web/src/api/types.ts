@@ -116,7 +116,7 @@ export interface HelmConfig {
   lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
   knowledge: { providers: KnowledgeProviderConfig[] };
   docFirst: { enforce: boolean };
-  anthropic: { apiKey?: string; model: string; maxTokens: number };
+  cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
 }
 
 export interface CampaignSummary {

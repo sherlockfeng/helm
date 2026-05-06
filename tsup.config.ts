@@ -3,7 +3,6 @@ import { defineConfig } from 'tsup';
 const externalNative = [
   'electron',
   'better-sqlite3',
-  '@anthropic-ai/sdk',
   '@cursor/sdk',
   '@modelcontextprotocol/sdk',
   '@larksuite/cli',

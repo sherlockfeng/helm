@@ -19,6 +19,7 @@ import { startMcpServer } from './server.js';
 import { makePseudoEmbedFn } from './embed.js';
 import { loadHelmConfig } from '../config/loader.js';
 import { DepscopeProviderConfigSchema } from '../config/schema.js';
+import { createCursorAgentSpawner, type CursorAgentSpawner } from '../spawner/cursor-spawner.js';
 
 export async function main(): Promise<void> {
   const db = new HelmDB();
@@ -46,5 +47,21 @@ export async function main(): Promise<void> {
     }
   }
 
-  await startMcpServer({ db: db.sqlite, knowledge });
+  // Phase 26: build the spawner from `cursor` config so the MCP tool
+  // start_relay_chat_session can launch a fresh Cursor agent against a
+  // project. Cloud mode without a key throws — degrade gracefully so the
+  // rest of the MCP server still works.
+  let spawner: CursorAgentSpawner | undefined;
+  try {
+    spawner = createCursorAgentSpawner({
+      mode: config.cursor.mode,
+      apiKey: config.cursor.apiKey,
+      modelId: config.cursor.model,
+    });
+  } catch {
+    // start_relay_chat_session will return an actionable errorResult.
+    spawner = undefined;
+  }
+
+  await startMcpServer({ db: db.sqlite, knowledge, spawner });
 }

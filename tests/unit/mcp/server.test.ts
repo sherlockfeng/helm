@@ -6,20 +6,39 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
 import { KnowledgeProviderRegistry } from '../../../src/knowledge/types.js';
 import { createMcpServer } from '../../../src/mcp/server.js';
+import { CursorAgentSpawner } from '../../../src/spawner/cursor-spawner.js';
+import type { Run, SDKAgent } from '@cursor/sdk';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 let db: BetterSqlite3.Database;
 let server: McpServer;
 let client: Client;
 
-async function bootServer(knowledge?: KnowledgeProviderRegistry): Promise<void> {
-  server = createMcpServer({ db, knowledge });
+async function bootServer(
+  knowledge?: KnowledgeProviderRegistry,
+  extra?: { spawner?: CursorAgentSpawner },
+): Promise<void> {
+  server = createMcpServer({ db, knowledge, spawner: extra?.spawner });
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test-client', version: '0.0.0' });
   await Promise.all([
     server.connect(serverTransport),
     client.connect(clientTransport),
   ]);
+}
+
+function makeFakeAgent(opts: { agentId?: string; send?: SDKAgent['send'] } = {}): SDKAgent {
+  const agentId = opts.agentId ?? 'agent_test';
+  return {
+    agentId,
+    model: { id: 'auto' },
+    send: opts.send ?? (async (): Promise<Run> => ({ id: 'run_test' } as unknown as Run)),
+    close: () => undefined,
+    reload: async () => undefined,
+    [Symbol.asyncDispose]: async () => undefined,
+    listArtifacts: async () => [],
+    downloadArtifact: async () => Buffer.from(''),
+  } as SDKAgent;
 }
 
 beforeEach(() => {
@@ -73,6 +92,92 @@ describe('MCP server — tool registration', () => {
     // Phase 7: summarizer (2)
     expect(names).toContain('list_campaigns');
     expect(names).toContain('summarize_campaign');
+    // Phase 26: spawner
+    expect(names).toContain('start_relay_chat_session');
+  });
+});
+
+describe('MCP server — start_relay_chat_session (Phase 26)', () => {
+  it('errors out actionably when no spawner is wired', async () => {
+    await bootServer();
+    const result = await client.callTool({
+      name: 'start_relay_chat_session',
+      arguments: { projectPath: '/proj' },
+    }) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]!.text;
+    expect(text).toMatch(/CURSOR_API_KEY|Cursor app/);
+  });
+
+  it('returns the agentId when a spawner is wired', async () => {
+    const seenOptions: Record<string, unknown>[] = [];
+    const spawner = new CursorAgentSpawner({
+      agentFactory: async (opts) => {
+        seenOptions.push(opts as Record<string, unknown>);
+        return makeFakeAgent({ agentId: 'agent_spawned_1' });
+      },
+    });
+    await bootServer(undefined, { spawner });
+
+    const result = await client.callTool({
+      name: 'start_relay_chat_session',
+      arguments: { projectPath: '/proj', name: 'dev-runner' },
+    }) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+    expect(result.isError).toBeFalsy();
+    const body = parseJsonContent(result) as { agentId: string; modelId: string; projectPath: string };
+    expect(body.agentId).toBe('agent_spawned_1');
+    expect(body.projectPath).toBe('/proj');
+    const opts = seenOptions[0] as { local?: { cwd?: string }; name?: string };
+    expect(opts.local?.cwd).toBe('/proj');
+    expect(opts.name).toBe('dev-runner');
+  });
+
+  it('passes prompt through to agent.send and surfaces the run id', async () => {
+    const sentMessages: string[] = [];
+    const spawner = new CursorAgentSpawner({
+      agentFactory: async () => makeFakeAgent({
+        send: async (msg) => {
+          sentMessages.push(typeof msg === 'string' ? msg : msg.text);
+          return { id: 'run_initial_99' } as unknown as Run;
+        },
+      }),
+    });
+    await bootServer(undefined, { spawner });
+
+    const result = await client.callTool({
+      name: 'start_relay_chat_session',
+      arguments: { projectPath: '/proj', prompt: 'kick off cycle 3' },
+    }) as { content: Array<{ type: string; text: string }> };
+    const body = parseJsonContent(result) as { initialRunId?: string };
+    expect(body.initialRunId).toBe('run_initial_99');
+    expect(sentMessages).toEqual(['kick off cycle 3']);
+  });
+
+  it('attack: surfaces the spawn error as an actionable tool error, not a crash', async () => {
+    const spawner = new CursorAgentSpawner({
+      agentFactory: async () => { throw new Error('cursor not signed in'); },
+    });
+    await bootServer(undefined, { spawner });
+
+    const result = await client.callTool({
+      name: 'start_relay_chat_session',
+      arguments: { projectPath: '/proj' },
+    }) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/cursor not signed in/);
+  });
+
+  it('attack: empty projectPath bubbles up as tool error', async () => {
+    const spawner = new CursorAgentSpawner({
+      agentFactory: async () => makeFakeAgent(),
+    });
+    await bootServer(undefined, { spawner });
+    const result = await client.callTool({
+      name: 'start_relay_chat_session',
+      arguments: { projectPath: '' },
+    }) as { content: Array<{ type: string; text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/projectPath/);
   });
 });
 

@@ -98,6 +98,12 @@ export interface HelmAppDeps {
    * skip this and add providers manually via `app.knowledge.register`.
    */
   config?: HelmConfig;
+  /**
+   * Override the on-disk config path. Default `~/.helm/config.json`. Tests
+   * point this at a tmpfile so PUT /api/config doesn't clobber the user's
+   * real config. Wires straight through to `saveHelmConfig({ path })`.
+   */
+  configPath?: string;
 }
 
 export interface HelmAppHandle {
@@ -128,10 +134,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     }),
   });
 
+  // Live config snapshot the renderer reads / writes via /api/config. Hoisted
+  // ahead of provider wiring (Phase 27 / D4) so reconfigureProviders can read
+  // it on every saveConfig.
+  let liveConfig = deps.config ?? HelmConfigSchema.parse({});
+
   // Knowledge — LocalRolesProvider + RequirementsArchiveProvider always on
   // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
-  // Additional providers come from `deps.config.knowledge.providers`
-  // (Phase 14 wires DepscopeProvider).
+  // Additional providers come from `liveConfig.knowledge.providers` and are
+  // re-registered whenever PUT /api/config rewrites them (D4).
   //
   // Phase 25: resolveRoleId reads host_sessions.role_id so a user-bound role
   // gets auto-injected at session_start. Without a binding the resolver
@@ -147,9 +158,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     },
   }));
   knowledge.register(new RequirementsArchiveProvider());
-  for (const provider of buildConfiguredProviders(deps, log)) {
-    knowledge.register(provider);
+
+  // Phase 27 (D4): re-registerable set of providers driven by liveConfig.
+  // Tracks the IDs we own so saveConfig can drop the old set before adding
+  // the new one — without touching the always-on providers above.
+  let configuredProviderIds = new Set<string>();
+  function reconfigureKnowledgeProviders(): void {
+    for (const id of configuredProviderIds) {
+      knowledge.unregister(id);
+    }
+    configuredProviderIds = new Set<string>();
+    for (const provider of buildConfiguredProviders(liveConfig, deps.loggers, log)) {
+      knowledge.register(provider);
+      configuredProviderIds.add(provider.id);
+    }
   }
+  reconfigureKnowledgeProviders();
 
   // Approval policy + registry. Registry restores any pending rows that survived
   // a previous restart so the user still sees the in-flight UI items.
@@ -299,13 +323,6 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   }
 
-  // Live config snapshot the renderer reads / writes via /api/config. Mutates
-  // in place when the renderer PUTs new settings so subsequent GETs reflect
-  // the saved state without a server restart. (Provider hot-reload — actually
-  // re-registering DepscopeProvider when mappings change — is a future
-  // refinement; for now Settings tells the user "restart to apply".)
-  let liveConfig = deps.config ?? HelmConfigSchema.parse({});
-
   // Workflow engine — `isDocFirstEnforced` reads liveConfig per call so a
   // PUT /api/config that toggles `docFirst.enforce` takes effect on the
   // next completeTask without a process restart. The engine is reused
@@ -343,7 +360,16 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {
-        liveConfig = saveHelmConfig(input);
+        const saveOpts = deps.configPath ? { path: deps.configPath } : {};
+        liveConfig = saveHelmConfig(input, saveOpts);
+        // Phase 27 (D4): provider hot-reload — drop the old configured
+        // providers and rebuild from liveConfig so a Settings save takes
+        // effect without a Helm restart. Always-on providers
+        // (LocalRolesProvider / RequirementsArchiveProvider) are untouched.
+        reconfigureKnowledgeProviders();
+        log.info('config_saved_providers_reloaded', {
+          data: { configuredIds: [...configuredProviderIds] },
+        });
         return liveConfig;
       },
       consumePendingBind: (code, hostSessionId) => {
@@ -477,13 +503,22 @@ async function runHostStopLongPoll(
 }
 
 /**
- * Materialize KnowledgeProviders declared in config.knowledge.providers.
+ * Materialize KnowledgeProviders declared in `config.knowledge.providers`.
  *
- * Validation errors per-provider don't crash the boot: log a warning and skip.
- * The local-roles provider is always registered separately by the caller.
+ * Pure function of the config snapshot — no `deps.config` reads — so the
+ * Phase 27 (D4) hot-reload path can pass a fresh `liveConfig` after a
+ * /api/config PUT and get the new provider set with no boot-vs-runtime drift.
+ *
+ * Validation errors per-provider don't crash: log a warning and skip the
+ * offender. Always-on providers (LocalRolesProvider / RequirementsArchive)
+ * are registered separately by the caller and unaffected.
  */
-function buildConfiguredProviders(deps: HelmAppDeps, log: Logger): KnowledgeProvider[] {
-  const decls = deps.config?.knowledge?.providers ?? [];
+function buildConfiguredProviders(
+  config: HelmConfig,
+  loggers: LoggerFactory,
+  log: Logger,
+): KnowledgeProvider[] {
+  const decls = config.knowledge?.providers ?? [];
   const providers: KnowledgeProvider[] = [];
 
   for (const decl of decls) {
@@ -502,7 +537,7 @@ function buildConfiguredProviders(deps: HelmAppDeps, log: Logger): KnowledgeProv
         mappings: parsed.data.mappings,
         cacheTtlMs: parsed.data.cacheTtlMs,
         requestTimeoutMs: parsed.data.requestTimeoutMs,
-        onWarning: (msg, ctx) => deps.loggers.module('knowledge.depscope').warn(msg, { data: ctx }),
+        onWarning: (msg, ctx) => loggers.module('knowledge.depscope').warn(msg, { data: ctx }),
       }));
       continue;
     }

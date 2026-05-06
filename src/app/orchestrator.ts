@@ -47,6 +47,8 @@ import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
 import { WorkflowEngine } from '../workflow/engine.js';
+import { tryCreateAnthropicLlmClient } from '../summarizer/anthropic-client.js';
+import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
@@ -302,6 +304,25 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     isDocFirstEnforced: () => liveConfig.docFirst.enforce,
   });
 
+  // Anthropic LLM client (B2). Resolves the API key from
+  // liveConfig.anthropic.apiKey first, then ANTHROPIC_API_KEY env. When
+  // neither is present the summarize endpoint surfaces 501; the user fixes
+  // it in Settings. The client is rebuilt inside summarizeFn so a Settings
+  // edit + Save propagates on the next call without restart.
+  function summarizeFn(): ((campaignId: string) => Promise<unknown>) | undefined {
+    return async (campaignId: string) => {
+      const llm = tryCreateAnthropicLlmClient({ apiKey: liveConfig.anthropic.apiKey });
+      if (!llm) {
+        throw new Error('Anthropic API key not configured');
+      }
+      return summarizeCampaign(deps.db, campaignId, {
+        llm,
+        model: liveConfig.anthropic.model,
+        maxTokens: liveConfig.anthropic.maxTokens,
+      });
+    };
+  }
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
@@ -317,6 +338,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         return created ? { id: created.id } : null;
       },
       workflowEngine,
+      // We always pass the factory; it throws 'API key not configured' when
+      // the key is absent, which the HTTP layer maps to 500. Tests bypass
+      // this by overriding deps.summarizeCampaign with a fake.
+      summarizeCampaign: summarizeFn(),
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );

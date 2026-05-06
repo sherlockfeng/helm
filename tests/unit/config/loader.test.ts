@@ -40,6 +40,27 @@ describe('HelmConfigSchema defaults', () => {
     expect(() => HelmConfigSchema.parse({ extra: 'nope' })).toThrow();
   });
 
+  it('B2: anthropic defaults', () => {
+    const c = HelmConfigSchema.parse({});
+    expect(c.anthropic.apiKey).toBeUndefined();
+    expect(c.anthropic.model).toBe('claude-sonnet-4-6');
+    expect(c.anthropic.maxTokens).toBe(2048);
+  });
+
+  it('B2: anthropic accepts overrides', () => {
+    const c = HelmConfigSchema.parse({
+      anthropic: { apiKey: 'sk-ant-x', model: 'claude-opus-4', maxTokens: 4096 },
+    });
+    expect(c.anthropic.apiKey).toBe('sk-ant-x');
+    expect(c.anthropic.model).toBe('claude-opus-4');
+    expect(c.anthropic.maxTokens).toBe(4096);
+  });
+
+  it('B2: attack — anthropic.maxTokens must be positive int', () => {
+    expect(() => HelmConfigSchema.parse({ anthropic: { maxTokens: 0 } })).toThrow();
+    expect(() => HelmConfigSchema.parse({ anthropic: { maxTokens: -100 } })).toThrow();
+  });
+
   it('attack: invalid port number rejected', () => {
     expect(() => HelmConfigSchema.parse({ server: { port: 99_999 } })).toThrow();
     expect(() => HelmConfigSchema.parse({ server: { port: -1 } })).toThrow();

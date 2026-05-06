@@ -56,12 +56,28 @@ const DocFirstConfigSchema = z.object({
   enforce: z.boolean().default(true),
 }).strict();
 
+/**
+ * Anthropic API key + model for `summarize_campaign` (B2). When apiKey is
+ * absent the orchestrator skips wiring the LLM client; the summarize HTTP
+ * endpoint returns 501 and the UI hints at Settings.
+ *
+ * apiKey resolution at the orchestrator layer falls back to the
+ * ANTHROPIC_API_KEY env var, so dev shells / CI don't need this in
+ * config.json.
+ */
+const AnthropicConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  model: z.string().default('claude-sonnet-4-6'),
+  maxTokens: z.number().int().positive().default(2048),
+}).strict();
+
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   approval: ApprovalConfigSchema.default({}),
   lark: LarkConfigSchema.default({}),
   knowledge: KnowledgeConfigSchema.default({}),
   docFirst: DocFirstConfigSchema.default({}),
+  anthropic: AnthropicConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

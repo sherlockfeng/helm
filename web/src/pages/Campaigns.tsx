@@ -1,18 +1,20 @@
 /**
  * Campaigns — long-running product/engineering efforts and their cycles.
  *
- * v1: list view + selected-campaign cycles. Detail panes (per-cycle tasks,
- * doc-first audit log, screenshots) land in Phase 12.
+ * B2: each card now has a "Summarize" button that calls Anthropic via
+ * POST /api/campaigns/:id/summarize. When the API key isn't set the
+ * endpoint returns 501 and we link the user to Settings → Anthropic.
  */
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { helmApi } from '../api/client.js';
+import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import type { Campaign, CampaignSummary } from '../api/types.js';
 
 export function CampaignsPage() {
-  const { data, loading, error } = useApi(() => helmApi.campaigns());
+  const { data, loading, error, reload } = useApi(() => helmApi.campaigns());
   const [selected, setSelected] = useState<string | null>(null);
 
   return (
@@ -31,22 +33,50 @@ export function CampaignsPage() {
       )}
 
       {data && data.campaigns.map((c) => (
-        <article key={c.id} className="helm-card">
-          <div className="row">
-            <div style={{ flex: 1 }}>
-              <div className="label">{c.status}</div>
-              <div style={{ fontWeight: 600, fontSize: 15 }}>{c.title}</div>
-              {c.brief && <div className="muted" style={{ marginTop: 4 }}>{c.brief}</div>}
-              <div className="label" style={{ marginTop: 8 }}>{c.projectPath}</div>
-            </div>
-            <button onClick={() => setSelected(selected === c.id ? null : c.id)}>
-              {selected === c.id ? 'Hide cycles' : 'Show cycles'}
-            </button>
-          </div>
-          {selected === c.id && <CampaignCycles campaignId={c.id} />}
-        </article>
+        <CampaignCard
+          key={c.id}
+          campaign={c}
+          expanded={selected === c.id}
+          onToggle={() => setSelected(selected === c.id ? null : c.id)}
+          onUpdated={() => reload()}
+        />
       ))}
     </>
+  );
+}
+
+function CampaignCard({
+  campaign,
+  expanded,
+  onToggle,
+  onUpdated,
+}: {
+  campaign: Campaign;
+  expanded: boolean;
+  onToggle: () => void;
+  onUpdated: () => void;
+}) {
+  return (
+    <article className="helm-card">
+      <div className="row">
+        <div style={{ flex: 1 }}>
+          <div className="label">{campaign.status}</div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{campaign.title}</div>
+          {campaign.brief && (
+            <div className="muted" style={{ marginTop: 4 }}>{campaign.brief}</div>
+          )}
+          <div className="label" style={{ marginTop: 8 }}>{campaign.projectPath}</div>
+        </div>
+        <button onClick={onToggle}>{expanded ? 'Hide details' : 'Show details'}</button>
+      </div>
+
+      {expanded && (
+        <>
+          <CampaignCycles campaignId={campaign.id} />
+          <CampaignSummarySection campaign={campaign} onUpdated={onUpdated} />
+        </>
+      )}
+    </article>
   );
 }
 
@@ -81,6 +111,90 @@ function CampaignCycles({ campaignId }: { campaignId: string }) {
           </span>
         </Link>
       ))}
+    </div>
+  );
+}
+
+function CampaignSummarySection({
+  campaign,
+  onUpdated,
+}: {
+  campaign: Campaign;
+  onUpdated: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [needsKey, setNeedsKey] = useState(false);
+  const [summary, setSummary] = useState<CampaignSummary | null>(() => {
+    try {
+      return campaign.summary ? JSON.parse(campaign.summary) as CampaignSummary : null;
+    } catch { return null; }
+  });
+
+  async function summarize(): Promise<void> {
+    setSubmitting(true);
+    setError(null);
+    setNeedsKey(false);
+    try {
+      const r = await helmApi.summarizeCampaign(campaign.id);
+      setSummary(r.summary);
+      onUpdated();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 501) {
+        setNeedsKey(true);
+      } else {
+        const msg = err instanceof ApiError ? err.message : (err as Error).message;
+        setError(msg);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
+        <span className="label">Summary</span>
+        <button
+          className={summary ? undefined : 'primary'}
+          disabled={submitting}
+          aria-busy={submitting}
+          onClick={() => { void summarize(); }}
+        >
+          {submitting
+            ? 'Summarizing…'
+            : summary ? 'Regenerate summary' : 'Summarize via Anthropic'}
+        </button>
+      </div>
+
+      {needsKey && (
+        <p className="muted" style={{ marginTop: 10, color: 'var(--warn)' }}>
+          Anthropic API key not configured.{' '}
+          <Link to="/settings">Set it in Settings →</Link>
+        </p>
+      )}
+      {error && (
+        <p className="muted" style={{ marginTop: 10, color: 'var(--danger)' }}>{error}</p>
+      )}
+
+      {summary && !needsKey && !error && (
+        <div style={{ marginTop: 10 }}>
+          <div className="label">Why</div>
+          <p className="muted" style={{ marginTop: 4, marginBottom: 12 }}>{summary.why}</p>
+
+          <div className="label">Key decisions</div>
+          {summary.keyDecisions.length === 0 ? (
+            <p className="muted" style={{ marginTop: 4 }}>(none recorded)</p>
+          ) : (
+            <ul style={{ margin: '6px 0 14px', paddingLeft: 20 }}>
+              {summary.keyDecisions.map((d, i) => <li key={i}>{d}</li>)}
+            </ul>
+          )}
+
+          <div className="label">Overall path</div>
+          <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>{summary.overallPath}</p>
+        </div>
+      )}
     </div>
   );
 }

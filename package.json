@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Cursor chat steward — local watcher, remote bridge, agent orchestrator",
+  "author": "sherlockfeng",
+  "license": "MIT",
   "type": "module",
+  "main": "dist/electron/main.js",
   "bin": {
     "helm": "./bin/helm.mjs",
     "helm-hook": "./bin/helm-hook.mjs"
@@ -19,6 +22,7 @@
     "build:web": "pnpm --filter helm-web build",
     "build": "pnpm build:backend && pnpm build:web",
     "package": "pnpm build && electron-builder",
+    "package:mac": "pnpm build && electron-builder --mac",
     "package:dir": "pnpm build && electron-builder --dir",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,31 +1,42 @@
-/* Helm renderer — minimal Mac-feel scaffold styles.
-   Polish pass goes through the design subagent (per AGENTS.md §3). */
+/* Helm renderer styles — Mac-feel desktop app.
+   Tokens: --bg / --bg-elev / --bg-sidebar surfaces, --text / --text-secondary
+   foregrounds, --accent / --danger / --warn / --success semantic.
+   See docs/design/2026-05-06-polish-pass.md + 2026-05-06-a11y-audit.md. */
 
 :root {
   --bg: #f5f5f7;
   --bg-elev: #ffffff;
   --bg-sidebar: #f0f0f3;
+  --bg-input: #ffffff;
+  --bg-pre: #fafafc;
   --border: #d2d2d7;
+  --border-strong: #b0b0b8;
   --text: #1d1d1f;
   --text-secondary: #6e6e73;
   --accent: #007aff;
   --accent-hover: #0066d6;
+  --accent-pressed: #0058b8;
   --danger: #ff3b30;
   --warn: #ff9500;
   --success: #34c759;
   --hover: #e5e5ea;
   --selected: #d8e4ff;
+  --selected-text: #003d99;
+  --focus-ring: rgba(0, 122, 255, 0.4);
 
   --radius-sm: 6px;
   --radius-md: 10px;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.04);
 
   --font-system:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
     Helvetica, Arial, sans-serif;
   --font-mono:
     'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  --container-max: 720px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -33,12 +44,20 @@
     --bg: #1c1c1e;
     --bg-elev: #2c2c2e;
     --bg-sidebar: #141416;
+    --bg-input: #1c1c1e;
+    --bg-pre: rgba(0, 0, 0, 0.30);
     --border: #3a3a3c;
+    --border-strong: #545458;
     --text: #f5f5f7;
-    --text-secondary: #8e8e93;
-    --hover: #2c2c2e;
-    --selected: #0a4cb1;
+    /* a11y A1: bumped from #8e8e93 (4.0:1) to #a1a1a6 (4.8:1) on --bg-elev */
+    --text-secondary: #a1a1a6;
+    --hover: rgba(255, 255, 255, 0.06);
+    /* P0-3: subtle surface elevation rather than saturated blue */
+    --selected: rgba(255, 255, 255, 0.08);
+    --selected-text: #f5f5f7;
+    --focus-ring: rgba(10, 132, 255, 0.5);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
   }
 }
 
@@ -56,6 +75,58 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Focus ring — a11y A4 / P0-1 ─────────────────────────────────────── */
+:focus { outline: none; }
+:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* Buttons get the ring a hair tighter so it follows the radius */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.helm-nav a:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── Form controls — P0-2 ────────────────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+select {
+  /* SF Pro caret — encoded inline so we stay dep-free */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%236e6e73' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+input:hover,
+select:hover,
+textarea:hover { border-color: var(--border-strong); }
+input:disabled,
+select:disabled,
+textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+input::placeholder { color: var(--text-secondary); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
 button {
   font-family: inherit;
   font-size: inherit;
@@ -65,25 +136,45 @@ button {
   border-radius: var(--radius-sm);
   padding: 6px 12px;
   cursor: pointer;
-  transition: background 80ms ease, border-color 80ms ease;
+  transition: background 80ms ease, border-color 80ms ease, transform 80ms ease;
+  font-weight: 500;
 }
-
 button:hover { background: var(--hover); }
+button:active { transform: translateY(0.5px); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:active { background: var(--accent-pressed); border-color: var(--accent-pressed); }
 
 button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
 button.danger:hover { filter: brightness(0.93); }
+
+/* P0-4: ghost — secondary "+ Add" affordance, transparent until hover */
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding: 4px 8px;
+}
+button.ghost:hover { background: var(--hover); border-color: transparent; }
+
+/* P0-5: outline-danger — red text + border, no fill. For inline destructive
+   actions in dense lists; the .danger filled style stays for top-level
+   destructive buttons (Approval Deny is filled deliberately). */
+button.danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+button.danger-outline:hover { background: rgba(255, 59, 48, 0.08); }
 
 code, pre {
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-/* App shell */
-
+/* ── App shell ───────────────────────────────────────────────────────── */
 .helm-app {
   display: grid;
   grid-template-columns: 220px 1fr;
@@ -93,7 +184,8 @@ code, pre {
 .helm-sidebar {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
-  padding: 14px 8px;
+  /* P2-1: traffic-light reservation */
+  padding: 30px 8px 0 8px;
   display: flex;
   flex-direction: column;
   -webkit-app-region: drag;
@@ -102,7 +194,7 @@ code, pre {
 .helm-sidebar h1 {
   font-size: 14px;
   font-weight: 600;
-  margin: 4px 0 18px 12px;
+  margin: 0 0 14px 12px;
   letter-spacing: -0.01em;
 }
 
@@ -125,7 +217,12 @@ code, pre {
 }
 
 .helm-nav a:hover { background: var(--hover); color: var(--text); }
-.helm-nav a.active { background: var(--selected); color: var(--text); }
+/* P0-3: active uses subtle elevation + bold weight in dark; saturated fill stays in light */
+.helm-nav a.active {
+  background: var(--selected);
+  color: var(--selected-text);
+  font-weight: 600;
+}
 
 .helm-nav .badge {
   margin-left: auto;
@@ -135,6 +232,16 @@ code, pre {
   font-size: 11px;
   padding: 1px 6px;
   font-weight: 600;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* P1-4: sidebar footer — visible separation + pulsing dot when broken */
+.helm-sidebar-footer {
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  -webkit-app-region: no-drag;
 }
 
 .helm-main {
@@ -142,25 +249,35 @@ code, pre {
   padding: 28px 32px;
 }
 
-.helm-main h2 {
+.helm-main > * { max-width: var(--container-max); }
+.helm-main > h2 {
   margin: 0 0 4px;
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-.helm-main p.muted, .muted {
+.helm-main h3 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--text-secondary);
-  margin: 0 0 22px;
+  margin: 28px 0 10px;
 }
 
-/* Card list */
+/* P2-6: increase breathing room between description and content */
+.helm-main p.muted, .muted {
+  color: var(--text-secondary);
+  margin: 0 0 24px;
+}
 
+/* ── Card ────────────────────────────────────────────────────────────── */
 .helm-card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
   padding: 16px;
   margin-bottom: 12px;
 }
@@ -178,10 +295,12 @@ code, pre {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 2px;
+  font-weight: 500;
 }
 
+/* P0-6: stronger contrast in dark via --bg-pre token */
 .helm-card pre {
-  background: var(--bg);
+  background: var(--bg-pre);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
@@ -198,6 +317,7 @@ code, pre {
   margin-top: 14px;
 }
 
+/* ── Status pill ─────────────────────────────────────────────────────── */
 .helm-status {
   display: inline-flex;
   align-items: center;
@@ -206,18 +326,118 @@ code, pre {
   color: var(--text-secondary);
 }
 
+/* P2-3 / a11y A3: soft halo restores boundary contrast against card bg */
 .helm-status .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--text-secondary);
+  box-shadow: 0 0 0 2px rgba(110, 110, 115, 0.18);
 }
-.helm-status.ok .dot { background: var(--success); }
-.helm-status.warn .dot { background: var(--warn); }
-.helm-status.err .dot { background: var(--danger); }
+.helm-status.ok .dot { background: var(--success); box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.22); }
+.helm-status.warn .dot { background: var(--warn); box-shadow: 0 0 0 2px rgba(255, 149, 0, 0.22); }
+.helm-status.err .dot { background: var(--danger); box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.22); }
 
+/* P1-4: pulse when backend offline — but only when motion is allowed (a11y A9) */
+@media (prefers-reduced-motion: no-preference) {
+  .helm-sidebar-footer .helm-status.err .dot {
+    animation: helm-pulse 1.6s ease-in-out infinite;
+  }
+}
+@keyframes helm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Empty state — P1-2 ──────────────────────────────────────────────── */
 .helm-empty {
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
-  padding: 32px;
+  padding: 28px 24px;
   text-align: center;
   color: var(--text-secondary);
+}
+.helm-empty strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.helm-empty .helm-empty-hint {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* ── Page header pattern — P1-1 ──────────────────────────────────────── */
+.helm-breadcrumb {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.helm-breadcrumb a { color: var(--text-secondary); text-decoration: none; }
+.helm-breadcrumb a:hover { text-decoration: underline; }
+
+.helm-page-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 24px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ── Audit log grid — P1-5 ───────────────────────────────────────────── */
+.helm-audit-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 110px;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+.helm-audit-row:first-child { border-top: 0; }
+.helm-audit-row code { font-size: 12px; }
+
+/* ── Form rows in Settings ───────────────────────────────────────────── */
+.helm-form-row {
+  display: block;
+  margin-top: 12px;
+}
+.helm-form-row > .muted {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.helm-form-row input[type="text"],
+.helm-form-row input[type="number"],
+.helm-form-row input[type="password"],
+.helm-form-row select {
+  width: 100%;
+}
+
+/* Inline mapping row */
+.helm-mapping-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+.helm-mapping-row > input { flex: 1; }
+
+/* ── Banner (Settings save success / error) ──────────────────────────── */
+.helm-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+.helm-banner.ok    { background: rgba(52, 199, 89, 0.10);  color: var(--text); border: 1px solid rgba(52, 199, 89, 0.35); }
+.helm-banner.err   { background: rgba(255, 59, 48, 0.10);  color: var(--text); border: 1px solid rgba(255, 59, 48, 0.35); }
+
+/* ── Inline copy button ──────────────────────────────────────────────── */
+.helm-copy-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }

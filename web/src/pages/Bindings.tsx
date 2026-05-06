@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
+import { EmptyState } from '../components/EmptyState.js';
 import type { ChannelBinding, PendingBind } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -23,6 +24,10 @@ function timeUntil(iso: string): string {
   if (min < 60) return `${min}m`;
   const hr = Math.floor(min / 60);
   return `${hr}h ${min % 60}m`;
+}
+
+function shortId(id: string, len = 12): string {
+  return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
 function PendingRow({
@@ -83,7 +88,8 @@ function PendingRow({
             <select
               value={hostSessionId}
               onChange={(e) => setHostSessionId(e.target.value)}
-              style={{ flex: 1, padding: '4px 6px' }}
+              aria-label="Cursor chat to bind to"
+              style={{ flex: 1 }}
             >
               {chats.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -94,6 +100,7 @@ function PendingRow({
             <button
               className="primary"
               disabled={submitting}
+              aria-busy={submitting}
               onClick={() => { void bind(); }}
             >
               {submitting ? 'Binding…' : 'Bind'}
@@ -129,14 +136,23 @@ function ActiveRow({ binding, onUnbind }: { binding: ChannelBinding; onUnbind: (
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">{binding.channel}</div>
-          <div style={{ fontSize: 14 }}>session <code>{binding.hostSessionId}</code></div>
+          <div style={{ fontSize: 14 }}>
+            session{' '}
+            <code title={binding.hostSessionId}>{shortId(binding.hostSessionId)}</code>
+          </div>
           {(binding.externalChat || binding.externalThread) && (
             <div className="label" style={{ marginTop: 6 }}>
               {binding.externalChat ?? '?'}{binding.externalThread ? ` / ${binding.externalThread}` : ''}
             </div>
           )}
         </div>
-        <button className="danger" disabled={submitting} onClick={() => { void unbind(); }}>
+        <button
+          className="danger-outline"
+          disabled={submitting}
+          aria-busy={submitting}
+          aria-label={`Unbind ${binding.channel} binding ${binding.id}`}
+          onClick={() => { void unbind(); }}
+        >
           {submitting ? 'Unbinding…' : 'Unbind'}
         </button>
       </div>
@@ -163,11 +179,14 @@ export function BindingsPage() {
         to generate a code, then pick the chat to mirror here.
       </p>
 
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginTop: 24 }}>Pending</h3>
+      <h3>Pending</h3>
       {pendingQuery.loading && <p className="muted">Loading…</p>}
       {pendingQuery.error && <p className="muted" style={{ color: 'var(--danger)' }}>{pendingQuery.error.message}</p>}
       {pendingQuery.data && pendingQuery.data.pending.length === 0 && (
-        <div className="helm-empty">No pending bind codes.</div>
+        <EmptyState
+          title="No pending bind codes."
+          hint={<>Send <code>@bot bind chat</code> in a Lark thread to generate one.</>}
+        />
       )}
       {pendingQuery.data?.pending.map((p) => (
         <PendingRow
@@ -181,11 +200,14 @@ export function BindingsPage() {
         />
       ))}
 
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginTop: 24 }}>Active</h3>
+      <h3>Active</h3>
       {bindingsQuery.loading && <p className="muted">Loading…</p>}
       {bindingsQuery.error && <p className="muted" style={{ color: 'var(--danger)' }}>{bindingsQuery.error.message}</p>}
       {bindingsQuery.data && bindingsQuery.data.bindings.length === 0 && (
-        <div className="helm-empty">No active bindings.</div>
+        <EmptyState
+          title="No active bindings."
+          hint="Once you bind a Cursor chat to a remote thread, it'll appear here."
+        />
       )}
       {bindingsQuery.data?.bindings.map((b) => (
         <ActiveRow

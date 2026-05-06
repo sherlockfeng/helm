@@ -50,7 +50,7 @@ export function Layout() {
     <div className="helm-app">
       <aside className="helm-sidebar">
         <h1>Helm</h1>
-        <nav className="helm-nav">
+        <nav className="helm-nav" aria-label="Main">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
@@ -59,13 +59,20 @@ export function Layout() {
             >
               <span>{item.label}</span>
               {item.to === '/approvals' && pendingCount > 0 && (
-                <span className="badge">{pendingCount}</span>
+                <span
+                  className="badge"
+                  aria-label={`${pendingCount} pending`}
+                >{pendingCount}</span>
               )}
             </NavLink>
           ))}
         </nav>
-        <div style={{ marginTop: 'auto', padding: '8px 12px' }}>
-          <span className={`helm-status ${healthy ? 'ok' : 'err'}`}>
+        <div className="helm-sidebar-footer">
+          <span
+            className={`helm-status ${healthy ? 'ok' : 'err'}`}
+            role="status"
+            aria-live="polite"
+          >
             <span className="dot" />
             {healthy ? 'Connected' : 'Backend offline'}
           </span>

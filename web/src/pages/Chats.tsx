@@ -8,6 +8,7 @@
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
+import { EmptyState } from '../components/EmptyState.js';
 
 function formatRelative(iso: string): string {
   const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -17,6 +18,10 @@ function formatRelative(iso: string): string {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   return `${Math.floor(hr / 24)}d ago`;
+}
+
+function shortId(id: string, len = 12): string {
+  return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
 export function ChatsPage() {
@@ -32,7 +37,10 @@ export function ChatsPage() {
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
 
       {data && data.chats.length === 0 && (
-        <div className="helm-empty">No active Cursor chats. Start one and Helm will pick it up automatically.</div>
+        <EmptyState
+          title="No active Cursor chats."
+          hint="Start one and Helm will pick it up automatically."
+        />
       )}
 
       {data && data.chats.map((chat) => (
@@ -41,7 +49,9 @@ export function ChatsPage() {
             <div>
               <div className="label">{chat.host}</div>
               <div style={{ fontWeight: 600, fontSize: 14 }}>{chat.cwd ?? '(unknown cwd)'}</div>
-              <div className="label" style={{ marginTop: 6 }}>session {chat.id}</div>
+              <div className="label" style={{ marginTop: 6 }}>
+                session <code title={chat.id}>{shortId(chat.id)}</code>
+              </div>
             </div>
             <span className="helm-status ok">
               <span className="dot" />

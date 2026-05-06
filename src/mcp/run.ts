@@ -14,6 +14,7 @@ import { HelmDB } from '../storage/database.js';
 import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
+import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { startMcpServer } from './server.js';
 import { makePseudoEmbedFn } from './embed.js';
 import { loadHelmConfig } from '../config/loader.js';
@@ -27,6 +28,7 @@ export async function main(): Promise<void> {
     db: db.sqlite,
     embedFn: makePseudoEmbedFn(),
   }));
+  knowledge.register(new RequirementsArchiveProvider());
 
   const { config } = loadHelmConfig();
   for (const decl of config.knowledge.providers) {

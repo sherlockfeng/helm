@@ -1436,6 +1436,7 @@ A1 + A2 落地于 #17（Phase 16）；A3 + A4 计划落地于 Phase 17；A5 + A6
 | **B2** | Summarize Campaign 按钮（需要 Anthropic SDK 真接到 `summarizeCampaign`；当前 LLM 客户端是 deps 接口） |
 | **B3** | Roles 页面（`list_roles` / `train_role`）+ Requirements 页面（`capture_requirement` / `recall_requirement`） |
 | **B4** | Doc-first 强制配置开关 — §12.3 说"可由 config 关闭"，加 `config.docFirst.enforce` 字段 + Settings 切换 |
+| **B5** | RequirementsArchiveProvider — 新 KnowledgeProvider 读 `<repo>/requirements/*.md`（人或 Cursor agent 写入的需求归档），`canHandle` walk-up 自动定位到目录，`getSessionContext` 注入最近 N 篇标题+1 行摘要的索引，`search` 用 token-overlap（title 3x / heading 2x / body 1x）返回 top-K 片段。**写入端**由 Cursor user-rule（[`~/.cursor/user-rules/archive-requirement.md`](~/.cursor/user-rules/archive-requirement.md)）单独负责，Helm 只做读侧 — 闭环让 agent 在新 chat 里能复用过去决策 |
 
 ### 25.3 C：质量与可信度
 
@@ -1458,10 +1459,11 @@ A1 + A2 落地于 #17（Phase 16）；A3 + A4 计划落地于 Phase 17；A5 + A6
 ### 25.5 推荐节奏
 
 1. **Phase 16**：A1 + A2（Settings + Bind UI）✅ #17
-2. **Phase 17**：A3 + A4（tray + notification）— Mac 一等公民
-3. **Phase 18**：A5 + A6（DMG + helm doctor）— 能交付安装包
-4. **Phase 19**：C1（设计 subagent 一次过）
-5. 之后按用户优先级挑 B / C / D
+2. **Phase 17**：A3 + A4（tray + notification）✅ #18
+3. **Phase 18**：B5（RequirementsArchiveProvider 读侧）— 闭环 archive → 新 session 注入
+4. **Phase 19**：A5 + A6（DMG + helm doctor）— 能交付安装包
+5. **Phase 20**：C1（设计 subagent 一次过）
+6. 之后按用户优先级挑剩余 B / C / D
 
 D2 / D4 标注为可选 — 不阻塞 MVP-3 落地。
 

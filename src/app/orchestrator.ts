@@ -40,6 +40,7 @@ import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
+import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
 import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
@@ -122,13 +123,16 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     }),
   });
 
-  // Knowledge — LocalRolesProvider always on; additional providers come from
-  // `deps.config.knowledge.providers` (Phase 14 wires DepscopeProvider).
+  // Knowledge — LocalRolesProvider + RequirementsArchiveProvider always on
+  // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
+  // Additional providers come from `deps.config.knowledge.providers`
+  // (Phase 14 wires DepscopeProvider).
   const knowledge = new KnowledgeProviderRegistry();
   knowledge.register(new LocalRolesProvider({
     db: deps.db,
     embedFn: makePseudoEmbedFn(),
   }));
+  knowledge.register(new RequirementsArchiveProvider());
   for (const provider of buildConfiguredProviders(deps, log)) {
     knowledge.register(provider);
   }

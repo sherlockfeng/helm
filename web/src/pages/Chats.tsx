@@ -1,11 +1,13 @@
 /**
  * Active Chats — every host_session that's still open.
  *
- * v1: read-only list. Phase 12+ adds the chat detail panel where the user
- * can pick a role, inject a requirement, or bind to a Lark thread.
+ * Phase 25: each chat row has a role picker. Selecting a role binds the chat
+ * to that role; the next session_start hook auto-injects the role's system
+ * prompt + chunks via LocalRolesProvider.
  */
 
-import { helmApi } from '../api/client.js';
+import { useState } from 'react';
+import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
@@ -26,12 +28,35 @@ function shortId(id: string, len = 12): string {
 
 export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
+  const { data: rolesData } = useApi(() => helmApi.roles());
   useEventStream(() => reload(), { types: ['session.started', 'session.closed'] });
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+
+  async function changeRole(hostSessionId: string, roleId: string | null): Promise<void> {
+    setSavingId(hostSessionId);
+    setRowError(null);
+    try {
+      await helmApi.setChatRole(hostSessionId, roleId);
+      reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setRowError({ id: hostSessionId, message: msg });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  const roles = rolesData?.roles ?? [];
 
   return (
     <>
       <h2>Active Chats</h2>
-      <p className="muted">Cursor sessions Helm is currently observing.</p>
+      <p className="muted">
+        Cursor sessions Helm is currently observing. Bind a role to a chat and
+        Helm injects that role's system prompt + knowledge on the next
+        session_start.
+      </p>
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
@@ -58,6 +83,33 @@ export function ChatsPage() {
               last seen {formatRelative(chat.lastSeenAt)}
             </span>
           </div>
+
+          <div className="helm-form-row" style={{ marginTop: 12 }}>
+            <div className="muted">Role</div>
+            <select
+              aria-label={`Role for chat ${chat.id}`}
+              value={chat.roleId ?? ''}
+              disabled={savingId === chat.id || roles.length === 0}
+              onChange={(e) => {
+                const next = e.target.value || null;
+                void changeRole(chat.id, next);
+              }}
+              style={{ minWidth: 220 }}
+            >
+              <option value="">(none — no auto-inject)</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}{r.isBuiltin ? ' (built-in)' : ''}
+                </option>
+              ))}
+            </select>
+            {savingId === chat.id && <span className="muted" style={{ fontSize: 11 }}>saving…</span>}
+          </div>
+          {rowError && rowError.id === chat.id && (
+            <p className="muted" style={{ color: 'var(--danger)', fontSize: 12, marginTop: 6 }}>
+              {rowError.message}
+            </p>
+          )}
         </article>
       ))}
     </>

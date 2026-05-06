@@ -132,10 +132,19 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
   // Additional providers come from `deps.config.knowledge.providers`
   // (Phase 14 wires DepscopeProvider).
+  //
+  // Phase 25: resolveRoleId reads host_sessions.role_id so a user-bound role
+  // gets auto-injected at session_start. Without a binding the resolver
+  // returns undefined and getSessionContext is a no-op (no surprise prompt
+  // for unbound chats).
   const knowledge = new KnowledgeProviderRegistry();
   knowledge.register(new LocalRolesProvider({
     db: deps.db,
     embedFn: makePseudoEmbedFn(),
+    resolveRoleId: (ctx) => {
+      if (!ctx.hostSessionId) return undefined;
+      return getHostSession(deps.db, ctx.hostSessionId)?.roleId;
+    },
   }));
   knowledge.register(new RequirementsArchiveProvider());
   for (const provider of buildConfiguredProviders(deps, log)) {

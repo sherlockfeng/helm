@@ -1,7 +1,8 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
-import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { getHostSession, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { upsertRole } from '../../../src/storage/repos/roles.js';
 import { ApprovalRegistry } from '../../../src/approval/registry.js';
 import { WorkflowEngine } from '../../../src/workflow/engine.js';
 import { createHttpApi, type HttpApiHandle } from '../../../src/api/server.js';
@@ -62,6 +63,87 @@ describe('GET /api/active-chats', () => {
     const r = await fetchJson('/api/active-chats');
     const ids = ((r.body as { chats: Array<{ id: string }> }).chats).map((c) => c.id);
     expect(ids).toEqual(['a']);
+  });
+});
+
+describe('PUT /api/active-chats/:id/role (Phase 25)', () => {
+  function seedChat(id = 'sess-1'): void {
+    const now = new Date().toISOString();
+    upsertHostSession(db, { id, host: 'cursor', cwd: '/p', status: 'active', firstSeenAt: now, lastSeenAt: now });
+  }
+  function seedRole(id = 'role-pm'): void {
+    upsertRole(db, {
+      id, name: 'PM', systemPrompt: 'sp',
+      isBuiltin: true, createdAt: new Date().toISOString(),
+    });
+  }
+
+  it('binds a chat to a role and returns the refreshed chat', async () => {
+    seedChat();
+    seedRole();
+    const r = await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: 'role-pm' }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { chat: { roleId?: string } }).chat.roleId).toBe('role-pm');
+    expect(getHostSession(db, 'sess-1')?.roleId).toBe('role-pm');
+  });
+
+  it('null roleId unbinds', async () => {
+    seedChat();
+    seedRole();
+    // bind first
+    await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: 'role-pm' }),
+    });
+    // then unbind
+    const r = await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: null }),
+    });
+    expect(r.status).toBe(200);
+    expect(getHostSession(db, 'sess-1')?.roleId).toBeUndefined();
+  });
+
+  it('returns 404 when host session is unknown', async () => {
+    const r = await fetchJson('/api/active-chats/ghost/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: null }),
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it('returns 404 when the role does not exist', async () => {
+    seedChat();
+    const r = await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: 'ghost-role' }),
+    });
+    expect(r.status).toBe(404);
+  });
+
+  it('rejects bad body shape with 400', async () => {
+    seedChat();
+    const bad = await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: 'not json',
+    });
+    expect(bad.status).toBe(400);
+
+    const wrongType = await fetchJson('/api/active-chats/sess-1/role', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roleId: 123 }),
+    });
+    expect(wrongType.status).toBe(400);
+  });
+
+  it('attack: GET on the role endpoint returns 405', async () => {
+    seedChat();
+    const r = await fetchJson('/api/active-chats/sess-1/role');
+    expect(r.status).toBe(405);
   });
 });
 

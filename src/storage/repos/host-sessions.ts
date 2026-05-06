@@ -9,6 +9,7 @@ function rowToHostSession(row: Record<string, unknown>): HostSession {
     composerMode: row['composer_mode'] != null ? String(row['composer_mode']) : undefined,
     campaignId: row['campaign_id'] != null ? String(row['campaign_id']) : undefined,
     cycleId: row['cycle_id'] != null ? String(row['cycle_id']) : undefined,
+    roleId: row['role_id'] != null ? String(row['role_id']) : undefined,
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
@@ -16,9 +17,12 @@ function rowToHostSession(row: Record<string, unknown>): HostSession {
 }
 
 export function upsertHostSession(db: Database.Database, s: HostSession): void {
+  // role_id is intentionally omitted from the ON CONFLICT update list — Phase
+  // 25's chat→role binding must survive the next session_start hook bumping
+  // last_seen_at. Use setHostSessionRole / updateHostSession to change it.
   db.prepare(`
-    INSERT INTO host_sessions (id, host, cwd, composer_mode, campaign_id, cycle_id, status, first_seen_at, last_seen_at)
-    VALUES (@id, @host, @cwd, @composer_mode, @campaign_id, @cycle_id, @status, @first_seen_at, @last_seen_at)
+    INSERT INTO host_sessions (id, host, cwd, composer_mode, campaign_id, cycle_id, role_id, status, first_seen_at, last_seen_at)
+    VALUES (@id, @host, @cwd, @composer_mode, @campaign_id, @cycle_id, @role_id, @status, @first_seen_at, @last_seen_at)
     ON CONFLICT(id) DO UPDATE SET
       cwd           = excluded.cwd,
       composer_mode = excluded.composer_mode,
@@ -28,7 +32,9 @@ export function upsertHostSession(db: Database.Database, s: HostSession): void {
       last_seen_at  = excluded.last_seen_at
   `).run({
     id: s.id, host: s.host, cwd: s.cwd ?? null, composer_mode: s.composerMode ?? null,
-    campaign_id: s.campaignId ?? null, cycle_id: s.cycleId ?? null, status: s.status,
+    campaign_id: s.campaignId ?? null, cycle_id: s.cycleId ?? null,
+    role_id: s.roleId ?? null,
+    status: s.status,
     first_seen_at: s.firstSeenAt, last_seen_at: s.lastSeenAt,
   });
 }
@@ -45,15 +51,29 @@ export function listActiveSessions(db: Database.Database): HostSession[] {
 export function updateHostSession(
   db: Database.Database,
   id: string,
-  patch: Partial<Pick<HostSession, 'status' | 'campaignId' | 'cycleId' | 'lastSeenAt'>>,
+  patch: Partial<Pick<HostSession, 'status' | 'campaignId' | 'cycleId' | 'roleId' | 'lastSeenAt'>>,
 ): void {
   const sets: string[] = [];
   const params: unknown[] = [];
   if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
   if (patch.campaignId !== undefined) { sets.push('campaign_id = ?'); params.push(patch.campaignId); }
   if (patch.cycleId !== undefined) { sets.push('cycle_id = ?'); params.push(patch.cycleId); }
+  if (patch.roleId !== undefined) { sets.push('role_id = ?'); params.push(patch.roleId ?? null); }
   if (patch.lastSeenAt !== undefined) { sets.push('last_seen_at = ?'); params.push(patch.lastSeenAt); }
   if (sets.length === 0) return;
   params.push(id);
   db.prepare(`UPDATE host_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+}
+
+/**
+ * Phase 25: bind a chat session to a role (or pass null to unbind). The
+ * LocalRolesProvider's resolveRoleId callback reads this column at
+ * sessionStart to decide whose system prompt + chunks get auto-injected.
+ */
+export function setHostSessionRole(
+  db: Database.Database,
+  id: string,
+  roleId: string | null,
+): void {
+  db.prepare(`UPDATE host_sessions SET role_id = ? WHERE id = ?`).run(roleId, id);
 }

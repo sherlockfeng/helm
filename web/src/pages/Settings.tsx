@@ -1,20 +1,22 @@
 /**
  * Settings — edit `~/.helm/config.json` from the desktop UI.
  *
- * Three sections:
- *   - Server: HTTP port (read-only hint; restart required to change)
- *   - Lark: enable + cliCommand
- *   - Knowledge providers: enable + endpoint + authToken + cwd→scmName mappings
- *     (depscope only for now; future providers register the same way)
+ * Sections:
+ *   - HTTP API: port (restart required)
+ *   - Lark integration: enable + cliCommand
+ *   - Knowledge providers: Depscope (enable + endpoint + authToken + mappings)
+ *   - Diagnostics: export bundle button
  *
  * Save sends PUT /api/config which validates server-side; field errors
  * surface as a banner. Provider hot-reload is a future refinement; for now
- * we tell the user "restart Helm to apply provider changes".
+ * we tell the user "restart Helm to apply provider changes". Save success
+ * banner auto-dismisses after 4s (P1-8).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { CopyButton } from '../components/CopyButton.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 function clone<T>(v: T): T {
@@ -52,10 +54,16 @@ export function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const okTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (data && !draft) setDraft(clone(data));
   }, [data, draft]);
+
+  useEffect(() => () => {
+    if (okTimerRef.current) clearTimeout(okTimerRef.current);
+  }, []);
 
   if (loading) return <p className="muted">Loading…</p>;
   if (error) return <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>;
@@ -84,6 +92,9 @@ export function SettingsPage() {
       setDraft(clone(saved));
       setDirty(false);
       setSaveOk('Saved. Provider changes apply on next Helm restart.');
+      // P1-8: auto-dismiss after 4 seconds
+      if (okTimerRef.current) clearTimeout(okTimerRef.current);
+      okTimerRef.current = setTimeout(() => setSaveOk(null), 4000);
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
@@ -93,11 +104,14 @@ export function SettingsPage() {
 
   async function exportBundle(): Promise<void> {
     setDiagnostics(null);
+    setExporting(true);
     try {
       const r = await helmApi.exportDiagnostics();
       setDiagnostics(r.bundleDir);
     } catch (err) {
       setDiagnostics(`failed: ${(err as Error).message}`);
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -110,59 +124,61 @@ export function SettingsPage() {
       </p>
 
       {saveOk && (
-        <div className="helm-card" style={{ borderColor: 'var(--success)' }}>
-          <span className="helm-status ok"><span className="dot" />{saveOk}</span>
+        <div className="helm-banner ok" role="status" aria-live="polite">
+          <span className="helm-status ok"><span className="dot" /></span>
+          {saveOk}
         </div>
       )}
       {saveError && (
-        <div className="helm-card" style={{ borderColor: 'var(--danger)' }}>
-          <span className="helm-status err"><span className="dot" />{saveError}</span>
+        <div className="helm-banner err" role="alert">
+          <span className="helm-status err"><span className="dot" /></span>
+          {saveError}
         </div>
       )}
 
+      {/* P1-3: section headings outside cards, max-width container */}
+      <h3>HTTP API</h3>
       <article className="helm-card">
-        <div className="label">HTTP API</div>
-        <label style={{ display: 'block', marginTop: 8 }}>
-          Port&nbsp;
+        <label className="helm-form-row">
+          <div className="muted">Port</div>
           <input
             type="number"
             min={1}
             max={65535}
             value={draft.server.port}
             onChange={(e) => update((c) => { c.server.port = Number(e.target.value); })}
-            style={{ width: 100 }}
+            style={{ width: 120 }}
           />
         </label>
-        <p className="muted" style={{ fontSize: 11, marginTop: 6, marginBottom: 0 }}>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
           Bound to 127.0.0.1 only. Change requires a Helm restart.
         </p>
       </article>
 
+      <h3>Lark integration</h3>
       <article className="helm-card">
-        <div className="label">Lark integration</div>
-        <label style={{ display: 'block', marginTop: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
             checked={draft.lark.enabled}
             onChange={(e) => update((c) => { c.lark.enabled = e.target.checked; })}
-          />{' '}
+          />
           Enable Lark channel
         </label>
-        <label style={{ display: 'block', marginTop: 8 }}>
-          <div className="muted" style={{ marginBottom: 4 }}>lark-cli command (path or name on PATH)</div>
+        <label className="helm-form-row">
+          <div className="muted">lark-cli command (path or name on PATH)</div>
           <input
             type="text"
             value={draft.lark.cliCommand ?? ''}
             placeholder="auto (uses LARK_CLI_COMMAND env or bundled binary)"
             onChange={(e) => update((c) => { c.lark.cliCommand = e.target.value || undefined; })}
-            style={{ width: '100%', padding: '4px 8px' }}
           />
         </label>
       </article>
 
+      <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
-        <div className="label">Depscope (knowledge provider)</div>
-        <label style={{ display: 'block', marginTop: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
             checked={depscope?.provider.enabled ?? false}
@@ -173,11 +189,11 @@ export function SettingsPage() {
                 enabled: e.target.checked,
               };
             })}
-          />{' '}
+          />
           Enabled
         </label>
-        <label style={{ display: 'block', marginTop: 8 }}>
-          <div className="muted" style={{ marginBottom: 4 }}>Endpoint URL</div>
+        <label className="helm-form-row">
+          <div className="muted">Endpoint URL</div>
           <input
             type="text"
             value={depscopeCfg.endpoint ?? ''}
@@ -188,11 +204,10 @@ export function SettingsPage() {
               cfg.endpoint = e.target.value;
               found.provider.config = cfg as Record<string, unknown>;
             })}
-            style={{ width: '100%', padding: '4px 8px' }}
           />
         </label>
-        <label style={{ display: 'block', marginTop: 8 }}>
-          <div className="muted" style={{ marginBottom: 4 }}>Auth token</div>
+        <label className="helm-form-row">
+          <div className="muted">Auth token</div>
           <input
             type="password"
             value={depscopeCfg.authToken ?? ''}
@@ -203,51 +218,53 @@ export function SettingsPage() {
               cfg.authToken = e.target.value || undefined;
               found.provider.config = cfg as Record<string, unknown>;
             })}
-            style={{ width: '100%', padding: '4px 8px' }}
           />
         </label>
 
-        <div className="label" style={{ marginTop: 14 }}>cwd → scmName mappings</div>
+        <div className="label" style={{ marginTop: 16 }}>cwd → scmName mappings</div>
         {(depscopeCfg.mappings ?? []).map((m, i) => (
-          <div key={i} style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <div key={i} className="helm-mapping-row">
             <input
               type="text"
               value={m.cwdPrefix}
               placeholder="~/proj/foo"
+              aria-label={`cwd prefix for mapping ${i + 1}`}
               onChange={(e) => update((c) => {
                 const found = ensureDepscope(c);
                 const cfg = (found.provider.config ?? {}) as DepscopeConfig;
                 cfg.mappings = (cfg.mappings ?? []).map((mm, idx) => idx === i ? { ...mm, cwdPrefix: e.target.value } : mm);
                 found.provider.config = cfg as Record<string, unknown>;
               })}
-              style={{ flex: 1, padding: '4px 8px' }}
             />
             <input
               type="text"
               value={m.scmName}
               placeholder="org/repo"
+              aria-label={`scm name for mapping ${i + 1}`}
               onChange={(e) => update((c) => {
                 const found = ensureDepscope(c);
                 const cfg = (found.provider.config ?? {}) as DepscopeConfig;
                 cfg.mappings = (cfg.mappings ?? []).map((mm, idx) => idx === i ? { ...mm, scmName: e.target.value } : mm);
                 found.provider.config = cfg as Record<string, unknown>;
               })}
-              style={{ flex: 1, padding: '4px 8px' }}
             />
             <button
-              className="danger"
+              type="button"
+              className="danger-outline"
+              aria-label={`Remove mapping for ${m.cwdPrefix || '(unset prefix)'}`}
               onClick={() => update((c) => {
                 const found = ensureDepscope(c);
                 const cfg = (found.provider.config ?? {}) as DepscopeConfig;
                 cfg.mappings = (cfg.mappings ?? []).filter((_, idx) => idx !== i);
                 found.provider.config = cfg as Record<string, unknown>;
               })}
-              style={{ padding: '4px 10px' }}
             >Remove</button>
           </div>
         ))}
         <button
-          style={{ marginTop: 8 }}
+          type="button"
+          className="ghost"
+          style={{ marginTop: 10 }}
           onClick={() => update((c) => {
             const found = ensureDepscope(c);
             const cfg = (found.provider.config ?? {}) as DepscopeConfig;
@@ -257,25 +274,44 @@ export function SettingsPage() {
         >+ Add mapping</button>
       </article>
 
-      <div className="actions" style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
         <button className="primary" disabled={!dirty} onClick={() => { void save(); }}>
           Save
         </button>
-        <button disabled={!dirty} onClick={() => { setDraft(data ? clone(data) : null); setDirty(false); setSaveError(null); setSaveOk(null); }}>
+        <button
+          disabled={!dirty}
+          onClick={() => {
+            setDraft(data ? clone(data) : null);
+            setDirty(false);
+            setSaveError(null);
+            setSaveOk(null);
+          }}
+        >
           Revert
         </button>
       </div>
 
-      <h3 style={{ marginTop: 32, fontSize: 14, fontWeight: 600 }}>Diagnostics</h3>
+      <h3>Diagnostics</h3>
       <article className="helm-card">
         <p className="muted" style={{ marginTop: 0 }}>
           Export a bundle of recent logs + redacted config + schema version + bridge state to
           attach to a bug report. Saved under <code>~/.helm/</code>.
         </p>
-        <button onClick={() => { void exportBundle(); }}>Export diagnostics bundle</button>
+        <button
+          type="button"
+          disabled={exporting}
+          aria-busy={exporting}
+          onClick={() => { void exportBundle(); }}
+        >
+          {exporting ? 'Exporting…' : 'Export diagnostics bundle'}
+        </button>
         {diagnostics && (
-          <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
-            Bundle: <code>{diagnostics}</code>
+          <p className="muted" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+            Bundle:{' '}
+            <span className="helm-copy-row">
+              <code>{diagnostics}</code>
+              <CopyButton value={diagnostics} />
+            </span>
           </p>
         )}
       </article>

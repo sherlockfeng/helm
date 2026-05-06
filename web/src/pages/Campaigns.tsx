@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { EmptyState } from '../components/EmptyState.js';
 
 export function CampaignsPage() {
   const { data, loading, error } = useApi(() => helmApi.campaigns());
@@ -23,9 +24,10 @@ export function CampaignsPage() {
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
 
       {data && data.campaigns.length === 0 && (
-        <div className="helm-empty">
-          No campaigns yet. Run <code>init_workflow</code> from a Cursor chat to start one.
-        </div>
+        <EmptyState
+          title="No campaigns yet."
+          hint={<>Run <code>init_workflow</code> from a Cursor chat to start one.</>}
+        />
       )}
 
       {data && data.campaigns.map((c) => (

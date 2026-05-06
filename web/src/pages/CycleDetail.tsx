@@ -12,6 +12,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { EmptyState } from '../components/EmptyState.js';
 import type { Task } from '../api/types.js';
 
 const STATUS_TONE: Record<Task['status'], 'ok' | 'warn' | 'err' | ''> = {
@@ -72,19 +73,17 @@ export function CycleDetailPage() {
 
   return (
     <>
-      <div className="muted" style={{ marginBottom: 4 }}>
-        <Link to="/campaigns" style={{ color: 'var(--text-secondary)' }}>← Campaigns</Link>
+      <div className="helm-breadcrumb">
+        <Link to="/campaigns">← Campaigns</Link>
         {data.campaign && <> / {data.campaign.title}</>}
       </div>
       <h2>Cycle {data.cycle.cycleNum}</h2>
-      <p className="muted">
+      <div className="helm-page-meta">
         <StatusPill status={data.cycle.status as Task['status']} />
         {data.cycle.startedAt && (
-          <span style={{ marginLeft: 12 }}>
-            Started {new Date(data.cycle.startedAt).toLocaleString()}
-          </span>
+          <span>Started {new Date(data.cycle.startedAt).toLocaleString()}</span>
         )}
-      </p>
+      </div>
 
       {data.cycle.productBrief && (
         <article className="helm-card">
@@ -93,14 +92,19 @@ export function CycleDetailPage() {
         </article>
       )}
 
-      <h3 style={{ marginTop: 24, fontSize: 14, fontWeight: 600 }}>Dev tasks ({dev.length})</h3>
+      <h3>Dev tasks ({dev.length})</h3>
       {dev.length === 0
-        ? <div className="helm-empty">No dev tasks. Run <code>create_tasks</code> from the product agent.</div>
+        ? (
+          <EmptyState
+            title="No dev tasks."
+            hint={<>Run <code>create_tasks</code> from the product agent.</>}
+          />
+        )
         : dev.map((t) => <TaskRow key={t.id} task={t} />)}
 
-      <h3 style={{ marginTop: 24, fontSize: 14, fontWeight: 600 }}>Test tasks ({test.length})</h3>
+      <h3>Test tasks ({test.length})</h3>
       {test.length === 0
-        ? <div className="helm-empty">No test tasks yet.</div>
+        ? <EmptyState title="No test tasks yet." hint="Created when dev tasks complete." />
         : test.map((t) => <TaskRow key={t.id} task={t} />)}
     </>
   );

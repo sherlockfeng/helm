@@ -35,19 +35,19 @@ export function TaskDetailPage() {
 
   return (
     <>
-      <div className="muted" style={{ marginBottom: 4 }}>
-        <Link to={`/campaigns`} style={{ color: 'var(--text-secondary)' }}>← Campaigns</Link>
+      <div className="helm-breadcrumb">
+        <Link to={`/campaigns`}>← Campaigns</Link>
         {' / '}
-        <Link to={`/cycles/${task.cycleId}`} style={{ color: 'var(--text-secondary)' }}>cycle</Link>
+        <Link to={`/cycles/${task.cycleId}`}>cycle</Link>
       </div>
       <h2>{task.title}</h2>
-      <p className="muted">
-        <span className="label" style={{ display: 'inline-block', marginRight: 12 }}>{task.role}</span>
+      <div className="helm-page-meta">
+        <span className="label" style={{ marginBottom: 0 }}>{task.role}</span>
         <span className={`helm-status ${tone}`}>
           <span className="dot" />
           {task.status.replace('_', ' ')}
         </span>
-      </p>
+      </div>
 
       {task.description && (
         <article className="helm-card">
@@ -91,19 +91,22 @@ export function TaskDetailPage() {
               can be marked complete.
             </p>
           ) : (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 0, listStyle: 'none' }}>
+            <div style={{ marginTop: 8 }}>
               {auditLog.map((entry) => (
-                <li key={entry.token} style={{ marginBottom: 6 }}>
-                  <code style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                <div key={entry.token} className="helm-audit-row">
+                  <code style={{ color: 'var(--text-secondary)' }}>
                     {new Date(entry.createdAt).toLocaleTimeString()}
                   </code>
-                  {'  '}
-                  <code>{entry.filePath}</code>
-                  {'  '}
-                  <span className="label">{entry.token.slice(0, 10)}…</span>
-                </li>
+                  <code title={entry.filePath}>{entry.filePath}</code>
+                  <code
+                    title={entry.token}
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {entry.token.slice(0, 10)}…
+                  </code>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </article>
       )}

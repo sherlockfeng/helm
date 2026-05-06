@@ -4,12 +4,21 @@
  * Live updates: SSE pushes refresh the list so the user sees a new request
  * appear without polling. Each card shows the tool, command, host_session
  * id, and time-to-expire so the user can prioritize.
+ *
+ * Design note: Allow uses .primary (filled blue), Deny uses .danger-outline
+ * (red text + border, no fill) so the eye lands on the safe path the user
+ * takes ~95% of the time. See docs/design/2026-05-06-polish-pass.md P0-5.
+ *
+ * A11y note (a11y-audit A7): we deliberately do NOT confirm Allow/Deny
+ * clicks. A confirm dialog kills the speed of the flow; users with assistive
+ * tech should be aware that space/enter on these buttons is irreversible.
  */
 
 import { useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
+import { EmptyState } from '../components/EmptyState.js';
 import type { PendingApproval } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -21,6 +30,10 @@ function timeUntil(iso: string): string {
   if (hr < 24) return `${hr}h ${min % 60}m`;
   const days = Math.floor(hr / 24);
   return `${days}d ${hr % 24}h`;
+}
+
+function shortId(id: string, len = 12): string {
+  return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
 export function ApprovalsPage() {
@@ -59,7 +72,10 @@ export function ApprovalsPage() {
       {actionError && <p className="muted" style={{ color: 'var(--danger)' }}>{actionError}</p>}
 
       {data && data.approvals.length === 0 && (
-        <div className="helm-empty">No pending approvals.</div>
+        <EmptyState
+          title="No pending approvals."
+          hint="When Cursor needs your decision on a Shell / Edit / MCP call, it will show up here."
+        />
       )}
 
       {data && data.approvals.map((req) => (
@@ -96,7 +112,7 @@ function ApprovalCard({
           </div>
           {approval.hostSessionId && (
             <div className="label" style={{ marginTop: 6 }}>
-              session {approval.hostSessionId}
+              session <code title={approval.hostSessionId}>{shortId(approval.hostSessionId)}</code>
             </div>
           )}
         </div>
@@ -111,10 +127,20 @@ function ApprovalCard({
       )}
 
       <div className="actions">
-        <button className="primary" disabled={acting} onClick={onAllow}>
+        <button
+          className="primary"
+          disabled={acting}
+          aria-busy={acting}
+          onClick={onAllow}
+        >
           Allow
         </button>
-        <button className="danger" disabled={acting} onClick={onDeny}>
+        <button
+          className="danger-outline"
+          disabled={acting}
+          aria-busy={acting}
+          onClick={onDeny}
+        >
           Deny
         </button>
       </div>

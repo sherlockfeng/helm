@@ -40,25 +40,28 @@ describe('HelmConfigSchema defaults', () => {
     expect(() => HelmConfigSchema.parse({ extra: 'nope' })).toThrow();
   });
 
-  it('B2: anthropic defaults', () => {
+  it('Phase 24: cursor defaults', () => {
     const c = HelmConfigSchema.parse({});
-    expect(c.anthropic.apiKey).toBeUndefined();
-    expect(c.anthropic.model).toBe('claude-sonnet-4-6');
-    expect(c.anthropic.maxTokens).toBe(2048);
+    expect(c.cursor.apiKey).toBeUndefined();
+    expect(c.cursor.model).toBe('auto');
+    expect(c.cursor.mode).toBe('local');
   });
 
-  it('B2: anthropic accepts overrides', () => {
+  it('Phase 24: cursor accepts overrides', () => {
     const c = HelmConfigSchema.parse({
-      anthropic: { apiKey: 'sk-ant-x', model: 'claude-opus-4', maxTokens: 4096 },
+      cursor: { apiKey: 'sk-cur-x', model: 'gpt-5', mode: 'cloud' },
     });
-    expect(c.anthropic.apiKey).toBe('sk-ant-x');
-    expect(c.anthropic.model).toBe('claude-opus-4');
-    expect(c.anthropic.maxTokens).toBe(4096);
+    expect(c.cursor.apiKey).toBe('sk-cur-x');
+    expect(c.cursor.model).toBe('gpt-5');
+    expect(c.cursor.mode).toBe('cloud');
   });
 
-  it('B2: attack — anthropic.maxTokens must be positive int', () => {
-    expect(() => HelmConfigSchema.parse({ anthropic: { maxTokens: 0 } })).toThrow();
-    expect(() => HelmConfigSchema.parse({ anthropic: { maxTokens: -100 } })).toThrow();
+  it('Phase 24: attack — cursor.mode must be local|cloud', () => {
+    expect(() => HelmConfigSchema.parse({ cursor: { mode: 'desktop' } })).toThrow();
+  });
+
+  it('Phase 24: attack — cursor rejects unknown nested keys (strict)', () => {
+    expect(() => HelmConfigSchema.parse({ cursor: { extra: 1 } })).toThrow();
   });
 
   it('attack: invalid port number rejected', () => {

@@ -194,39 +194,45 @@ export function SettingsPage() {
         </p>
       </article>
 
-      <h3>Anthropic (campaign summarization)</h3>
+      <h3>Cursor (campaign summarization)</h3>
       <article className="helm-card">
         <label className="helm-form-row">
-          <div className="muted">API key</div>
-          <input
-            type="password"
-            value={draft.anthropic.apiKey ?? ''}
-            placeholder="sk-ant-… (or set ANTHROPIC_API_KEY env var)"
-            onChange={(e) => update((c) => { c.anthropic.apiKey = e.target.value || undefined; })}
-          />
+          <div className="muted">Mode</div>
+          <select
+            value={draft.cursor.mode}
+            onChange={(e) => update((c) => { c.cursor.mode = e.target.value as 'local' | 'cloud'; })}
+            style={{ width: 200 }}
+          >
+            <option value="local">local (use Cursor app auth)</option>
+            <option value="cloud">cloud (CURSOR_API_KEY required)</option>
+          </select>
         </label>
         <label className="helm-form-row">
           <div className="muted">Model</div>
           <input
             type="text"
-            value={draft.anthropic.model}
-            onChange={(e) => update((c) => { c.anthropic.model = e.target.value; })}
+            value={draft.cursor.model}
+            placeholder="auto"
+            onChange={(e) => update((c) => { c.cursor.model = e.target.value; })}
           />
         </label>
-        <label className="helm-form-row">
-          <div className="muted">Max tokens</div>
-          <input
-            type="number"
-            min={1}
-            value={draft.anthropic.maxTokens}
-            onChange={(e) => update((c) => { c.anthropic.maxTokens = Number(e.target.value); })}
-            style={{ width: 140 }}
-          />
-        </label>
+        {draft.cursor.mode === 'cloud' && (
+          <label className="helm-form-row">
+            <div className="muted">API key</div>
+            <input
+              type="password"
+              value={draft.cursor.apiKey ?? ''}
+              placeholder="(or set CURSOR_API_KEY env var)"
+              onChange={(e) => update((c) => { c.cursor.apiKey = e.target.value || undefined; })}
+            />
+          </label>
+        )}
         <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
-          Powers the Summarize button on Campaigns. Without a key, summarize
-          falls back to "not configured" — the env var alternative works too.
-          Settings save takes effect on the next click; no restart needed.
+          Powers the Summarize button on Campaigns. <strong>local</strong> mode
+          reuses your Cursor app's auth — no extra key needed when you have
+          Cursor installed. <strong>cloud</strong> needs a Cursor API key
+          (here or via <code>CURSOR_API_KEY</code> env). Settings save takes
+          effect on the next click; no restart needed.
         </p>
       </article>
 

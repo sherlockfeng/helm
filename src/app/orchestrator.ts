@@ -48,7 +48,7 @@ import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
 import { WorkflowEngine } from '../workflow/engine.js';
-import { tryCreateAnthropicLlmClient } from '../summarizer/anthropic-client.js';
+import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind } from './lark-wiring.js';
@@ -305,21 +305,24 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     isDocFirstEnforced: () => liveConfig.docFirst.enforce,
   });
 
-  // Anthropic LLM client (B2). Resolves the API key from
-  // liveConfig.anthropic.apiKey first, then ANTHROPIC_API_KEY env. When
-  // neither is present the summarize endpoint surfaces 501; the user fixes
-  // it in Settings. The client is rebuilt inside summarizeFn so a Settings
-  // edit + Save propagates on the next call without restart.
-  function summarizeFn(): ((campaignId: string) => Promise<unknown>) | undefined {
+  // Cursor LLM client for summarize_campaign (Phase 24, replaces Phase 22's
+  // Anthropic path). Local mode reuses the user's Cursor app auth — no
+  // extra key needed. Cloud mode falls back to CURSOR_API_KEY env. The
+  // client is rebuilt inside summarizeFn so a Settings edit + Save
+  // propagates on the next call without restart.
+  function summarizeFn(): (campaignId: string) => Promise<unknown> {
     return async (campaignId: string) => {
-      const llm = tryCreateAnthropicLlmClient({ apiKey: liveConfig.anthropic.apiKey });
-      if (!llm) {
-        throw new Error('Anthropic API key not configured');
-      }
+      const llm = new CursorLlmClient({
+        apiKey: liveConfig.cursor.apiKey,
+        modelId: liveConfig.cursor.model,
+        mode: liveConfig.cursor.mode,
+      });
       return summarizeCampaign(deps.db, campaignId, {
         llm,
-        model: liveConfig.anthropic.model,
-        maxTokens: liveConfig.anthropic.maxTokens,
+        model: liveConfig.cursor.model,
+        // Cursor's Agent.prompt ignores maxTokens (model-config layer owns
+        // it); pass through for the LlmClient interface contract.
+        maxTokens: 2048,
       });
     };
   }
@@ -339,9 +342,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         return created ? { id: created.id } : null;
       },
       workflowEngine,
-      // We always pass the factory; it throws 'API key not configured' when
-      // the key is absent, which the HTTP layer maps to 500. Tests bypass
-      // this by overriding deps.summarizeCampaign with a fake.
+      // Phase 24: Cursor SDK summarize. Local mode reuses the user's Cursor
+      // app auth — no helm-side key required. The factory is always wired;
+      // runtime errors from CursorLlmClient (Cursor not installed / not
+      // signed in) bubble as 500. Tests bypass by overriding the dep.
       summarizeCampaign: summarizeFn(),
       // B3: train the same roles LocalRolesProvider reads from. The shared
       // pseudo-embed function keeps the embeddings consistent between

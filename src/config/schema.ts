@@ -44,11 +44,24 @@ const ApprovalConfigSchema = z.object({
   waitPollMs: z.number().int().positive().default(10 * 60 * 1000),
 }).strict();
 
+/**
+ * Doc-first audit toggle (PROJECT_BLUEPRINT.md §12.3).
+ *
+ * When `enforce` is true (default), `complete_task` requires a valid
+ * `docAuditToken` from a recent `update_doc_first()` call before a dev
+ * task can move to completed. Useful for teams running the doc-first
+ * workflow; safely disabled for casual / one-off Cursor sessions.
+ */
+const DocFirstConfigSchema = z.object({
+  enforce: z.boolean().default(true),
+}).strict();
+
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   approval: ApprovalConfigSchema.default({}),
   lark: LarkConfigSchema.default({}),
   knowledge: KnowledgeConfigSchema.default({}),
+  docFirst: DocFirstConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

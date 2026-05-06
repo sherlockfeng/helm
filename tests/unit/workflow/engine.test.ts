@@ -173,3 +173,46 @@ describe('WorkflowEngine.addTaskComment', () => {
     expect(after.comments).toEqual(['first', 'second']);
   });
 });
+
+describe('WorkflowEngine — docFirst enforcement toggle (B4)', () => {
+  it('default behaviour: dev task requires docAuditToken (matches §12.3 default)', () => {
+    const e = new WorkflowEngine(db);
+    const c = e.initWorkflow('/proj', 'C');
+    const cycle = e.getCycleState(undefined, c.id)!.cycle;
+    const [t] = e.createTasks(cycle.id, [{ role: 'dev', title: 'd' }]);
+    expect(() => e.completeTask(t!.id, { result: 'done' })).toThrow(/docAuditToken/);
+  });
+
+  it('toggle off: dev task completes without docAuditToken', () => {
+    const e = new WorkflowEngine(db, { isDocFirstEnforced: () => false });
+    const c = e.initWorkflow('/proj', 'C');
+    const cycle = e.getCycleState(undefined, c.id)!.cycle;
+    const [t] = e.createTasks(cycle.id, [{ role: 'dev', title: 'd' }]);
+    const after = e.completeTask(t!.id, { result: 'done' });
+    expect(after.status).toBe('completed');
+    expect(after.docAuditToken).toBeUndefined();
+  });
+
+  it('toggle off: invalid docAuditToken still rejected if supplied', () => {
+    const e = new WorkflowEngine(db, { isDocFirstEnforced: () => false });
+    const c = e.initWorkflow('/proj', 'C');
+    const cycle = e.getCycleState(undefined, c.id)!.cycle;
+    const [t] = e.createTasks(cycle.id, [{ role: 'dev', title: 'd' }]);
+    expect(() => e.completeTask(t!.id, { result: 'done', docAuditToken: 'ghost' }))
+      .toThrow(/Invalid docAuditToken/);
+  });
+
+  it('callback re-evaluated per call — flip mid-flight', () => {
+    let enforced = true;
+    const e = new WorkflowEngine(db, { isDocFirstEnforced: () => enforced });
+    const c = e.initWorkflow('/proj', 'C');
+    const cycle = e.getCycleState(undefined, c.id)!.cycle;
+    const [t1, t2] = e.createTasks(cycle.id, [
+      { role: 'dev', title: 'a' },
+      { role: 'dev', title: 'b' },
+    ]);
+    expect(() => e.completeTask(t1!.id, { result: 'a' })).toThrow();
+    enforced = false;
+    expect(e.completeTask(t2!.id, { result: 'b' }).status).toBe('completed');
+  });
+});

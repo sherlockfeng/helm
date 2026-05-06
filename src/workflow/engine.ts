@@ -37,8 +37,22 @@ import type {
   CreateTaskInput,
 } from './types.js';
 
+export interface WorkflowEngineOptions {
+  /**
+   * Returns whether doc-first enforcement is on. Called once per
+   * completeTask() invocation so a Settings change takes effect on
+   * the next task completion without restarting the engine.
+   * Defaults to always-true (matches §12.3 default).
+   */
+  isDocFirstEnforced?: () => boolean;
+}
+
 export class WorkflowEngine {
-  constructor(private readonly db: Database.Database) {}
+  private readonly isDocFirstEnforced: () => boolean;
+
+  constructor(private readonly db: Database.Database, options: WorkflowEngineOptions = {}) {
+    this.isDocFirstEnforced = options.isDocFirstEnforced ?? (() => true);
+  }
 
   initWorkflow(projectPath: string, title: string, brief?: string): Campaign {
     const now = new Date().toISOString();
@@ -111,7 +125,11 @@ export class WorkflowEngine {
     const task = getTask(this.db, taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
 
-    if (task.role === 'dev' && !input.docAuditToken) {
+    // §12.3 doc-first toggle. When `enforce` is off (config flag), dev tasks
+    // can complete without a docAuditToken. Token, if supplied, is still
+    // validated against the audit log so a stale token doesn't slip through.
+    const docFirstEnforced = this.isDocFirstEnforced();
+    if (task.role === 'dev' && docFirstEnforced && !input.docAuditToken) {
       throw new Error('Developer tasks require a docAuditToken from update_doc_first()');
     }
 

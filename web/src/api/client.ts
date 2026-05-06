@@ -5,9 +5,11 @@
 
 import type {
   ActiveChat,
+  BugTaskInput,
   Campaign,
   ChannelBinding,
   Cycle,
+  CycleScreenshotInput,
   DocAuditEntry,
   HelmConfig,
   PendingApproval,
@@ -70,6 +72,24 @@ export const helmApi = {
   task: (taskId: string) =>
     request<{ task: Task; auditLog: DocAuditEntry[] }>(
       'GET', `/api/tasks/${encodeURIComponent(taskId)}`,
+    ),
+
+  // ── Cycle mutations (B1) ──
+  completeCycle: (
+    cycleId: string,
+    body: { passRate?: number; failedTests?: string[]; screenshots?: CycleScreenshotInput[] } = {},
+  ) =>
+    request<{ cycle: Cycle }>(
+      'POST',
+      `/api/cycles/${encodeURIComponent(cycleId)}/complete`,
+      body,
+    ),
+
+  createBugTasks: (cycleId: string, bugs: BugTaskInput[]) =>
+    request<{ tasks: Task[] }>(
+      'POST',
+      `/api/cycles/${encodeURIComponent(cycleId)}/bug-tasks`,
+      { bugs },
     ),
 
   // ── Settings ──

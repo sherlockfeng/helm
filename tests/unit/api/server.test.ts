@@ -446,6 +446,135 @@ describe('/api/bindings', () => {
   });
 });
 
+describe('/api/cycles/:id/complete (B1)', () => {
+  it('returns 200 + cycle when engine wired and cycle in test phase', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C', 'b');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+    // Walk it through to test phase: create + complete one dev task (no docFirst).
+    const e2 = new WorkflowEngine(db, { isDocFirstEnforced: () => false });
+    const [t] = e2.createTasks(cycle.id, [{ role: 'dev', title: 'd' }]);
+    e2.completeTask(t!.id, { result: 'done' });
+
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: e2 });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson(`/api/cycles/${cycle.id}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passRate: 95 }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { cycle: { status: string } }).cycle.status).toBe('completed');
+  });
+
+  it('returns 501 when engine not wired', async () => {
+    const r = await fetchJson('/api/cycles/c1/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(r.status).toBe(501);
+  });
+
+  it('attack: GET is 405', async () => {
+    const r = await fetchJson('/api/cycles/c1/complete');
+    expect(r.status).toBe(405);
+  });
+
+  it('attack: malformed JSON → 400', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: new WorkflowEngine(db) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/cycles/c1/complete', {
+      method: 'POST',
+      body: '{not json',
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: unknown cycle → 404', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: new WorkflowEngine(db) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/cycles/ghost/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(r.status).toBe(404);
+  });
+});
+
+describe('/api/cycles/:id/bug-tasks (B1)', () => {
+  it('creates bug tasks + sends cycle back to dev', async () => {
+    const engine = new WorkflowEngine(db);
+    const campaign = engine.initWorkflow('/proj', 'C');
+    const cycle = engine.getCycleState(undefined, campaign.id)!.cycle;
+
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: engine });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson(`/api/cycles/${cycle.id}/bug-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bugs: [
+          { title: 'login button broken', description: 'click does nothing' },
+          { title: 'dark mode contrast' },
+        ],
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { tasks: unknown[] }).tasks).toHaveLength(2);
+  });
+
+  it('attack: empty bugs array → 400', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: new WorkflowEngine(db) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/cycles/c1/bug-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bugs: [] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: bug missing title → 400', async () => {
+    await api.stop();
+    api = createHttpApi({ db, registry, workflowEngine: new WorkflowEngine(db) });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/cycles/c1/bug-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bugs: [{ description: 'no title' }] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: 501 when engine absent', async () => {
+    const r = await fetchJson('/api/cycles/c1/bug-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bugs: [{ title: 'x' }] }),
+    });
+    expect(r.status).toBe(501);
+  });
+});
+
 describe('attack: only binds 127.0.0.1', () => {
   it('default host is 127.0.0.1 (loopback only)', () => {
     expect(api.port()).toBeGreaterThan(0);

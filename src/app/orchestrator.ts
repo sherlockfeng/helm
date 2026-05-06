@@ -46,6 +46,7 @@ import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
+import { WorkflowEngine } from '../workflow/engine.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
@@ -108,6 +109,7 @@ export interface HelmAppHandle {
   readonly bridge: BridgeServer;
   readonly httpApi: HttpApiHandle;
   readonly events: EventBus;
+  readonly workflowEngine: WorkflowEngine;
   /** Resolved port after start. */
   httpPort(): number | null;
 }
@@ -292,6 +294,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // refinement; for now Settings tells the user "restart to apply".)
   let liveConfig = deps.config ?? HelmConfigSchema.parse({});
 
+  // Workflow engine — `isDocFirstEnforced` reads liveConfig per call so a
+  // PUT /api/config that toggles `docFirst.enforce` takes effect on the
+  // next completeTask without a process restart. The engine is reused
+  // here AND inside the MCP server (Phase 7); both honor the same flag.
+  const workflowEngine = new WorkflowEngine(deps.db, {
+    isDocFirstEnforced: () => liveConfig.docFirst.enforce,
+  });
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
@@ -306,6 +316,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         const created = consumePendingBind(deps.db, events, code, hostSessionId);
         return created ? { id: created.id } : null;
       },
+      workflowEngine,
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
@@ -313,7 +324,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   let started = false;
 
   return {
-    knowledge, approval: registry, policy, channel, larkChannel, bridge, httpApi, events,
+    knowledge, approval: registry, policy, channel, larkChannel, bridge, httpApi, events, workflowEngine,
     httpPort: () => httpApi.port(),
 
     async start(): Promise<void> {

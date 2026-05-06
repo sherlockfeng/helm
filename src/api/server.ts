@@ -74,6 +74,13 @@ export interface HttpApiDeps {
   saveConfig?: (input: unknown) => HelmConfig;
   /** Consume a pending_binds row and create a channel_bindings row. */
   consumePendingBind?: (code: string, hostSessionId: string) => { id: string } | null;
+  /**
+   * Workflow engine for cycle/task mutations. When undefined, the
+   * /api/cycles/:id/complete + /api/cycles/:id/bug-tasks endpoints
+   * return 501. The orchestrator wires this so a config docFirst.enforce
+   * change takes effect on the next call without a server restart.
+   */
+  workflowEngine?: import('../workflow/engine.js').WorkflowEngine;
 }
 
 export interface HttpApiOptions {
@@ -207,6 +214,18 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (cyclesMatch) {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return send(res, 200, { cycles: listCycles(deps.db, cyclesMatch[1]!) });
+      }
+
+      const cycleCompleteMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/complete$/);
+      if (cycleCompleteMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleCompleteCycle(ctx, deps, cycleCompleteMatch[1]!);
+      }
+
+      const cycleBugTasksMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)\/bug-tasks$/);
+      if (cycleBugTasksMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleCreateBugTasks(ctx, deps, cycleBugTasksMatch[1]!);
       }
 
       const cycleMatch = url.pathname.match(/^\/api\/cycles\/([^/]+)$/);
@@ -398,4 +417,93 @@ function handleDecide(ctx: RouteContext, deps: HttpApiDeps, approvalId: string):
 
   deps.logger?.info('approval_decide', { data: { approvalId, decision } });
   return send(ctx.response, 200, { ok: true, approvalId });
+}
+
+function handleCompleteCycle(ctx: RouteContext, deps: HttpApiDeps, cycleId: string): void {
+  if (!deps.workflowEngine) {
+    return send(ctx.response, 501, { error: 'not_implemented', message: 'workflow engine not wired' });
+  }
+  let parsed: unknown = {};
+  if (ctx.body) {
+    try { parsed = JSON.parse(ctx.body); }
+    catch { return badRequest(ctx.response, 'invalid JSON'); }
+  }
+  const input = (parsed && typeof parsed === 'object') ? parsed as {
+    passRate?: unknown; failedTests?: unknown; screenshots?: unknown;
+  } : {};
+  const passRate = typeof input.passRate === 'number' ? input.passRate : undefined;
+  const failedTests = Array.isArray(input.failedTests)
+    ? input.failedTests.filter((s): s is string => typeof s === 'string')
+    : undefined;
+  const screenshots = Array.isArray(input.screenshots)
+    ? input.screenshots
+        .filter((s): s is { filePath: string; description: string; capturedAt?: string } =>
+          Boolean(s) && typeof s === 'object'
+          && typeof (s as { filePath?: unknown }).filePath === 'string'
+          && typeof (s as { description?: unknown }).description === 'string')
+        .map((s) => ({
+          filePath: s.filePath,
+          description: s.description,
+          // engine.completeCycle requires a fully-typed Screenshot; stamp now
+          // when the client didn't pass one.
+          capturedAt: s.capturedAt ?? new Date().toISOString(),
+        }))
+    : undefined;
+
+  try {
+    const cycle = deps.workflowEngine.completeCycle(cycleId, { passRate, failedTests, screenshots });
+    deps.logger?.info('cycle_complete', { data: { cycleId, passRate } });
+    return send(ctx.response, 200, { cycle });
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes('not found')) return send(ctx.response, 404, { error: 'not_found', message: msg });
+    return badRequest(ctx.response, msg);
+  }
+}
+
+function handleCreateBugTasks(ctx: RouteContext, deps: HttpApiDeps, cycleId: string): void {
+  if (!deps.workflowEngine) {
+    return send(ctx.response, 501, { error: 'not_implemented', message: 'workflow engine not wired' });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { bugs } = parsed as { bugs?: unknown };
+  if (!Array.isArray(bugs) || bugs.length === 0) {
+    return badRequest(ctx.response, 'bugs must be a non-empty array');
+  }
+  const validated: Array<{
+    title: string; description?: string; expected?: string;
+    actual?: string; screenshotDescription?: string;
+  }> = [];
+  for (const raw of bugs) {
+    if (!raw || typeof raw !== 'object') {
+      return badRequest(ctx.response, 'each bug must be an object with at least a title');
+    }
+    const b = raw as Record<string, unknown>;
+    if (typeof b['title'] !== 'string' || !b['title']) {
+      return badRequest(ctx.response, 'each bug requires a non-empty title');
+    }
+    validated.push({
+      title: b['title'],
+      description: typeof b['description'] === 'string' ? b['description'] : undefined,
+      expected: typeof b['expected'] === 'string' ? b['expected'] : undefined,
+      actual: typeof b['actual'] === 'string' ? b['actual'] : undefined,
+      screenshotDescription: typeof b['screenshotDescription'] === 'string'
+        ? b['screenshotDescription'] : undefined,
+    });
+  }
+
+  try {
+    const tasks = deps.workflowEngine.createBugTasks(cycleId, validated);
+    deps.logger?.info('bug_tasks_created', { data: { cycleId, count: tasks.length } });
+    return send(ctx.response, 200, { tasks });
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes('not found')) return send(ctx.response, 404, { error: 'not_found', message: msg });
+    return badRequest(ctx.response, msg);
+  }
 }

@@ -65,3 +65,15 @@ export async function main(): Promise<void> {
 
   await startMcpServer({ db: db.sqlite, knowledge, spawner });
 }
+
+// Phase 44: tsup bundles this module as `dist/mcp/stdio.js`, which Cursor
+// invokes as a stdio MCP transport (`node dist/mcp/stdio.js`). Previously
+// only `export { main }` survived the bundle — no top-level invocation —
+// so the script did nothing and exited immediately, leaving Cursor with
+// a dead MCP server. Run main() unconditionally on module load. Errors are
+// surfaced to stderr (visible in Cursor's MCP debug panel) with a non-zero
+// exit so the host marks the server as failed instead of silently ignoring.
+main().catch((err) => {
+  process.stderr.write(`[helm mcp] fatal: ${(err as Error).message}\n`);
+  process.exit(1);
+});

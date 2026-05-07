@@ -1,8 +1,11 @@
 /**
  * Helm REST client. Vite proxies /api → http://127.0.0.1:17317 in dev; in
- * the packaged Electron app the renderer hits the same origin.
+ * the packaged Electron app the renderer loads via `file://`, so relative
+ * `/api/...` paths can't resolve against same-origin — we route through
+ * `apiUrl()` which prepends `http://127.0.0.1:<port>` in that case.
  */
 
+import { apiUrl } from './base-url.js';
 import type {
   ActiveChat,
   BugTaskInput,
@@ -36,7 +39,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body !== undefined ? JSON.stringify(body) : undefined,
   };
 
-  const res = await fetch(path, init);
+  const res = await fetch(apiUrl(path), init);
   const text = await res.text();
   let parsed: unknown;
   try { parsed = text ? JSON.parse(text) : null; }

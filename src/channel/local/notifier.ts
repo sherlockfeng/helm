@@ -18,6 +18,13 @@ export interface NotificationPayload {
 
 export interface Notifier {
   notify(payload: NotificationPayload): void;
+  /**
+   * Phase 46: close any OS notification previously shown for this approval
+   * id. Used by the orchestrator on `approval.settled` / `approval.decision_received`
+   * so the lingering toast on the user's screen disappears the moment the
+   * gate clears. No-op for ids never seen or already closed.
+   */
+  closeForApproval?(approvalId: string): void;
 }
 
 export class NoopNotifier implements Notifier {
@@ -26,16 +33,22 @@ export class NoopNotifier implements Notifier {
     // want OS popups. Tests that need to assert notification content should use
     // CallbackNotifier instead.
   }
+  closeForApproval(_approvalId: string): void { /* noop */ }
 }
 
 export class CallbackNotifier implements Notifier {
   readonly received: NotificationPayload[] = [];
+  readonly closed: string[] = [];
 
   constructor(private readonly cb?: (payload: NotificationPayload) => void) {}
 
   notify(payload: NotificationPayload): void {
     this.received.push(payload);
     this.cb?.(payload);
+  }
+
+  closeForApproval(approvalId: string): void {
+    this.closed.push(approvalId);
   }
 }
 

@@ -44,8 +44,12 @@ export function Layout() {
     return () => clearInterval(id);
   }, []);
 
+  // Phase 46: also refresh on `approval.decision_received`. Some decision
+  // paths fire that event without a follow-up `approval.settled` (race
+  // with another channel beating it to settle), which used to leave the
+  // sidebar badge stuck. The 30s interval is the ultimate backstop.
   useEventStream(() => { void refreshCount(); }, {
-    types: ['approval.pending', 'approval.settled'],
+    types: ['approval.pending', 'approval.settled', 'approval.decision_received'],
   });
 
   return (

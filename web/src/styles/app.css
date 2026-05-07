@@ -317,6 +317,45 @@ code, pre {
   margin-top: 14px;
 }
 
+/* Phase 46d: per-card "Remember as policy rule" toggle on Approvals page. */
+.approval-remember {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.approval-remember-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.approval-remember-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.approval-remember-detail {
+  margin-top: 8px;
+  padding-left: 24px;
+}
+.approval-scope-input {
+  width: 100%;
+  max-width: 480px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-pre);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.approval-scope-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ── Status pill ─────────────────────────────────────────────────────── */
 .helm-status {
   display: inline-flex;

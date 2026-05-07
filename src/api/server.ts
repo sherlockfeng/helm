@@ -55,6 +55,8 @@ import {
 import { recallRequirements } from '../requirements/recall.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
+import type { ApprovalPolicyEngine, AddPolicyInput } from '../approval/policy.js';
+import { policyInputFromScope } from '../channel/lark/binding-resolver.js';
 import type { Logger } from '../logger/index.js';
 import type { EventBus } from '../events/bus.js';
 import type { HelmConfig } from '../config/schema.js';
@@ -62,6 +64,14 @@ import type { HelmConfig } from '../config/schema.js';
 export interface HttpApiDeps {
   db: Database.Database;
   registry: ApprovalRegistry;
+  /**
+   * Phase 46: optional policy engine. When set, POST /api/approvals/:id/decide
+   * accepts an optional `remember: true` field — the API derives a scope from
+   * the pending approval (or honors an explicit `scope` string in the body)
+   * and inserts an ApprovalPolicy rule before settling. When undefined, the
+   * `remember` flag is rejected with 501 so the renderer can hide the checkbox.
+   */
+  policy?: ApprovalPolicyEngine;
   /** Optional event bus; when set, /api/events streams its emissions over SSE. */
   events?: EventBus;
   /** Optional logger; defaults to no-op. */
@@ -561,12 +571,61 @@ function handleDecide(ctx: RouteContext, deps: HttpApiDeps, approvalId: string):
   if (!parsed || typeof parsed !== 'object') {
     return badRequest(ctx.response, 'body must be a JSON object');
   }
-  const { decision, reason } = parsed as { decision?: unknown; reason?: unknown };
+  const {
+    decision, reason, remember, scope,
+  } = parsed as {
+    decision?: unknown; reason?: unknown; remember?: unknown; scope?: unknown;
+  };
   if (decision !== 'allow' && decision !== 'deny') {
     return badRequest(ctx.response, 'decision must be "allow" or "deny"');
   }
   if (reason !== undefined && typeof reason !== 'string') {
     return badRequest(ctx.response, 'reason must be a string when provided');
+  }
+  if (remember !== undefined && typeof remember !== 'boolean') {
+    return badRequest(ctx.response, 'remember must be a boolean when provided');
+  }
+  if (scope !== undefined && typeof scope !== 'string') {
+    return badRequest(ctx.response, 'scope must be a string when provided');
+  }
+
+  // Phase 46d: when the renderer asks us to remember the decision, derive a
+  // policy rule from the pending request (or the explicit `scope` when
+  // provided) and insert it BEFORE settling so the rule is in place if a
+  // duplicate request races behind. Mirrors Lark `/allow! <scope>` flow.
+  let rememberedRule: { id: string; tool: string; decision: 'allow' | 'deny' } | undefined;
+  if (remember) {
+    if (!deps.policy) {
+      return send(ctx.response, 501, {
+        error: 'not_implemented',
+        message: 'policy engine not wired',
+      });
+    }
+    // We need the pending request to know the tool / command for inference.
+    const pending = deps.registry.listPending().find((r) => r.id === approvalId)
+      ?? deps.registry.get(approvalId);
+    if (!pending) {
+      return send(ctx.response, 404, { error: 'not_found', message: 'unknown approvalId' });
+    }
+    const policyInput = derivePolicyInput(pending, decision, scope);
+    if (!policyInput) {
+      return badRequest(ctx.response,
+        'unable to derive policy scope from this approval — pass an explicit `scope` string');
+    }
+    try {
+      const rule = deps.policy.add(policyInput);
+      rememberedRule = { id: rule.id, tool: rule.tool, decision: rule.decision };
+      deps.logger?.info('approval_policy_added', {
+        data: { ruleId: rule.id, tool: rule.tool, decision: rule.decision, scope },
+      });
+    } catch (err) {
+      deps.logger?.warn('approval_policy_add_failed', {
+        data: { error: (err as Error).message, scope },
+      });
+      return send(ctx.response, 400, {
+        error: 'policy_add_failed', message: (err as Error).message,
+      });
+    }
   }
 
   const settled = deps.registry.settle(approvalId, {
@@ -579,8 +638,46 @@ function handleDecide(ctx: RouteContext, deps: HttpApiDeps, approvalId: string):
     return send(ctx.response, 409, { error: 'already_settled_or_unknown' });
   }
 
-  deps.logger?.info('approval_decide', { data: { approvalId, decision } });
-  return send(ctx.response, 200, { ok: true, approvalId });
+  deps.logger?.info('approval_decide', {
+    data: { approvalId, decision, remember: Boolean(remember) },
+  });
+  return send(ctx.response, 200, {
+    ok: true,
+    approvalId,
+    ...(rememberedRule ? { rememberedRule } : {}),
+  });
+}
+
+/**
+ * Phase 46d helper: build an AddPolicyInput from the live pending approval +
+ * an optional user-typed scope. Mirrors `policyInputFromScope` for the
+ * explicit-scope path; otherwise we infer a sensible default:
+ *   - `mcp__server__tool` exact tool          → toolScope=true
+ *   - Shell with absolute path command         → pathPrefix = dir(command)
+ *   - any tool with first-token command        → commandPrefix = firstToken
+ *   - any tool with empty command              → toolScope=true
+ */
+function derivePolicyInput(
+  pending: { tool: string; command?: string },
+  decision: 'allow' | 'deny',
+  scope: string | undefined,
+): AddPolicyInput | null {
+  if (scope && scope.trim()) {
+    return policyInputFromScope(scope, decision);
+  }
+  const tool = pending.tool;
+  const command = (pending.command ?? '').trim();
+  if (tool.startsWith('mcp__')) {
+    return { tool, decision, toolScope: true };
+  }
+  if (!command) {
+    return { tool, decision, toolScope: true };
+  }
+  // Use the first token (e.g. `pnpm`, `git`) as a sensible default prefix.
+  // Users can broaden / narrow later from the policy list.
+  const firstToken = command.split(/\s+/, 1)[0] ?? '';
+  if (!firstToken) return { tool, decision, toolScope: true };
+  return { tool, decision, commandPrefix: firstToken };
 }
 
 function handleCompleteCycle(ctx: RouteContext, deps: HttpApiDeps, cycleId: string): void {

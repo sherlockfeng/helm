@@ -138,8 +138,13 @@ async function bootHelm(): Promise<void> {
   }
 
   helmApp.events.on((e) => {
+    // Phase 46: also catch `approval.decision_received` so the tray badge
+    // clears when a decision races (settle returns false because another
+    // path already finalized — no follow-up `approval.settled` would fire
+    // for this listener otherwise).
     if (e.type === 'approval.pending'
       || e.type === 'approval.settled'
+      || e.type === 'approval.decision_received'
       || e.type === 'session.started'
       || e.type === 'session.closed'
     ) refreshTray();

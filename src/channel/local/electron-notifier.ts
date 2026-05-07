@@ -39,6 +39,11 @@ export interface ElectronNotificationOptions {
 export interface ElectronNotificationInstance {
   on(event: 'click', listener: () => void): void;
   show(): void;
+  /**
+   * Phase 46: dismiss the OS toast. Electron's Notification.close() works
+   * on macOS Notification Center, Windows toast, and Linux libnotify.
+   */
+  close?(): void;
 }
 
 export interface ElectronNotifierOptions {
@@ -65,6 +70,13 @@ export class ElectronNotifier implements Notifier {
   private readonly Notification: ElectronNotificationCtor;
   private readonly onClick?: (payload: NotificationPayload) => void;
   private readonly onError: (err: Error, ctx: { phase: string }) => void;
+  /**
+   * Phase 46: track every notification we still consider live so the
+   * orchestrator can close them when the underlying approval settles.
+   * Keyed by approvalId. Removed on .close() OR on click (Electron clicks
+   * implicitly dismiss the toast).
+   */
+  private readonly active = new Map<string, ElectronNotificationInstance>();
 
   constructor(options: ElectronNotifierOptions) {
     this.Notification = options.Notification;
@@ -90,13 +102,30 @@ export class ElectronNotifier implements Notifier {
         body: payload.body,
         silent: false,
       });
+      const approvalId = payload.ref?.kind === 'approval' ? payload.ref.approvalId : undefined;
       n.on('click', () => {
+        if (approvalId) this.active.delete(approvalId);
         try { this.onClick?.(payload); }
         catch (err) { this.onError(err as Error, { phase: 'click' }); }
       });
       n.show();
+      if (approvalId) this.active.set(approvalId, n);
     } catch (err) {
       this.onError(err as Error, { phase: 'show' });
     }
+  }
+
+  /**
+   * Phase 46: dismiss the toast that was emitted for this approval. Called
+   * by the orchestrator when `approval.settled` / `approval.decision_received`
+   * fires so the user doesn't have to manually swipe away an obsolete
+   * banner.
+   */
+  closeForApproval(approvalId: string): void {
+    const n = this.active.get(approvalId);
+    if (!n) return;
+    this.active.delete(approvalId);
+    try { n.close?.(); }
+    catch (err) { this.onError(err as Error, { phase: 'close' }); }
   }
 }

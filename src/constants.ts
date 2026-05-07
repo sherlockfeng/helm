@@ -6,7 +6,12 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const HELM_HOME = join(homedir(), '.helm');
+// Phase 52: HELM_HOME env var lets e2e tests (and any CI runner) point a
+// fresh Electron launch at a disposable directory so it doesn't fight the
+// developer's running Helm for the SQLite WAL / bridge socket / lock.
+export const HELM_HOME = process.env['HELM_HOME']
+  ? process.env['HELM_HOME']
+  : join(homedir(), '.helm');
 
 export const PATHS = {
   configFile: join(HELM_HOME, 'config.json'),

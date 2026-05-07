@@ -573,6 +573,42 @@ describe('/api/bindings', () => {
     const r = await fetchJson('/api/bindings/ghost', { method: 'DELETE' });
     expect(r.status).toBe(404);
   });
+
+  // ── Phase 39: cancel pending bind ─────────────────────────────────────
+  describe('DELETE /api/bindings/pending/:code (Phase 39)', () => {
+    it('removes a live pending code, returns ok + code', async () => {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      db.prepare(`INSERT INTO pending_binds (code, channel, expires_at) VALUES (?, ?, ?)`)
+        .run('LIVE01', 'lark', future);
+
+      const r = await fetchJson('/api/bindings/pending/LIVE01', { method: 'DELETE' });
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ ok: true, code: 'LIVE01' });
+      expect(db.prepare(`SELECT 1 FROM pending_binds WHERE code = ?`).get('LIVE01'))
+        .toBeUndefined();
+    });
+
+    it('returns 404 for an unknown code', async () => {
+      const r = await fetchJson('/api/bindings/pending/NEVER', { method: 'DELETE' });
+      expect(r.status).toBe(404);
+    });
+
+    it('attack: expired code returns 404 (matches consume\'s ux), still cleans the row', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      db.prepare(`INSERT INTO pending_binds (code, channel, expires_at) VALUES (?, ?, ?)`)
+        .run('STALE', 'lark', past);
+      const r = await fetchJson('/api/bindings/pending/STALE', { method: 'DELETE' });
+      expect(r.status).toBe(404);
+      // Even if the API returned 404, the row got purged so it doesn't linger.
+      expect(db.prepare(`SELECT 1 FROM pending_binds WHERE code = ?`).get('STALE'))
+        .toBeUndefined();
+    });
+
+    it('attack: GET on the cancel endpoint returns 405', async () => {
+      const r = await fetchJson('/api/bindings/pending/anything');
+      expect(r.status).toBe(405);
+    });
+  });
 });
 
 describe('/api/cycles/:id/complete (B1)', () => {

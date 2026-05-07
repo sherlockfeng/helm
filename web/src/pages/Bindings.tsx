@@ -50,10 +50,12 @@ function PendingRow({
   pending,
   chats,
   onBound,
+  onCancelled,
 }: {
   pending: PendingBind;
   chats: ActiveChat[];
   onBound: () => void;
+  onCancelled: () => void;
 }) {
   const [hostSessionId, setHostSessionId] = useState<string>(chats[0]?.id ?? '');
   const [submitting, setSubmitting] = useState(false);
@@ -66,6 +68,24 @@ function PendingRow({
     try {
       await helmApi.consumePendingBind(pending.code, hostSessionId);
       onBound();
+    } catch (err) {
+      const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Phase 39: dismiss a pending code without consuming it. Useful for
+  // clearing accidental codes / stale entries instead of waiting for the
+  // 10-minute TTL. Confirms before deleting since the code is then gone.
+  async function cancel(): Promise<void> {
+    if (!window.confirm(`Cancel pending bind code ${pending.code}?\n\nThis discards the code without binding. The user will need to send "@bot bind chat" again to get a new one.`)) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await helmApi.cancelPendingBind(pending.code);
+      onCancelled();
     } catch (err) {
       const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
       setError(msg);
@@ -95,9 +115,22 @@ function PendingRow({
       </div>
 
       {chats.length === 0 ? (
-        <p className="muted" style={{ marginTop: 12, marginBottom: 0 }}>
-          No active Cursor chats — start one and it'll appear here.
-        </p>
+        <>
+          <p className="muted" style={{ marginTop: 12, marginBottom: 0 }}>
+            No active Cursor chats — start one and it'll appear here.
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button
+              type="button"
+              className="danger-outline"
+              disabled={submitting}
+              onClick={() => { void cancel(); }}
+              aria-label={`Cancel pending bind code ${pending.code}`}
+            >
+              {submitting ? 'Cancelling…' : 'Cancel'}
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
@@ -120,6 +153,18 @@ function PendingRow({
               onClick={() => { void bind(); }}
             >
               {submitting ? 'Binding…' : 'Bind'}
+            </button>
+            {/* Phase 39: cancel a pending code without binding it.
+                Lives next to Bind so the user can dismiss accidental /
+                stale codes inline. */}
+            <button
+              type="button"
+              className="danger-outline"
+              disabled={submitting}
+              onClick={() => { void cancel(); }}
+              aria-label={`Cancel pending bind code ${pending.code}`}
+            >
+              Cancel
             </button>
           </div>
           {error && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p>}
@@ -231,6 +276,7 @@ export function BindingsPage() {
             pendingQuery.reload();
             bindingsQuery.reload();
           }}
+          onCancelled={() => pendingQuery.reload()}
         />
       ))}
 

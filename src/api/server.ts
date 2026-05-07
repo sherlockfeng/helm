@@ -40,6 +40,8 @@ import {
 import { listDocAuditsByTask } from '../storage/repos/doc-audit.js';
 import {
   deleteChannelBinding,
+  deletePendingBind,
+  getPendingBind,
   listAllChannelBindings,
   listPendingBinds,
 } from '../storage/repos/channel-bindings.js';
@@ -425,6 +427,24 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/bindings/pending') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return send(res, 200, { pending: listPendingBinds(deps.db) });
+      }
+
+      // Phase 39: cancel a pending bind code without consuming it. Lets the
+      // user dismiss accidental / stale codes from the UI instead of waiting
+      // for the 10-minute TTL. Idempotent: 404 if the code never existed
+      // (or was already consumed / expired-and-purged).
+      const pendingDeleteMatch = url.pathname.match(/^\/api\/bindings\/pending\/([^/]+)$/);
+      if (pendingDeleteMatch) {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        const code = pendingDeleteMatch[1]!;
+        // We need to know whether the row existed before deleting so the API
+        // can return 404 vs 200 distinctly. getPendingBind also filters out
+        // expired rows; treat those as 404 to match the consume path's UX.
+        const existed = Boolean(getPendingBind(deps.db, code));
+        deletePendingBind(deps.db, code);
+        if (!existed) return send(res, 404, { error: 'unknown_or_expired_code' });
+        deps.logger?.info('pending_bind_cancelled', { data: { code } });
+        return send(res, 200, { ok: true, code });
       }
 
       if (url.pathname === '/api/bindings/consume') {

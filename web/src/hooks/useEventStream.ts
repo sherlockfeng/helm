@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { AppEvent, AppEventType } from '../api/types.js';
+import { apiUrl } from '../api/base-url.js';
 
 export interface UseEventStreamOptions {
   /** Filter to a subset of event types; default = all. */
@@ -34,7 +35,9 @@ export function useEventStream(
 
     const connect = (): void => {
       if (cancelled) return;
-      source = new EventSource(path);
+      // Phase 50: under file:// the bare path resolves against the wrong
+      // origin; apiUrl() prepends http://127.0.0.1:<port> in that case.
+      source = new EventSource(apiUrl(path));
 
       source.onopen = () => { backoffMs = 250; };
 

@@ -52,7 +52,19 @@ function createMainWindow(): void {
   if (isDev) {
     void mainWindow.loadURL('http://localhost:5173');
   } else {
-    void mainWindow.loadFile(path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'));
+    // Phase 50: pass the live HTTP API origin to the renderer via the URL
+    // hash so the preload can expose it as `window.helm.apiBase`. Under
+    // file://, relative `/api/...` URLs don't resolve to anywhere useful —
+    // the renderer needs the explicit `http://127.0.0.1:<port>` origin.
+    // helmApp may not have started yet on the very first window; bootHelm
+    // reloads the URL once the port is known (see bootHelm below).
+    const port = helmApp?.httpPort();
+    const base = port ? `http://127.0.0.1:${port}` : '';
+    const hash = base ? `#apiBase=${encodeURIComponent(base)}` : '';
+    void mainWindow.loadFile(
+      path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'),
+      { hash: hash.replace(/^#/, '') },
+    );
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());

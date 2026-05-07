@@ -133,6 +133,13 @@ export const helmApi = {
   pendingBinds: () => request<{ pending: PendingBind[] }>('GET', '/api/bindings/pending'),
   consumePendingBind: (code: string, hostSessionId: string) =>
     request<{ binding: { id: string } }>('POST', '/api/bindings/consume', { code, hostSessionId }),
+  // Phase 39: cancel a pending bind without consuming it. Useful for clearing
+  // accidental / stale codes instead of waiting out the 10-minute TTL.
+  cancelPendingBind: (code: string) =>
+    request<{ ok: true; code: string }>(
+      'DELETE',
+      `/api/bindings/pending/${encodeURIComponent(code)}`,
+    ),
   unbind: (bindingId: string) =>
     request<{ ok: true }>('DELETE', `/api/bindings/${encodeURIComponent(bindingId)}`),
 

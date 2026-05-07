@@ -181,6 +181,33 @@ describe('normalizeCursorEvent — field-name aliases', () => {
     expect(normalizeCursorEvent({ event: 'sessionStart', session_id: 's', workspace_path: '/c' }).event.cwd).toBe('/c');
   });
 
+  it('Phase 32: accepts workspace_roots array (Cursor 3.3+ wire format)', () => {
+    // Cursor 3.3+ ships an array; helm picks the first element as canonical
+    // project root. Verified against a live capture of session_start payloads.
+    expect(normalizeCursorEvent({
+      event: 'sessionStart', session_id: 's',
+      workspace_roots: ['/Users/x/projects/depscope'],
+    }).event.cwd).toBe('/Users/x/projects/depscope');
+
+    // camelCase variant.
+    expect(normalizeCursorEvent({
+      event: 'sessionStart', session_id: 's',
+      workspaceRoots: ['/Users/x/projects/repo-1', '/Users/x/projects/repo-2'],
+    }).event.cwd).toBe('/Users/x/projects/repo-1');
+
+    // Empty array falls through to the singular aliases.
+    expect(normalizeCursorEvent({
+      event: 'sessionStart', session_id: 's',
+      workspace_roots: [], cwd: '/fallback',
+    }).event.cwd).toBe('/fallback');
+
+    // Non-string array elements are ignored — falls through to singular.
+    expect(normalizeCursorEvent({
+      event: 'sessionStart', session_id: 's',
+      workspace_roots: [42], cwd: '/fallback',
+    }).event.cwd).toBe('/fallback');
+  });
+
   it('prompt aliases', () => {
     expect((normalizeCursorEvent({ event: 'beforeSubmitPrompt', session_id: 's', message: 'a' }).event as HostPromptSubmitEvent).prompt).toBe('a');
     expect((normalizeCursorEvent({ event: 'beforeSubmitPrompt', session_id: 's', text: 'b' }).event as HostPromptSubmitEvent).prompt).toBe('b');

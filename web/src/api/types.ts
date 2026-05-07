@@ -15,6 +15,8 @@ export interface ActiveChat {
   cycleId?: string;
   /** Phase 25: chat → role binding for sessionStart auto-inject. */
   roleId?: string;
+  /** Phase 32: opening user prompt — used as the chat's human-readable label. */
+  firstPrompt?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

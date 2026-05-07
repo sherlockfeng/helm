@@ -67,12 +67,22 @@ function rawEventName(input: Record<string, unknown>, explicitEvent?: string): s
 }
 
 function getCwd(input: Record<string, unknown>): string {
+  // Cursor 3.3+ ships an array `workspace_roots` (per the live debug capture);
+  // older payloads / other hosts still use the singular forms. Take the first
+  // element of an array — multi-root workspaces are rare and the first entry
+  // is the canonical project root in Cursor's UI.
+  const roots = input['workspace_roots'] ?? input['workspaceRoots'];
+  if (Array.isArray(roots) && roots.length > 0 && typeof roots[0] === 'string' && roots[0]) {
+    return roots[0];
+  }
   return firstString(
     input['cwd'],
     input['working_directory'],
     input['workingDirectory'],
     input['workspace_path'],
     input['workspacePath'],
+    input['workspace_root'],
+    input['workspaceRoot'],
     input['project_root'],
     input['projectRoot'],
   );

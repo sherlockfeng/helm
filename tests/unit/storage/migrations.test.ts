@@ -63,6 +63,12 @@ describe('migrations', () => {
     expect(indexes).toContain('idx_host_sessions_role');
   });
 
+  it('Phase 32 migration: host_sessions.first_prompt column', () => {
+    runMigrations(db);
+    const cols = (db.prepare(`PRAGMA table_info(host_sessions)`).all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain('first_prompt');
+  });
+
   it('attack: foreign_keys pragma is respected by runMigrations (FK violation throws)', () => {
     runMigrations(db);
     // WAL is not available in :memory: databases; foreign_keys should be enforced

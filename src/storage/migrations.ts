@@ -215,6 +215,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_host_sessions_role ON host_sessions(role_id) WHERE role_id IS NOT NULL;
     `,
   },
+  {
+    version: 4,
+    description: 'host_sessions.first_prompt — Phase 32 capture user opening message for chat label',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN first_prompt TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

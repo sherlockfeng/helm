@@ -124,6 +124,10 @@ export interface HostSession {
   /** Phase 25: optional role binding; LocalRolesProvider injects this role's
    * system prompt + chunks at sessionStart. */
   roleId?: string;
+  /** Phase 32: first user prompt seen on this session. Captured by the
+   * host_prompt_submit handler on the first message and never overwritten,
+   * so the UI has a stable human-readable label per chat. */
+  firstPrompt?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

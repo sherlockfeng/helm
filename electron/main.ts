@@ -42,7 +42,12 @@ function createMainWindow(): void {
     title: 'Helm',
     show: false,
     webPreferences: {
-      preload: path.join(__projectDir, 'preload.js'),
+      // tsup bundles `electron/preload.ts` as CJS → `dist/electron/preload.cjs`.
+      // Until Phase 51 this file pointed at `preload.js` and Electron logged a
+      // silent ENOENT — fine for years because nothing in the renderer
+      // touched `window.helm`, then immediately fatal once Phase 50 made the
+      // renderer rely on the preload-injected `apiBase` for API calls.
+      preload: path.join(__projectDir, 'preload.cjs'),
       contextIsolation: true,
       sandbox: true,
     },
@@ -56,19 +61,37 @@ function createMainWindow(): void {
     // hash so the preload can expose it as `window.helm.apiBase`. Under
     // file://, relative `/api/...` URLs don't resolve to anywhere useful —
     // the renderer needs the explicit `http://127.0.0.1:<port>` origin.
-    // helmApp may not have started yet on the very first window; bootHelm
-    // reloads the URL once the port is known (see bootHelm below).
     const port = helmApp?.httpPort();
-    const base = port ? `http://127.0.0.1:${port}` : '';
-    const hash = base ? `#apiBase=${encodeURIComponent(base)}` : '';
-    void mainWindow.loadFile(
-      path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'),
-      { hash: hash.replace(/^#/, '') },
-    );
+    const indexHtml = path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html');
+    if (port) {
+      void mainWindow.loadFile(indexHtml, {
+        hash: `apiBase=${encodeURIComponent(`http://127.0.0.1:${port}`)}`,
+      });
+    } else {
+      // Pre-boot edge case — let the renderer fall back to its built-in
+      // default port (17317).
+      void mainWindow.loadFile(indexHtml);
+    }
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('closed', () => { mainWindow = null; });
+
+  // Mirror renderer console + load failures to main stderr so packaging
+  // issues (missing assets, preload ENOENT, JS exceptions) surface in
+  // `~/.helm/logs/` without anyone manually opening devtools. Cheap in
+  // production — only fires on actual log calls. Devtools opens detached
+  // when `HELM_DEV_TOOLS=1` so the next renderer regression is one env
+  // var away from being inspectable.
+  mainWindow.webContents.on('console-message', (_e, _level, message, line, sourceId) => {
+    process.stderr.write(`[renderer] ${message} (${sourceId}:${line})\n`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    process.stderr.write(`[renderer:did-fail-load] ${code} ${desc} url=${url}\n`);
+  });
+  if (process.env['HELM_DEV_TOOLS'] === '1') {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 }
 
 function focusWindow(): void {

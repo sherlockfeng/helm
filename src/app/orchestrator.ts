@@ -58,6 +58,7 @@ import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
+  closeStaleHostSessions,
   getHostSession,
   setHostSessionFirstPrompt,
   upsertHostSession,
@@ -85,6 +86,13 @@ export interface HelmAppDeps {
   httpPort?: number;
   /** Override approval default timeout (ms). Defaults to DEFAULT_TIMEOUTS.approvalMs. */
   approvalTimeoutMs?: number;
+  /**
+   * Phase 47: cutoff age (ms) for stale-pruning host_sessions on boot.
+   * Sessions whose `last_seen_at` is older than `now - cutoff` are flipped to
+   * status='closed'. Defaults to 24h. Tests dial this down to a few ms to
+   * exercise the prune deterministically.
+   */
+  staleSessionCutoffMs?: number;
   /**
    * Lark channel — opt-in. When provided, the orchestrator builds a LarkChannel
    * and wires its events into the registry / approval policy / channel queue.
@@ -143,6 +151,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // (`roles.length === 0` short-circuit). Idempotent: skips rows that already
   // exist by id.
   seedBuiltinRoles(deps.db);
+
+  // Phase 47: stale-prune host_sessions. Cursor doesn't fire any "chat ended"
+  // signal when the user Cmd-W's a tab, so without this every chat ever
+  // opened sits as 'active' forever and inflates the menubar tray's "active
+  // chats" count + the Active Chats list. 24h cutoff is generous — anything
+  // genuinely in use will have a hook event within that window (sessionStart,
+  // beforeSubmitPrompt, afterAgentResponse all bump last_seen_at).
+  const staleCutoff = new Date(
+    Date.now() - (deps.staleSessionCutoffMs ?? 24 * 60 * 60 * 1000),
+  ).toISOString();
+  const pruned = closeStaleHostSessions(deps.db, staleCutoff);
+  if (pruned > 0) {
+    log.info('boot_pruned_stale_sessions', {
+      data: { count: pruned, cutoff: staleCutoff },
+    });
+  }
 
   // Event bus — orchestrator publishes high-level events here; the HTTP API's
   // /api/events SSE endpoint subscribes and forwards to the renderer.

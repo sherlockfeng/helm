@@ -196,6 +196,27 @@ export function setHostSessionFirstPrompt(
 }
 
 /**
+ * Phase 47: mark sessions whose `last_seen_at` is older than `cutoffIso` as
+ * closed. Cursor never fires a `chat ended` hook when the user Cmd-W's a
+ * tab, so without this every chat ever opened sits as 'active' forever and
+ * inflates the menubar tray's "active chats" count + the Active Chats list.
+ * Returns the number of rows flipped to closed.
+ *
+ * Called by the orchestrator on boot. The cutoff defaults to 24h ago, which
+ * comfortably covers any reasonable working session while pruning anything
+ * that's clearly been abandoned (laptop closed overnight / restart / etc.).
+ */
+export function closeStaleHostSessions(
+  db: Database.Database,
+  cutoffIso: string,
+): number {
+  const result = db.prepare(
+    `UPDATE host_sessions SET status = 'closed' WHERE status = 'active' AND last_seen_at < ?`,
+  ).run(cutoffIso);
+  return result.changes;
+}
+
+/**
  * Phase 36: hard-delete a host_session row. FK `ON DELETE CASCADE` on
  * `channel_bindings.host_session_id` (and its child message queue) takes
  * care of dependents in one shot — provided `PRAGMA foreign_keys=ON`,

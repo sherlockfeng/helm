@@ -84,6 +84,31 @@ describe('createHelmApp — boot/shutdown', () => {
     await expect(app.stop()).resolves.toBeUndefined();
   });
 
+  it('Phase 47: stale-prunes host_sessions on boot — flips old active rows to closed, leaves fresh ones alone', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const stale = '2025-01-01T00:00:00.000Z';
+    const fresh = new Date().toISOString();
+    upsertHostSession(db, {
+      id: 'old', host: 'cursor', status: 'active', firstSeenAt: stale, lastSeenAt: stale,
+    });
+    upsertHostSession(db, {
+      id: 'new', host: 'cursor', status: 'active', firstSeenAt: fresh, lastSeenAt: fresh,
+    });
+
+    createHelmApp({
+      db, loggers, bridgeSocketPath: socketPath,
+      // 1h cutoff — `old` is years stale, `new` is now.
+      staleSessionCutoffMs: 60 * 60 * 1000,
+    });
+
+    expect(
+      (db.prepare(`SELECT status FROM host_sessions WHERE id = 'old'`).get() as { status: string }).status,
+    ).toBe('closed');
+    expect(
+      (db.prepare(`SELECT status FROM host_sessions WHERE id = 'new'`).get() as { status: string }).status,
+    ).toBe('active');
+  });
+
   it('Phase 34: seeds built-in roles on createHelmApp so /api/roles is non-empty before MCP boots', async () => {
     const loggers = createCapturingLoggerFactory();
     // Empty DB pre-condition.

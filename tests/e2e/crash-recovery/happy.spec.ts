@@ -36,8 +36,27 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import { createHelmApp, type HelmAppHandle } from '../../../src/app/orchestrator.js';
 import { createCapturingLoggerFactory } from '../../../src/logger/index.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { insertChannelBinding } from '../../../src/storage/repos/channel-bindings.js';
 import { runHook } from '../../../src/host/cursor/hook-entry.js';
 import { listPendingRequests } from '../../../src/storage/repos/approval.js';
+
+/**
+ * Phase 46a: bind the session to a fake Lark thread so the orchestrator's
+ * requireApproval gate routes through the pending path. Without this the
+ * gate auto-allows every request and no pending row is ever created.
+ */
+function seedLarkBinding(db: BetterSqlite3.Database, hostSessionId: string): void {
+  insertChannelBinding(db, {
+    id: `b_${hostSessionId}`,
+    channel: 'lark',
+    hostSessionId,
+    externalChat: 'oc_e2e',
+    externalThread: 'tr_e2e',
+    externalRoot: 'om_e2e',
+    waitEnabled: false,
+    createdAt: new Date().toISOString(),
+  });
+}
 
 let tmpDir: string;
 let dbPath: string;
@@ -121,6 +140,7 @@ describe('crash-recovery happy', () => {
       id: 'sess_recover', host: 'cursor', cwd: '/proj',
       status: 'active', firstSeenAt: now, lastSeenAt: now,
     });
+    seedLarkBinding(db, 'sess_recover');
     let app = await bootApp(db);
 
     // Step 2: fire a hook that creates a pending. The hook's outputP will

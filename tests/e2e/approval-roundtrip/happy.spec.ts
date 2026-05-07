@@ -16,7 +16,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { bootE2e, runHookViaBridge, waitFor, type E2eHarness } from '../_helpers/setup.js';
+import {
+  bootE2e,
+  runHookViaBridge,
+  seedLarkBinding,
+  waitFor,
+  type E2eHarness,
+} from '../_helpers/setup.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
 
 let harness: E2eHarness;
@@ -29,6 +35,9 @@ beforeEach(async () => {
         id: 'sess_e2e', host: 'cursor', cwd: '/proj',
         status: 'active', firstSeenAt: now, lastSeenAt: now,
       });
+      // Phase 46a: requireApproval gate auto-allows unbound chats. Seed a
+      // Lark binding so the full pending → settle path runs.
+      seedLarkBinding(db, 'sess_e2e');
     },
   });
 });

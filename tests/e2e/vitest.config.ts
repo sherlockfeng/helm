@@ -15,9 +15,11 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 60_000,
     /**
-     * E2e specs run in their own worker — booting a HelmApp opens a UDS
+     * E2e specs run in a single worker — booting a HelmApp opens a UDS
      * socket + HTTP server per spec; running them concurrent risks file/port
-     * contention. The unit suite stays parallel.
+     * contention. Tried multi-fork (Phase 53) — the extra worker boot cost
+     * actually slowed us down since the per-spec test runtime is already
+     * tiny (avg <30ms after the Phase 53 timeout fixes).
      */
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },

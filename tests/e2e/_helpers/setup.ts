@@ -79,6 +79,10 @@ export async function bootE2e(options: BootE2eOptions = {}): Promise<E2eHarness>
     httpPort: 0,
     waitPollMs: 500,
     approvalTimeoutMs: 2000,
+    // Phase 53: knowledge-provider timeout default is 5s in production but
+    // hanging-provider tests don't need that much patience to assert the
+    // timeout fires. 200ms keeps the slowest e2e test sub-second.
+    knowledgeGetContextMs: 200,
     ...options.deps,
   });
   await app.start();

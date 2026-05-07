@@ -67,10 +67,12 @@ describe('session-start-injection attack', () => {
 
     expect(r.additional_context).toContain('Fast');
     expect(r.additional_context).not.toContain('Slow');
-    // Aggregator's per-provider timeout (5s default) means the round trip
-    // should complete within ~6s. Generous bound to avoid flake.
-    expect(Date.now() - start).toBeLessThan(8000);
-  }, 10_000);
+    // Phase 53: e2e harness sets `knowledgeGetContextMs: 200` so the
+    // aggregator times out the hanging provider in ~200ms instead of the
+    // 5s production default. Generous bound to absorb CI jitter while
+    // still failing if the timeout regresses to the old 5s.
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
 
   it('canHandle false → provider skipped, no markdown contributed', async () => {
     harness.app.knowledge.register({

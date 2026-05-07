@@ -94,6 +94,15 @@ export interface HelmAppDeps {
    */
   staleSessionCutoffMs?: number;
   /**
+   * Phase 53: per-provider budget (ms) for `getSessionContext`. Defaults to
+   * `DEFAULT_TIMEOUTS.knowledgeGetContextMs` (5 s). The aggregator's
+   * hanging-provider e2e (`tests/e2e/session-start-injection/attack`) used
+   * to take 5 s on its own — 60% of the entire e2e wall time — because it
+   * had to wait the full default budget. Tests dial this to ~200 ms to
+   * exercise the same code path 25× faster.
+   */
+  knowledgeGetContextMs?: number;
+  /**
    * Lark channel — opt-in. When provided, the orchestrator builds a LarkChannel
    * and wires its events into the registry / approval policy / channel queue.
    * Tests inject a pre-built channel; production reads `helm config` and
@@ -329,7 +338,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       { hostSessionId: req.host_session_id, cwd: req.cwd },
       {
         canHandleTotalMs: DEFAULT_TIMEOUTS.knowledgeCanHandleTotalMs,
-        getContextTimeoutMs: DEFAULT_TIMEOUTS.knowledgeGetContextMs,
+        getContextTimeoutMs: deps.knowledgeGetContextMs ?? DEFAULT_TIMEOUTS.knowledgeGetContextMs,
         maxBytes: SESSION_CONTEXT_MAX_BYTES,
         onWarning: (msg, ctx) => deps.loggers.module('knowledge.aggregator').warn(msg, { data: ctx }),
       },

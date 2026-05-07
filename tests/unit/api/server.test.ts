@@ -147,6 +147,53 @@ describe('PUT /api/active-chats/:id/role (Phase 25)', () => {
   });
 });
 
+describe('DELETE /api/active-chats/:id (Phase 36)', () => {
+  function seedChat(id = 'sess-1'): void {
+    const now = new Date().toISOString();
+    upsertHostSession(db, { id, host: 'cursor', cwd: '/p', status: 'active', firstSeenAt: now, lastSeenAt: now });
+  }
+
+  it('default (cascade=false) marks status=closed; row stays in DB', async () => {
+    seedChat();
+    const r = await fetchJson('/api/active-chats/sess-1', { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect((r.body as { ok: true; cascade: boolean }).cascade).toBe(false);
+    // Row still present, but inactive — falls out of GET /api/active-chats.
+    const row = db.prepare('SELECT status FROM host_sessions WHERE id = ?').get('sess-1') as { status: string };
+    expect(row.status).toBe('closed');
+    const list = await fetchJson('/api/active-chats');
+    expect((list.body as { chats: unknown[] }).chats).toEqual([]);
+  });
+
+  it('cascade=true hard-deletes the row + cascades bindings (FK)', async () => {
+    seedChat();
+    // Stash a binding to confirm cascade.
+    db.prepare(`
+      INSERT INTO channel_bindings (id, channel, host_session_id, wait_enabled, created_at)
+      VALUES ('b1', 'lark', 'sess-1', 1, ?)
+    `).run(new Date().toISOString());
+
+    const r = await fetchJson('/api/active-chats/sess-1?cascade=true', { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect((r.body as { cascade: boolean }).cascade).toBe(true);
+
+    expect(db.prepare('SELECT count(*) AS n FROM host_sessions WHERE id = ?').get('sess-1')).toEqual({ n: 0 });
+    // FK ON DELETE CASCADE took care of channel_bindings.
+    expect(db.prepare('SELECT count(*) AS n FROM channel_bindings WHERE id = ?').get('b1')).toEqual({ n: 0 });
+  });
+
+  it('returns 404 when the host session is unknown', async () => {
+    const r = await fetchJson('/api/active-chats/ghost', { method: 'DELETE' });
+    expect(r.status).toBe(404);
+  });
+
+  it('attack: PATCH not allowed on the chat endpoint', async () => {
+    seedChat();
+    const r = await fetchJson('/api/active-chats/sess-1', { method: 'PATCH' });
+    expect(r.status).toBe(405);
+  });
+});
+
 describe('GET /api/approvals', () => {
   it('returns pending list', async () => {
     const now = new Date().toISOString();

@@ -4,6 +4,10 @@
  * Phase 25: each chat row has a role picker. Selecting a role binds the chat
  * to that role; the next session_start hook auto-injects the role's system
  * prompt + chunks via LocalRolesProvider.
+ *
+ * Phase 36: each row has Close + Delete buttons. Close (soft) marks
+ * status='closed' so the row falls out of the list but history is kept;
+ * Delete (cascade) removes the row + its bindings + queued messages.
  */
 
 import { useState } from 'react';
@@ -43,6 +47,25 @@ export function ChatsPage() {
     setRowError(null);
     try {
       await helmApi.setChatRole(hostSessionId, roleId);
+      reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setRowError({ id: hostSessionId, message: msg });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function closeChat(hostSessionId: string, cascade: boolean): Promise<void> {
+    const verb = cascade ? 'permanently delete this chat' : 'close this chat';
+    const detail = cascade
+      ? 'The session row, its bindings, and any queued Lark messages will be removed.'
+      : "It'll disappear from this list but the row + bindings stay for history.";
+    if (!window.confirm(`${verb}?\n\n${detail}`)) return;
+    setSavingId(hostSessionId);
+    setRowError(null);
+    try {
+      await helmApi.closeChat(hostSessionId, { cascade });
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
@@ -124,6 +147,29 @@ export function ChatsPage() {
               {rowError.message}
             </p>
           )}
+
+          {/* Phase 36: chat lifecycle controls. Close is soft (history kept);
+              Delete cascades to channel_bindings + queued messages. Both
+              prompt for confirmation via window.confirm. */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button
+              type="button"
+              disabled={savingId === chat.id}
+              onClick={() => { void closeChat(chat.id, false); }}
+              aria-label={`Close chat ${chat.id}`}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="danger-outline"
+              disabled={savingId === chat.id}
+              onClick={() => { void closeChat(chat.id, true); }}
+              aria-label={`Delete chat ${chat.id} and all bindings`}
+            >
+              Delete
+            </button>
+          </div>
         </article>
       ))}
     </>

@@ -65,6 +65,17 @@ export const helmApi = {
       { roleId },
     ),
 
+  // Phase 36: close (default — soft) or delete (?cascade=true — hard, cascades
+  // to channel_bindings + queued messages) a host_session. Emits session.closed
+  // so the renderer auto-refreshes.
+  closeChat: (hostSessionId: string, options: { cascade?: boolean } = {}) => {
+    const qs = options.cascade ? '?cascade=true' : '';
+    return request<{ ok: true; hostSessionId: string; cascade: boolean }>(
+      'DELETE',
+      `/api/active-chats/${encodeURIComponent(hostSessionId)}${qs}`,
+    );
+  },
+
   approvals: () => request<{ approvals: PendingApproval[] }>('GET', '/api/approvals'),
 
   decideApproval: (approvalId: string, decision: 'allow' | 'deny', reason?: string) =>

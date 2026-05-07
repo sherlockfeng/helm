@@ -22,7 +22,7 @@
 
 export type CommandIntent =
   | { kind: 'approval'; decision: 'allow' | 'deny'; remember: boolean; targetId?: string; scope?: string }
-  | { kind: 'bind' }
+  | { kind: 'bind'; label?: string }
   | { kind: 'unbind' }
   | { kind: 'disable_wait' }
   | { kind: 'help' }
@@ -48,6 +48,36 @@ const KNOWN_TOOL_KEYWORDS = new Set([
 
 function looksLikeMcpToolName(value: string): boolean {
   return /^mcp__[\w.-]+/.test(value);
+}
+
+/**
+ * Phase 36: extract a free-form annotation label from a `bind chat` message.
+ * Captures whatever the user wrote around the `bind chat` keyword that isn't:
+ *   - the `bind chat` / `绑定对话` keyword itself
+ *   - the `@bot…` mention (Lark already filters its mention spans before
+ *     handing us text, but we belt-and-suspenders strip leading `@<token>`)
+ *
+ * Examples:
+ *   "@bot dr bind chat"           → "dr"
+ *   "@bot bind chat for #issue-7" → "for #issue-7"
+ *   "@bot 绑定对话 调试转发"        → "调试转发"
+ *   "@bot bind chat"              → undefined  (no label, kind:'bind' stays)
+ *
+ * Capped at 80 chars so a wall-of-text doesn't blow up the UI.
+ */
+function extractBindLabel(text: string): string | undefined {
+  let stripped = text
+    // Remove `bind chat` / `绑定对话` keyword
+    .replace(BIND_CHAT_RE, ' ')
+    // Drop leading `@…` mentions (one or more)
+    .replace(/(?:^|\s)@\S+/g, ' ')
+    // Collapse whitespace
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!stripped) return undefined;
+  if (stripped.length > 80) stripped = stripped.slice(0, 79).trimEnd() + '…';
+  return stripped;
 }
 
 function classifyApprovalScope(suffix: string | undefined, remember: boolean): { targetId?: string; scope?: string } {
@@ -97,7 +127,10 @@ export function parseCommand(input: ParseInput): CommandIntent {
   // match `unbind`, not `bind chat`, so check unbind first.
   const mentioned = Boolean(input.mentioned);
   if (mentioned && UNBIND_RE.test(trimmed)) return { kind: 'unbind' };
-  if (mentioned && BIND_CHAT_RE.test(trimmed)) return { kind: 'bind' };
+  if (mentioned && BIND_CHAT_RE.test(trimmed)) {
+    const label = extractBindLabel(trimmed);
+    return label ? { kind: 'bind', label } : { kind: 'bind' };
+  }
   if (mentioned && DISABLE_WAIT_RE.test(trimmed)) return { kind: 'disable_wait' };
 
   // /help works mentioned-or-not, but bare "help" only counts when mentioned.

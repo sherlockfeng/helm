@@ -102,3 +102,17 @@ export function setHostSessionFirstPrompt(
     `UPDATE host_sessions SET first_prompt = ? WHERE id = ? AND first_prompt IS NULL`,
   ).run(prompt, id);
 }
+
+/**
+ * Phase 36: hard-delete a host_session row. FK `ON DELETE CASCADE` on
+ * `channel_bindings.host_session_id` (and its child message queue) takes
+ * care of dependents in one shot — provided `PRAGMA foreign_keys=ON`,
+ * which the helm DB connection always sets.
+ *
+ * Returns true when a row was actually removed; false when the id was
+ * unknown — lets the caller send 404 vs 200.
+ */
+export function deleteHostSession(db: Database.Database, id: string): boolean {
+  const result = db.prepare(`DELETE FROM host_sessions WHERE id = ?`).run(id);
+  return result.changes > 0;
+}

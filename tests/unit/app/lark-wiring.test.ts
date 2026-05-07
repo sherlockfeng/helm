@@ -170,6 +170,23 @@ describe('attachLarkChannel — bind handshake', () => {
     const code = codeMatch![1]!;
     expect(getPendingBind(db, code)?.channel).toBe('lark');
   });
+
+  it('Phase 36: "@bot dr bind chat" persists label="dr" in pending_binds and reply mentions it', async () => {
+    attach();
+    listener.emit(inboundMessage('@bot dr bind chat', { mentioned: true }));
+    await new Promise((r) => setTimeout(r, 5));
+
+    const reply = cli.runs.find((r) => {
+      const md = r.args[r.args.indexOf('--markdown') + 1];
+      return typeof md === 'string' && md.includes('Binding code');
+    });
+    const text = reply!.args[reply!.args.indexOf('--markdown') + 1] ?? '';
+    const code = /`([0-9A-F]{6})`/.exec(text)![1]!;
+    // Reply confirms the label so the user can see it stuck.
+    expect(text).toContain('label: "dr"');
+    // pending_binds row carries it for the consume step.
+    expect(getPendingBind(db, code)?.label).toBe('dr');
+  });
 });
 
 describe('attachLarkChannel — unbind / disable_wait', () => {
@@ -249,6 +266,17 @@ describe('consumePendingBind', () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     db.prepare(`INSERT INTO pending_binds (code, channel, expires_at) VALUES ('STALE','lark',?)`).run(past);
     expect(consumePendingBind(db, events, 'STALE', 's1')).toBeNull();
+  });
+
+  it('Phase 36: forwards pending_binds.label to channel_bindings.label on consume', () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    db.prepare(`
+      INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, label, expires_at)
+      VALUES ('CODE_DR', 'lark', 'oc_a', 'om_t', 'om_root', 'dr', ?)
+    `).run(expiresAt);
+
+    const created = consumePendingBind(db, events, 'CODE_DR', 's1');
+    expect(created?.label).toBe('dr');
   });
 
   it('attack: unknown code returns null', () => {

@@ -69,6 +69,14 @@ describe('migrations', () => {
     expect(cols).toContain('first_prompt');
   });
 
+  it('Phase 36 migration: pending_binds.label + channel_bindings.label columns', () => {
+    runMigrations(db);
+    const pendingCols = (db.prepare(`PRAGMA table_info(pending_binds)`).all() as { name: string }[]).map((c) => c.name);
+    const bindingsCols = (db.prepare(`PRAGMA table_info(channel_bindings)`).all() as { name: string }[]).map((c) => c.name);
+    expect(pendingCols).toContain('label');
+    expect(bindingsCols).toContain('label');
+  });
+
   it('attack: foreign_keys pragma is respected by runMigrations (FK violation throws)', () => {
     runMigrations(db);
     // WAL is not available in :memory: databases; foreign_keys should be enforced

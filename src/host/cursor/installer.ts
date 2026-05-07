@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { HOOK_MARKER, PATHS } from '../../constants.js';
 import type { HostInstallOptions, HostInstallResult } from '../types.js';
 
@@ -114,12 +115,52 @@ function desiredHook(ctx: InstallContext, event: string): HookEntry {
 }
 
 /** Resolve the path to the helm-hook bin script. Allow override for tests. */
-export function defaultHookBinPath(): string {
-  // npm bin dir is the canonical location once installed; fall back to repo bin/ for dev.
-  // The `bin` field in package.json points Cursor at this script via $PATH, but Cursor
-  // hooks need an absolute path.
-  // For now, infer from process.execPath's directory neighborhood; tests inject their own.
+export function defaultHookBinPath(env: NodeJS.ProcessEnv = process.env): string {
+  // Cursor hooks need an absolute path because the spawn env may not have
+  // the user's PATH wired (Cursor launches GUI-style). Search in priority:
+  //
+  //   1. HELM_HOOK_BIN env override — for packaged installs / advanced users
+  //   2. Repo's bin/helm-hook.mjs (resolved from this module's URL) — works
+  //      out-of-the-box for everyone running from a clone, no `pnpm link --global`
+  //      needed
+  //   3. The npm/global bin neighbour of process.execPath — only relevant once
+  //      helm is published & installed globally
+  //
+  // The previous implementation used (3) only, which silently broke for every
+  // dev not running `pnpm link --global` — Cursor would invoke a non-existent
+  // path and fail closed (failClosed: false) with no UI signal.
+  const fromEnv = env['HELM_HOOK_BIN'];
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+
+  const repoBin = resolveRepoHookBin();
+  if (repoBin && existsSync(repoBin)) return repoBin;
+
   return path.join(path.dirname(process.execPath), 'helm-hook');
+}
+
+/**
+ * Walk up from this compiled module to find `<repo>/bin/helm-hook.mjs`.
+ * Works whether called from `dist/cli/index.js` (esm bundle) or directly
+ * from src under tsx / vitest. Returns null when nothing matches — caller
+ * falls back to the global-bin guess.
+ */
+function resolveRepoHookBin(): string | null {
+  let here: string;
+  try {
+    here = fileURLToPath(import.meta.url);
+  } catch {
+    return null;
+  }
+  let dir = path.dirname(here);
+  // Walk up at most 6 levels looking for a sibling bin/helm-hook.mjs.
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, 'bin', 'helm-hook.mjs');
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 export function installCursorHooks(options: HostInstallOptions = {}, hookBinPath?: string): HostInstallResult {

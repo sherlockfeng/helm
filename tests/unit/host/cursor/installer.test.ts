@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ALL_CURSOR_EVENTS,
+  defaultHookBinPath,
   installCursorHooks,
   readHooksConfig,
   uninstallCursorHooks,
@@ -153,5 +154,29 @@ describe('uninstallCursorHooks', () => {
 describe('readHooksConfig', () => {
   it('returns empty config when file is absent', () => {
     expect(readHooksConfig(hooksPath)).toEqual({ version: 1, hooks: {} });
+  });
+});
+
+describe('defaultHookBinPath (Phase 33)', () => {
+  it('respects HELM_HOOK_BIN override', () => {
+    expect(defaultHookBinPath({ HELM_HOOK_BIN: '/custom/path/to/hook' }))
+      .toBe('/custom/path/to/hook');
+  });
+
+  it('whitespace-only HELM_HOOK_BIN is ignored — falls back to repo bin', () => {
+    const got = defaultHookBinPath({ HELM_HOOK_BIN: '   ' });
+    expect(got).toMatch(/bin\/helm-hook\.mjs$/);
+  });
+
+  it('without HELM_HOOK_BIN, resolves to the repo bin/helm-hook.mjs sibling', () => {
+    // Tests run from the repo, so the resolver should land on bin/helm-hook.mjs.
+    const got = defaultHookBinPath({});
+    expect(got).toMatch(/bin\/helm-hook\.mjs$/);
+    // Must be absolute so Cursor's spawn env can find it without PATH.
+    expect(got.startsWith('/')).toBe(true);
+  });
+
+  it('attack: empty env (no override, no PATH) still returns a string, never throws', () => {
+    expect(() => defaultHookBinPath({})).not.toThrow();
   });
 });

@@ -28,7 +28,7 @@ export default defineConfig([
     entry: {
       'cli/index': 'src/cli/index.ts',
       'host/cursor/hook-entry': 'src/host/cursor/hook-entry.ts',
-      'mcp/stdio': 'src/mcp/stdio.ts',
+      'mcp/stdio': 'src/mcp/run.ts',
     },
     outDir: 'dist',
     format: ['esm'],

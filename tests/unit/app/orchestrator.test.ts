@@ -63,6 +63,21 @@ describe('createHelmApp — boot/shutdown', () => {
     await app.stop();
     await expect(app.stop()).resolves.toBeUndefined();
   });
+
+  it('Phase 34: seeds built-in roles on createHelmApp so /api/roles is non-empty before MCP boots', async () => {
+    const loggers = createCapturingLoggerFactory();
+    // Empty DB pre-condition.
+    expect((db.prepare('SELECT count(*) AS n FROM roles').get() as { n: number }).n).toBe(0);
+
+    createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+
+    // Built-in roles are seeded synchronously inside createHelmApp — no
+    // start() needed. Without this, the Active Chats UI role picker is
+    // disabled because the renderer fetches /api/roles before the MCP
+    // stdio subprocess has any reason to be invoked.
+    const count = (db.prepare('SELECT count(*) AS n FROM roles').get() as { n: number }).n;
+    expect(count).toBeGreaterThan(0);
+  });
 });
 
 describe('createHelmApp — bridge handlers', () => {

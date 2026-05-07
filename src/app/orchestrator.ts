@@ -39,7 +39,7 @@ import { LarkChannel } from '../channel/lark/adapter.js';
 import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
-import { trainRole } from '../roles/library.js';
+import { seedBuiltinRoles, trainRole } from '../roles/library.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -125,6 +125,14 @@ export interface HelmAppHandle {
 
 export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const log: Logger = deps.loggers.module('app');
+
+  // Phase 34: seed built-in roles on boot. The class docstring (§7.3 step 1)
+  // already promised this, but the code only did it inside createMcpServer —
+  // so until Cursor first invoked the MCP stdio subprocess, the roles table
+  // was empty and the Active Chats UI's role dropdown was disabled
+  // (`roles.length === 0` short-circuit). Idempotent: skips rows that already
+  // exist by id.
+  seedBuiltinRoles(deps.db);
 
   // Event bus — orchestrator publishes high-level events here; the HTTP API's
   // /api/events SSE endpoint subscribes and forwards to the renderer.

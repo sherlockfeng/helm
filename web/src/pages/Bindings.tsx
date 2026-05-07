@@ -10,7 +10,7 @@
  * the lists refresh without polling.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
@@ -60,6 +60,17 @@ function PendingRow({
   const [hostSessionId, setHostSessionId] = useState<string>(chats[0]?.id ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Phase 40: chats load asynchronously — when this row mounts before
+  // chatsQuery resolves, useState locks `hostSessionId` to ''. The native
+  // <select> then visually shows the first option (because no value matches
+  // empty), but state stays '', so Bind reports "Select a Cursor chat first"
+  // even though the user sees a valid choice. Sync once chats arrive.
+  useEffect(() => {
+    if (!hostSessionId && chats.length > 0) {
+      setHostSessionId(chats[0]!.id);
+    }
+  }, [chats, hostSessionId]);
 
   async function bind(): Promise<void> {
     if (!hostSessionId) { setError('Select a Cursor chat first.'); return; }

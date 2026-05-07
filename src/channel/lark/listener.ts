@@ -107,7 +107,7 @@ function parseInboundMessage(obj: Record<string, unknown>): LarkInboundMessage |
     : obj);
   const messageId = asString(message['message_id'] ?? message['messageId']);
   const chatId = asString(message['chat_id'] ?? message['chatId']);
-  const text = asString(
+  const rawText = asString(
     message['text']
     ?? (typeof message['content'] === 'string' ? message['content'] : ''),
   );
@@ -117,7 +117,18 @@ function parseInboundMessage(obj: Record<string, unknown>): LarkInboundMessage |
   const mentions = (message['mentions'] && Array.isArray(message['mentions']))
     ? (message['mentions'] as unknown[])
     : [];
-  const mentioned = mentions.length > 0 || /@/.test(text);
+  const mentioned = mentions.length > 0 || /@/.test(rawText);
+
+  // Phase 38: strip mention spans from the visible text. Lark renders
+  // multi-word display names like "chat with cursor" as a single mention
+  // bubble, but the text payload contains "@chat with cursor" as plain
+  // characters — so a naive "@\S+" strip leaves "with cursor" behind, which
+  // contaminates the bind label and any text we might inject back into Cursor.
+  // We strip in priority order:
+  //   1. Each mention.name from the `mentions` array (most reliable)
+  //   2. Each mention.key (placeholder form like @_user_1)
+  //   3. Generic `@\S+` as last resort
+  const text = stripMentions(rawText, mentions);
 
   return {
     kind: 'message',
@@ -130,6 +141,28 @@ function parseInboundMessage(obj: Record<string, unknown>): LarkInboundMessage |
     receivedAt: new Date().toISOString(),
     raw: obj,
   };
+}
+
+function stripMentions(text: string, mentions: readonly unknown[]): string {
+  let out = text;
+  for (const m of mentions) {
+    if (!m || typeof m !== 'object') continue;
+    const mention = m as Record<string, unknown>;
+    const name = asString(mention['name']);
+    const key = asString(mention['key']);
+    if (name) {
+      // Match `@<name>` with optional surrounding whitespace; case-insensitive
+      // so "@Chat" / "@chat" / "@CHAT" all collapse.
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(`@${escaped}\\b`, 'gi'), '');
+    }
+    if (key) {
+      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(escaped, 'g'), '');
+    }
+  }
+  // Collapse the whitespace left behind by removing the mention spans.
+  return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 function parseCardAction(obj: Record<string, unknown>): LarkCardAction | null {

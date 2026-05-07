@@ -171,6 +171,75 @@ describe('listener — startup + event parsing', () => {
     expect(msg.text).toBe('hello');
   });
 
+  it('Phase 41a: real Lark schema-2.0 wraps message under event.message + text inside content JSON', () => {
+    const listener = makeListener();
+    listener.onEvent((e) => events.push(e));
+    listener.start();
+
+    // Captured live from `lark-cli event +subscribe --as bot` (no --compact)
+    // for an "@chat with cursor 测试 mention" message. The real wire format
+    // wraps message under `event.message` and stores text inside `content`
+    // as a JSON string. helm's old parser saw obj.message (undefined) → fell
+    // through to obj → mentions=[] → strip was a no-op.
+    cli.current().emitStdout(JSON.stringify({
+      schema: '2.0',
+      header: {
+        event_id: 'c7dc8fc90d399839c7b428d337f85b16',
+        event_type: 'im.message.receive_v1',
+        app_id: 'cli_a978e34fff389cb0',
+      },
+      event: {
+        message: {
+          chat_id: 'oc_7c6e730e284f3c2ecb16d8e4ad5d06c3',
+          chat_type: 'group',
+          content: '{"text":"@_user_1  测试 mention"}',
+          message_id: 'om_x100b50f7e59104a0d47b0173c737e6e',
+          message_type: 'text',
+          mentions: [{
+            id: { open_id: 'ou_86ca2e27bab1170fff059abf6d2c1765' },
+            key: '@_user_1',
+            mentioned_type: 'bot',
+            name: 'chat with cursor',
+          }],
+        },
+        sender: {
+          sender_id: { open_id: 'ou_4237f067ebfd5cd5960ebed1e7c2c23d' },
+          sender_type: 'user',
+        },
+      },
+    }));
+
+    expect(events).toHaveLength(1);
+    const msg = events[0] as LarkInboundMessage;
+    // Schema unwrap correctly grabbed the inner message
+    expect(msg.messageId).toBe('om_x100b50f7e59104a0d47b0173c737e6e');
+    expect(msg.chatId).toBe('oc_7c6e730e284f3c2ecb16d8e4ad5d06c3');
+    // content JSON parsed AND mention placeholder stripped
+    expect(msg.text).toBe('测试 mention');
+    expect(msg.mentioned).toBe(true);
+    // Sender extracted from event.sender.sender_id.open_id (schema-2.0 path)
+    expect(msg.senderId).toBe('ou_4237f067ebfd5cd5960ebed1e7c2c23d');
+  });
+
+  it('Phase 41a: content that isn\'t JSON falls back to raw string (defensive)', () => {
+    const listener = makeListener();
+    listener.onEvent((e) => events.push(e));
+    listener.start();
+
+    cli.current().emitStdout(JSON.stringify({
+      header: { event_type: 'im.message.receive_v1' },
+      event: {
+        message: {
+          chat_id: 'oc_x', message_id: 'om_x',
+          content: 'plain text not json',
+        },
+      },
+    }));
+
+    const msg = events[0] as LarkInboundMessage;
+    expect(msg.text).toBe('plain text not json');
+  });
+
   it('parses card.action.trigger', () => {
     const listener = makeListener();
     listener.onEvent((e) => events.push(e));

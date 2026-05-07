@@ -98,6 +98,79 @@ describe('createHelmApp — bridge handlers', () => {
     }
   });
 
+  it('Phase 43: host_prompt_submit auto-registers a session that pre-existed before helm started', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      // Pre-condition: helm has never seen this session id (chat opened before
+      // helm booted). The host_prompt_submit handler should still create the row.
+      expect(db.prepare(`SELECT 1 FROM host_sessions WHERE id = ?`).get('sess-old')).toBeUndefined();
+
+      const sessionStarted: Array<{ id: string }> = [];
+      app.events.on((e) => {
+        if (e.type === 'session.started') sessionStarted.push({ id: e.session.id });
+      });
+
+      await sendBridgeMessage(
+        { type: 'host_prompt_submit', host_session_id: 'sess-old', prompt: 'hi from old chat', cwd: '/proj-old' },
+        { socketPath, timeoutMs: 5000 },
+      );
+
+      const row = db.prepare(`SELECT cwd, status, first_prompt FROM host_sessions WHERE id = ?`).get('sess-old') as { cwd: string; status: string; first_prompt: string };
+      expect(row.cwd).toBe('/proj-old');
+      expect(row.status).toBe('active');
+      expect(row.first_prompt).toBe('hi from old chat');
+      expect(sessionStarted.map((e) => e.id)).toContain('sess-old');
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('Phase 43: host_stop on an unknown session also auto-registers (covers idle chats receiving Lark followups)', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath, waitPollMs: 50 });
+    await app.start();
+    try {
+      await sendBridgeMessage(
+        { type: 'host_stop', host_session_id: 'sess-stop' },
+        { socketPath, timeoutMs: 5000 },
+      );
+      const row = db.prepare(`SELECT status FROM host_sessions WHERE id = ?`).get('sess-stop') as { status: string } | undefined;
+      expect(row?.status).toBe('active');
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('Phase 43: existing row is updated, not re-created — session.started fires only first time', async () => {
+    const loggers = createCapturingLoggerFactory();
+    upsertHostSession(db, {
+      id: 'sess-known', host: 'cursor', cwd: '/proj', status: 'active',
+      firstSeenAt: '2024-01-01T00:00:00.000Z', lastSeenAt: '2024-01-01T00:00:00.000Z',
+    });
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      const sessionStarted: string[] = [];
+      app.events.on((e) => {
+        if (e.type === 'session.started') sessionStarted.push(e.session.id);
+      });
+
+      await sendBridgeMessage(
+        { type: 'host_prompt_submit', host_session_id: 'sess-known', prompt: 'next msg' },
+        { socketPath, timeoutMs: 5000 },
+      );
+      // last_seen_at bumped, but no session.started fired (already known)
+      const row = db.prepare(`SELECT first_seen_at, last_seen_at FROM host_sessions WHERE id = ?`).get('sess-known') as { first_seen_at: string; last_seen_at: string };
+      expect(row.first_seen_at).toBe('2024-01-01T00:00:00.000Z');
+      expect(row.last_seen_at).not.toBe('2024-01-01T00:00:00.000Z');
+      expect(sessionStarted).not.toContain('sess-known');
+    } finally {
+      await app.stop();
+    }
+  });
+
   it('host_approval_request returns "ask" via fallback when no policy + no UI decision', async () => {
     const loggers = createCapturingLoggerFactory();
     const app = createHelmApp({

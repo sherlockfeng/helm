@@ -315,6 +315,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // - lastSeenAt also bumps so Active Chats stays accurate during long chats
   //   that don't fire other hooks for a while.
   bridge.registerHandler('host_prompt_submit', async (req: HostPromptSubmitRequest): Promise<HostPromptSubmitResponse> => {
+    // Phase 43: auto-register the session if helm hasn't seen it yet. Common
+    // when a Cursor chat was already open before helm booted (or before the
+    // hooks were installed) — the user can now just send any message and the
+    // chat appears in Active Chats. Idempotent: existing rows update
+    // last_seen_at via the upsert ON CONFLICT path.
+    autoUpsertSession(deps.db, events, log, req.host_session_id, req.cwd);
     const trimmed = (req.prompt ?? '').trim();
     if (trimmed) {
       setHostSessionFirstPrompt(deps.db, req.host_session_id, trimmed);
@@ -335,6 +341,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // delivery problems. `suppressed=true` when no bindings → caller knows it
   // was intentionally a no-op (vs. quietly failing).
   bridge.registerHandler('host_agent_response', async (req: HostAgentResponseRequest): Promise<HostAgentResponseResponse> => {
+    // Phase 43: auto-register on agent reply too — covers chats that emit a
+    // response before any user prompt this session (rare, but graceful).
+    autoUpsertSession(deps.db, events, log, req.host_session_id);
     const text = (req.response_text ?? '').trim();
     if (!text) return { ok: true, suppressed: true };
 
@@ -372,6 +381,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     ?? deps.config?.approval?.waitPollMs
     ?? DEFAULT_TIMEOUTS.waitPollMs;
   bridge.registerHandler('host_stop', async (req: HostStopRequest): Promise<HostStopResponse> => {
+    autoUpsertSession(deps.db, events, log, req.host_session_id);
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
   });
 
@@ -633,4 +643,45 @@ function buildConfiguredProviders(
   }
 
   return providers;
+}
+
+/**
+ * Phase 43: ensure a host_session row exists for the given id, creating a
+ * minimal one if not. Called from every bridge handler so a Cursor chat
+ * that pre-existed before helm booted (or before the hooks were installed)
+ * gets registered the moment ANY hook event fires for it — instead of
+ * being invisible until the user reopens the chat.
+ *
+ * Idempotent: existing rows just bump last_seen_at via the upsert ON
+ * CONFLICT path. Emits `session.started` only on first sight so the
+ * renderer's Active Chats refreshes in real time.
+ */
+function autoUpsertSession(
+  db: Database.Database,
+  events: EventBus,
+  log: Logger,
+  hostSessionId: string,
+  cwd?: string,
+): void {
+  const existing = getHostSession(db, hostSessionId);
+  const now = new Date().toISOString();
+  upsertHostSession(db, {
+    id: hostSessionId,
+    host: 'cursor',
+    cwd: cwd ?? existing?.cwd,
+    composerMode: existing?.composerMode,
+    status: 'active',
+    firstSeenAt: existing?.firstSeenAt ?? now,
+    lastSeenAt: now,
+  });
+  if (!existing) {
+    const persisted = getHostSession(db, hostSessionId);
+    if (persisted) {
+      events.emit({ type: 'session.started', session: persisted });
+      log.session(hostSessionId).info('auto_register_session', {
+        event: 'auto_register',
+        data: { cwd: cwd ?? null, source: 'mid-event' },
+      });
+    }
+  }
 }

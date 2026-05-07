@@ -6,7 +6,7 @@
   "author": "sherlockfeng",
   "license": "MIT",
   "type": "module",
-  "main": "dist/electron/main.js",
+  "main": "dist/electron/main.cjs",
   "bin": {
     "helm": "./bin/helm.mjs",
     "helm-hook": "./bin/helm-hook.mjs"
@@ -17,7 +17,7 @@
   "scripts": {
     "dev:backend": "tsup --watch",
     "dev:web": "pnpm --filter helm-web dev",
-    "dev:electron": "electron dist/electron/main.js",
+    "dev:electron": "electron dist/electron/main.cjs",
     "build:backend": "tsup",
     "build:web": "pnpm --filter helm-web build",
     "build": "pnpm build:backend && pnpm build:web",

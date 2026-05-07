@@ -2,6 +2,13 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
+  // Phase 48: Electron loads the bundled SPA via `file://` in production
+  // (electron/main.ts → mainWindow.loadFile). Vite's default `base: '/'`
+  // produces `<script src="/assets/...">`, which file:// resolves against
+  // the filesystem root → 404 → white screen. `./` keeps references
+  // relative to index.html so the same build works under both file:// and
+  // any future http hosting.
+  base: './',
   plugins: [react()],
   server: {
     port: 5173,

@@ -87,7 +87,17 @@ function classifyEvent(parsed: unknown): LarkListenerEvent | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
 
-  const eventType = String(obj['event_type'] ?? obj['type'] ?? '');
+  // Phase 41a: Lark schema-2.0 puts event_type under `header.event_type`,
+  // not at the top level. Old (test-shape) events keep it flat. Try both.
+  const header = (obj['header'] && typeof obj['header'] === 'object'
+    ? obj['header'] as Record<string, unknown>
+    : undefined);
+  const eventType = String(
+    obj['event_type']
+    ?? obj['type']
+    ?? header?.['event_type']
+    ?? '',
+  );
   if (eventType === 'im.message.receive_v1' || eventType === 'message') {
     return parseInboundMessage(obj);
   }
@@ -102,18 +112,49 @@ function asString(v: unknown): string {
 }
 
 function parseInboundMessage(obj: Record<string, unknown>): LarkInboundMessage | null {
-  const message = (obj['message'] && typeof obj['message'] === 'object'
-    ? obj['message'] as Record<string, unknown>
-    : obj);
+  // Phase 41a: Lark schema-2.0 wraps the message under `obj.event.message`,
+  // not `obj.message`. The previous parser missed this layer entirely, so
+  // Phase 38's stripMentions never received the mentions array — and the
+  // queued/injected text retained the `@_user_1 ...` prefix. We unwrap
+  // defensively: try `obj.event` then fall back to `obj` so older /
+  // hand-shaped events (used by tests) still parse.
+  const eventBody = (obj['event'] && typeof obj['event'] === 'object' && !Array.isArray(obj['event']))
+    ? obj['event'] as Record<string, unknown>
+    : obj;
+  const message = (eventBody['message'] && typeof eventBody['message'] === 'object' && !Array.isArray(eventBody['message']))
+    ? eventBody['message'] as Record<string, unknown>
+    : eventBody;
   const messageId = asString(message['message_id'] ?? message['messageId']);
   const chatId = asString(message['chat_id'] ?? message['chatId']);
-  const rawText = asString(
-    message['text']
-    ?? (typeof message['content'] === 'string' ? message['content'] : ''),
-  );
+
+  // Phase 41a: Lark stores the visible text inside `content` as a JSON
+  // string, e.g. `"content":"{\"text\":\"@_user_1  hi\"}"`. The old parser
+  // passed the raw blob through unparsed, leaving JSON quoting in queue
+  // entries. Try structured paths first; only fall back to the raw
+  // `content` blob when neither `text` nor `content.text` resolves.
+  let rawText = asString(message['text']);
+  if (!rawText && typeof message['content'] === 'string') {
+    const contentStr = message['content'] as string;
+    try {
+      const parsed = JSON.parse(contentStr) as { text?: unknown };
+      if (parsed && typeof parsed.text === 'string') rawText = parsed.text;
+    } catch { /* not JSON */ }
+    if (!rawText) rawText = contentStr;
+  }
+
   if (!messageId || !chatId) return null;
   const threadId = asString(message['thread_id'] ?? message['threadId']) || undefined;
-  const senderId = asString(message['sender_id'] ?? message['senderId']) || undefined;
+  // Phase 41a: schema-2.0 sender path is `event.sender.sender_id.open_id`.
+  // Older shapes flatten — try both.
+  const senderObj = (eventBody['sender'] && typeof eventBody['sender'] === 'object')
+    ? eventBody['sender'] as Record<string, unknown>
+    : undefined;
+  const senderIdObj = senderObj && typeof senderObj['sender_id'] === 'object'
+    ? senderObj['sender_id'] as Record<string, unknown>
+    : undefined;
+  const senderId = asString(message['sender_id'] ?? message['senderId'])
+    || asString(senderIdObj?.['open_id'] ?? senderIdObj?.['openId'])
+    || undefined;
   const mentions = (message['mentions'] && Array.isArray(message['mentions']))
     ? (message['mentions'] as unknown[])
     : [];

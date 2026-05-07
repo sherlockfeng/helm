@@ -343,9 +343,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         command: deps.lark?.cliCommand ?? deps.config?.lark?.cliCommand,
         env: deps.lark?.env ?? deps.config?.lark?.env ?? process.env,
       }),
-      onListenerError: (err, where) => deps.loggers.module('channel.lark').warn('listener_error', {
-        event: where, data: { error: err.message },
-      }),
+      // Phase 37: stderr is downgraded to info (it's mostly version notices
+      // + proxy warnings from lark-cli — not actual errors). Real problems
+      // (spawn failures, parse errors, real process exits) stay at warn.
+      onListenerError: (err, where) => {
+        const log = deps.loggers.module('channel.lark');
+        if (where === 'stderr') {
+          log.info('listener_stderr', { event: where, data: { line: err.message } });
+        } else {
+          log.warn('listener_error', { event: where, data: { error: err.message } });
+        }
+      },
       onListenerStatus: (status) => deps.loggers.module('channel.lark').info('listener_status', {
         event: status,
       }),

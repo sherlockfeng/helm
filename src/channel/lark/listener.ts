@@ -57,7 +57,7 @@ export interface LarkListenerOptions {
   /** Cap on backoff. Default 30s. */
   maxBackoffMs?: number;
   /** Surface errors / lifecycle to the caller (logger glue). */
-  onError?: (err: Error, where: 'spawn' | 'parse' | 'process_exit') => void;
+  onError?: (err: Error, where: 'spawn' | 'parse' | 'process_exit' | 'stderr') => void;
   /** Notify on successful (re)connect — useful for status indicators. */
   onConnected?: () => void;
 }
@@ -206,9 +206,13 @@ export function createLarkListener(options: LarkListenerOptions): LarkListener {
 
     handle.onStdoutLine(onLine);
     handle.onStderrLine((line) => {
-      // lark-cli writes diagnostics to stderr — log a warning but don't tear
-      // down the listener. Empty stderr is normal.
-      if (line.trim()) onError(new Error(`stderr: ${line}`), 'process_exit');
+      // Phase 37: lark-cli writes diagnostics to stderr (proxy warnings,
+      // version notices, etc.). Previously labelled `process_exit` which made
+      // it look like the subprocess died — wrong category, very noisy.
+      // Now reported under its own `stderr` channel so the orchestrator can
+      // route at the right level (warn for actual problems, debug for the
+      // proxy/version chatter).
+      if (line.trim()) onError(new Error(line), 'stderr');
     });
     handle.onError((err) => onError(err, 'spawn'));
 

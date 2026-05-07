@@ -60,6 +60,12 @@ import { policyInputFromScope } from '../channel/lark/binding-resolver.js';
 import type { Logger } from '../logger/index.js';
 import type { EventBus } from '../events/bus.js';
 import type { HelmConfig } from '../config/schema.js';
+import {
+  McpHttpSseHub,
+  MCP_MESSAGES_PATH,
+  MCP_SSE_PATH,
+} from '../mcp/http-sse.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export interface HttpApiDeps {
   db: Database.Database;
@@ -126,6 +132,17 @@ export interface HttpApiDeps {
     documents: Array<{ filename: string; content: string }>;
     baseSystemPrompt?: string;
   }) => Promise<unknown>;
+  /**
+   * Phase 45: factory for the MCP HTTP/SSE transport. When set, the server
+   * exposes:
+   *   GET  /mcp/sse                    — opens an SSE stream
+   *   POST /mcp/messages?sessionId=X   — client→server JSON-RPC
+   * Each new SSE connection invokes `mcpFactory()` once to build a fresh
+   * McpServer. Cursor / Claude Desktop point their `mcp.json` at the URL
+   * form and skip the stdio entry entirely. When undefined, both endpoints
+   * return 501.
+   */
+  mcpFactory?: () => McpServer;
 }
 
 export interface HttpApiOptions {
@@ -202,6 +219,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
   const sseClients = new Set<http.ServerResponse>();
   let unsubscribeFromBus: (() => void) | undefined;
 
+  // Phase 45: MCP HTTP/SSE transport. Hub is created up-front (cheap — just
+  // an empty Map) so route handlers can dispatch even when no factory was
+  // supplied; without one, the routes 501.
+  const mcpHub = deps.mcpFactory
+    ? new McpHttpSseHub({ factory: deps.mcpFactory, ...(deps.logger ? { logger: deps.logger } : {}) })
+    : null;
+
   if (deps.events) {
     unsubscribeFromBus = deps.events.on((event) => {
       const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -223,6 +247,19 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/events') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return handleEvents(req, res, sseClients);
+      }
+
+      // Phase 45: MCP HTTP/SSE — also pre-body because /mcp/sse streams and
+      // /mcp/messages lets the SDK consume the request stream itself.
+      if (url.pathname === MCP_SSE_PATH) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        if (!mcpHub) return send(res, 501, { error: 'not_implemented', message: 'mcp factory not wired' });
+        return mcpHub.handleSse(req, res);
+      }
+      if (url.pathname === MCP_MESSAGES_PATH) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!mcpHub) return send(res, 501, { error: 'not_implemented', message: 'mcp factory not wired' });
+        return mcpHub.handleMessage(req, res, url.searchParams.get('sessionId'));
       }
 
       const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : '';
@@ -539,6 +576,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         try { client.end(); } catch { /* socket already gone */ }
       }
       sseClients.clear();
+      // Phase 45: close any live MCP SSE sessions too. The SDK transports own
+      // their own ServerResponse refs (separate from sseClients) so this
+      // matters for graceful shutdown of Cursor's connection.
+      if (mcpHub) await mcpHub.closeAll();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       deps.logger?.info('http_api stopped');
     },

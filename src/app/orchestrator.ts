@@ -67,6 +67,8 @@ import {
   listBindingsForSession,
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
+import { createMcpServer } from '../mcp/server.js';
+import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
 import { attachLarkChannel, type LarkWiringHandle } from './lark-wiring.js';
@@ -471,10 +473,41 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     };
   }
 
+  // Phase 45: MCP HTTP/SSE factory. Builds a fresh McpServer per SSE
+  // connection, reusing the orchestrator's already-built knowledge registry
+  // + workflow engine. Spawner / LLM client read liveConfig at factory
+  // invocation time so a Settings save → next-Cursor-reconnect picks up
+  // the new config without restarting helm itself.
+  function mcpFactory() {
+    let spawner;
+    try {
+      spawner = createCursorAgentSpawner({
+        mode: liveConfig.cursor.mode,
+        apiKey: liveConfig.cursor.apiKey,
+        modelId: liveConfig.cursor.model,
+      });
+    } catch {
+      // start_relay_chat_session will return an actionable errorResult.
+      spawner = undefined;
+    }
+    const llm = new CursorLlmClient({
+      apiKey: liveConfig.cursor.apiKey,
+      modelId: liveConfig.cursor.model,
+      mode: liveConfig.cursor.mode,
+    });
+    return createMcpServer({
+      db: deps.db,
+      knowledge,
+      ...(spawner ? { spawner } : {}),
+      llm,
+    });
+  }
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
       db: deps.db, registry, policy, events, logger: deps.loggers.module('api'),
+      mcpFactory,
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

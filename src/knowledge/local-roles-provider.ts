@@ -33,15 +33,22 @@ import type {
   KnowledgeSnippet,
 } from './types.js';
 
-export type RoleResolver = (ctx: KnowledgeContext) => string | undefined | Promise<string | undefined>;
+export type RoleResolver = (ctx: KnowledgeContext) =>
+  | string
+  | readonly string[]
+  | undefined
+  | Promise<string | readonly string[] | undefined>;
 
 export interface LocalRolesProviderOptions {
   db: Database.Database;
   embedFn: (text: string) => Promise<Float32Array>;
   /**
-   * Resolve the role bound to a given session (or context). Phase 9's UI
-   * surface plugs in here. When undefined, getSessionContext returns null
-   * (no automatic injection without an explicit binding).
+   * Phase 42: resolve the role(s) bound to a given session. Return:
+   *   - undefined / empty array → no auto-inject (provider returns null)
+   *   - a single role id (string) → legacy single-role behavior
+   *   - readonly string[] → concatenate every role's prompt + chunks
+   *
+   * The orchestrator wires this to read the host_session_roles join table.
    */
   resolveRoleId?: RoleResolver;
   /** TopK across all chunks. Default 5. */
@@ -77,24 +84,38 @@ export class LocalRolesProvider implements KnowledgeProvider {
 
   async getSessionContext(ctx: KnowledgeContext): Promise<string | null> {
     if (!this.resolveRoleId) return null;
-    const roleId = await this.resolveRoleId(ctx);
-    if (!roleId) return null;
-
-    const role = (() => {
-      try { return getRole(this.db, roleId); }
-      catch { return undefined; }
+    const resolved = await this.resolveRoleId(ctx);
+    const roleIds = (() => {
+      if (!resolved) return [];
+      if (typeof resolved === 'string') return [resolved];
+      return [...resolved];
     })();
-    if (!role) return null;
+    if (roleIds.length === 0) return null;
 
-    const lines: string[] = [`# Role: ${role.name}`, '', role.systemPrompt];
-    const chunks = getChunksForRole(this.db, roleId).slice(0, this.sessionContextChunkCap);
-    if (chunks.length > 0) {
-      lines.push('', '## Knowledge excerpts');
-      for (const chunk of chunks) {
-        lines.push('', chunk.chunkText);
+    // Phase 42: render each bound role as its own H1 block, separated by a
+    // blank line so Cursor sees clean section boundaries. A missing role
+    // (id pointed at a row that's been deleted) is silently skipped instead
+    // of failing the whole injection — UX trumps strictness here.
+    const blocks: string[] = [];
+    for (const roleId of roleIds) {
+      const role = (() => {
+        try { return getRole(this.db, roleId); }
+        catch { return undefined; }
+      })();
+      if (!role) continue;
+
+      const lines: string[] = [`# Role: ${role.name}`, '', role.systemPrompt];
+      const chunks = getChunksForRole(this.db, roleId).slice(0, this.sessionContextChunkCap);
+      if (chunks.length > 0) {
+        lines.push('', '## Knowledge excerpts');
+        for (const chunk of chunks) {
+          lines.push('', chunk.chunkText);
+        }
       }
+      blocks.push(lines.join('\n'));
     }
-    return lines.join('\n');
+    if (blocks.length === 0) return null;
+    return blocks.join('\n\n');
   }
 
   async search(query: string, _ctx?: KnowledgeContext): Promise<KnowledgeSnippet[]> {

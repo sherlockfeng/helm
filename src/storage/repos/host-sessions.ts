@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { HostSession } from '../types.js';
 
-function rowToHostSession(row: Record<string, unknown>): HostSession {
+function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string[] = []): HostSession {
   return {
     id: String(row['id']),
     host: String(row['host']),
@@ -10,11 +10,18 @@ function rowToHostSession(row: Record<string, unknown>): HostSession {
     campaignId: row['campaign_id'] != null ? String(row['campaign_id']) : undefined,
     cycleId: row['cycle_id'] != null ? String(row['cycle_id']) : undefined,
     roleId: row['role_id'] != null ? String(row['role_id']) : undefined,
+    roleIds,
     firstPrompt: row['first_prompt'] != null ? String(row['first_prompt']) : undefined,
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
   };
+}
+
+function fetchRoleIds(db: Database.Database, sessionId: string): string[] {
+  return (db.prepare(
+    `SELECT role_id FROM host_session_roles WHERE host_session_id = ? ORDER BY created_at ASC`,
+  ).all(sessionId) as { role_id: string }[]).map((r) => r.role_id);
 }
 
 export function upsertHostSession(db: Database.Database, s: HostSession): void {
@@ -49,11 +56,30 @@ export function upsertHostSession(db: Database.Database, s: HostSession): void {
 
 export function getHostSession(db: Database.Database, id: string): HostSession | undefined {
   const row = db.prepare(`SELECT * FROM host_sessions WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-  return row ? rowToHostSession(row) : undefined;
+  if (!row) return undefined;
+  return rowToHostSession(row, fetchRoleIds(db, id));
 }
 
 export function listActiveSessions(db: Database.Database): HostSession[] {
-  return (db.prepare(`SELECT * FROM host_sessions WHERE status = 'active' ORDER BY last_seen_at DESC`).all() as Record<string, unknown>[]).map(rowToHostSession);
+  // Single round-trip: pre-fetch role bindings for every active session and
+  // build an in-memory map keyed by host_session_id. Avoids N+1 lookups when
+  // the dashboard renders dozens of chats.
+  const rows = db.prepare(
+    `SELECT * FROM host_sessions WHERE status = 'active' ORDER BY last_seen_at DESC`,
+  ).all() as Record<string, unknown>[];
+  const ids = rows.map((r) => String(r['id']));
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const roleRows = db.prepare(
+    `SELECT host_session_id, role_id FROM host_session_roles
+     WHERE host_session_id IN (${placeholders}) ORDER BY created_at ASC`,
+  ).all(...ids) as { host_session_id: string; role_id: string }[];
+  const byId = new Map<string, string[]>();
+  for (const { host_session_id, role_id } of roleRows) {
+    const list = byId.get(host_session_id);
+    if (list) list.push(role_id); else byId.set(host_session_id, [role_id]);
+  }
+  return rows.map((r) => rowToHostSession(r, byId.get(String(r['id'])) ?? []));
 }
 
 export function updateHostSession(
@@ -74,16 +100,82 @@ export function updateHostSession(
 }
 
 /**
- * Phase 25: bind a chat session to a role (or pass null to unbind). The
- * LocalRolesProvider's resolveRoleId callback reads this column at
- * sessionStart to decide whose system prompt + chunks get auto-injected.
+ * @deprecated Phase 25 single-role API. Phase 42 replaced this with the
+ * `host_session_roles` join table; new code should use `addHostSessionRole`,
+ * `removeHostSessionRole`, or `setHostSessionRoles`. Kept as a thin shim
+ * over the new table so the existing PUT /api/active-chats/:id/role
+ * endpoint keeps working ("set the chat's role list to exactly this one
+ * role", or empty when null).
  */
 export function setHostSessionRole(
   db: Database.Database,
   id: string,
   roleId: string | null,
 ): void {
+  // Stay consistent with the join table. The legacy `role_id` column is
+  // also updated for any external tooling still reading it directly.
   db.prepare(`UPDATE host_sessions SET role_id = ? WHERE id = ?`).run(roleId, id);
+  setHostSessionRoles(db, id, roleId ? [roleId] : []);
+}
+
+/**
+ * Phase 42: add a single role to a chat. Idempotent — if the role is
+ * already attached, no-op. Returns true when something was inserted.
+ */
+export function addHostSessionRole(
+  db: Database.Database,
+  sessionId: string,
+  roleId: string,
+): boolean {
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO host_session_roles (host_session_id, role_id, created_at)
+    VALUES (?, ?, ?)
+  `).run(sessionId, roleId, new Date().toISOString());
+  return result.changes > 0;
+}
+
+/**
+ * Phase 42: remove a single role from a chat. Returns true when a row
+ * actually existed.
+ */
+export function removeHostSessionRole(
+  db: Database.Database,
+  sessionId: string,
+  roleId: string,
+): boolean {
+  const result = db.prepare(
+    `DELETE FROM host_session_roles WHERE host_session_id = ? AND role_id = ?`,
+  ).run(sessionId, roleId);
+  return result.changes > 0;
+}
+
+/**
+ * Phase 42: replace the chat's entire role set with the given list. Atomic
+ * via transaction; existing-but-not-in-list rows get dropped, new ones
+ * inserted. Caller is responsible for FK validity (each roleId must exist
+ * in the `roles` table — otherwise the INSERT throws).
+ */
+export function setHostSessionRoles(
+  db: Database.Database,
+  sessionId: string,
+  roleIds: readonly string[],
+): void {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO host_session_roles (host_session_id, role_id, created_at)
+    VALUES (?, ?, ?)
+  `);
+  const unique = [...new Set(roleIds)];
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(`DELETE FROM host_session_roles WHERE host_session_id = ?`).run(sessionId);
+    for (const roleId of unique) {
+      insert.run(sessionId, roleId, now);
+    }
+  })();
+}
+
+export function listHostSessionRoles(db: Database.Database, sessionId: string): string[] {
+  return fetchRoleIds(db, sessionId);
 }
 
 /**

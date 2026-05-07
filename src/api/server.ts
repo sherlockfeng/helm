@@ -23,9 +23,11 @@
 import http from 'node:http';
 import type Database from 'better-sqlite3';
 import {
+  addHostSessionRole,
   deleteHostSession,
   getHostSession,
   listActiveSessions,
+  removeHostSessionRole,
   setHostSessionRole,
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
@@ -227,13 +229,29 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return send(res, 200, { chats: sessions });
       }
 
-      // Phase 25: bind / unbind a chat to a role. The next session_start hook
-      // will inject this role's system prompt + chunks via LocalRolesProvider's
-      // resolveRoleId callback (orchestrator wires it to read host_sessions.role_id).
+      // Phase 25: bind / unbind a chat to a single role (legacy single-select
+      // path). Phase 42 turned this into a "replace whole role list with one
+      // role" semantic on top of host_session_roles.
       const chatRoleMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/role$/);
       if (chatRoleMatch) {
         if (req.method !== 'PUT') return methodNotAllowed(res);
         return handleSetChatRole(ctx, deps, chatRoleMatch[1]!);
+      }
+
+      // Phase 42: multi-role per chat. Add/remove individual roles to build a
+      // stack (e.g. Goofy + 容灾大盘 on one chat).
+      //
+      //   POST   /api/active-chats/:id/roles         { roleId }   → idempotent add
+      //   DELETE /api/active-chats/:id/roles/:roleId             → remove one
+      const chatRolesAddMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/roles$/);
+      if (chatRolesAddMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleAddChatRole(ctx, deps, chatRolesAddMatch[1]!);
+      }
+      const chatRolesRemoveMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/roles\/([^/]+)$/);
+      if (chatRolesRemoveMatch) {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        return handleRemoveChatRole(ctx, deps, chatRolesRemoveMatch[1]!, chatRolesRemoveMatch[2]!);
       }
 
       // Phase 36: chat lifecycle UX. Two flavors:
@@ -678,6 +696,52 @@ function handleSetChatRole(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: 
   const next = (typeof roleId === 'string' && roleId.length > 0) ? roleId : null;
   setHostSessionRole(deps.db, hostSessionId, next);
   deps.logger?.info('chat_role_set', { data: { hostSessionId, roleId: next } });
+  const refreshed = getHostSession(deps.db, hostSessionId);
+  return send(ctx.response, 200, { chat: refreshed });
+}
+
+function handleAddChatRole(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: string): void {
+  const session = getHostSession(deps.db, hostSessionId);
+  if (!session) {
+    return send(ctx.response, 404, { error: 'not_found', message: 'unknown host session' });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { roleId } = parsed as { roleId?: unknown };
+  if (typeof roleId !== 'string' || !roleId) {
+    return badRequest(ctx.response, 'roleId (non-empty string) required');
+  }
+  const role = getRoleRow(deps.db, roleId);
+  if (!role) {
+    return send(ctx.response, 404, { error: 'not_found', message: `unknown role ${roleId}` });
+  }
+  const added = addHostSessionRole(deps.db, hostSessionId, roleId);
+  deps.logger?.info('chat_role_added', { data: { hostSessionId, roleId, alreadyPresent: !added } });
+  const refreshed = getHostSession(deps.db, hostSessionId);
+  return send(ctx.response, 200, { chat: refreshed });
+}
+
+function handleRemoveChatRole(
+  ctx: RouteContext,
+  deps: HttpApiDeps,
+  hostSessionId: string,
+  roleId: string,
+): void {
+  const session = getHostSession(deps.db, hostSessionId);
+  if (!session) {
+    return send(ctx.response, 404, { error: 'not_found', message: 'unknown host session' });
+  }
+  const removed = removeHostSessionRole(deps.db, hostSessionId, roleId);
+  if (!removed) {
+    return send(ctx.response, 404, {
+      error: 'not_found', message: `role ${roleId} not bound to chat ${hostSessionId}`,
+    });
+  }
+  deps.logger?.info('chat_role_removed', { data: { hostSessionId, roleId } });
   const refreshed = getHostSession(deps.db, hostSessionId);
   return send(ctx.response, 200, { chat: refreshed });
 }

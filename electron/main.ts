@@ -42,7 +42,11 @@ function createMainWindow(): void {
     title: 'Helm',
     show: false,
     webPreferences: {
-      preload: path.join(__projectDir, 'preload.js'),
+      // tsup bundles the preload as CJS → `preload.cjs`. main.ts has been
+      // pointing at `preload.js` for a while; that ENOENT was silent because
+      // nothing in the renderer needed the preload until Phase 50 started
+      // injecting `window.helm.apiBase`. Pin to the real filename now.
+      preload: path.join(__projectDir, 'preload.cjs'),
       contextIsolation: true,
       sandbox: true,
     },
@@ -56,19 +60,35 @@ function createMainWindow(): void {
     // hash so the preload can expose it as `window.helm.apiBase`. Under
     // file://, relative `/api/...` URLs don't resolve to anywhere useful —
     // the renderer needs the explicit `http://127.0.0.1:<port>` origin.
-    // helmApp may not have started yet on the very first window; bootHelm
-    // reloads the URL once the port is known (see bootHelm below).
     const port = helmApp?.httpPort();
-    const base = port ? `http://127.0.0.1:${port}` : '';
-    const hash = base ? `#apiBase=${encodeURIComponent(base)}` : '';
-    void mainWindow.loadFile(
-      path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html'),
-      { hash: hash.replace(/^#/, '') },
-    );
+    const indexHtml = path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html');
+    if (port) {
+      void mainWindow.loadFile(indexHtml, {
+        hash: `apiBase=${encodeURIComponent(`http://127.0.0.1:${port}`)}`,
+      });
+    } else {
+      // Pre-boot or boot failure — let the renderer fall back to its built-in
+      // default port (17317).
+      void mainWindow.loadFile(indexHtml);
+    }
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('closed', () => { mainWindow = null; });
+
+  // Mirror renderer console + load failures to main stderr so packaging /
+  // production issues surface in the user's tail of `~/.helm/logs/`. Cheap
+  // even in production: only fires on actual log calls. Devtools open only
+  // when HELM_DEV_TOOLS=1.
+  mainWindow.webContents.on('console-message', (_e, _level, message, line, sourceId) => {
+    process.stderr.write(`[renderer] ${message} (${sourceId}:${line})\n`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    process.stderr.write(`[renderer:did-fail-load] ${code} ${desc} url=${url}\n`);
+  });
+  if (process.env['HELM_DEV_TOOLS'] === '1') {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 }
 
 function focusWindow(): void {

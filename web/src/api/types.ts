@@ -88,6 +88,8 @@ export interface ChannelBinding {
   externalRoot?: string;
   waitEnabled: boolean;
   metadata?: Record<string, unknown>;
+  /** Phase 36: free-form user annotation captured from `bind chat <label>`. */
+  label?: string;
   createdAt: string;
 }
 
@@ -97,6 +99,8 @@ export interface PendingBind {
   externalChat?: string;
   externalThread?: string;
   externalRoot?: string;
+  /** Phase 36: user annotation captured from the bind command. */
+  label?: string;
   expiresAt: string;
 }
 

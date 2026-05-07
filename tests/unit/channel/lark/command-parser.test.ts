@@ -99,6 +99,44 @@ describe('parseCommand — lifecycle (require @bot mention)', () => {
     expect(parseCommand({ text: 'bind chat please', mentioned: false }).kind).toBe('unknown');
     expect(parseCommand({ text: 'unbind it', mentioned: false }).kind).toBe('unknown');
   });
+
+  // ── Phase 36: bind label extraction ───────────────────────────────────
+  describe('Phase 36 bind label', () => {
+    it('"@bot dr bind chat" → kind=bind, label="dr"', () => {
+      expect(parseCommand({ text: '@bot dr bind chat', mentioned: true }))
+        .toEqual({ kind: 'bind', label: 'dr' });
+    });
+
+    it('label can carry across the keyword: "@bot bind chat for #issue-7"', () => {
+      expect(parseCommand({ text: '@bot bind chat for #issue-7', mentioned: true }))
+        .toEqual({ kind: 'bind', label: 'for #issue-7' });
+    });
+
+    it('Chinese: "@bot 绑定对话 调试转发" → label="调试转发"', () => {
+      expect(parseCommand({ text: '@bot 绑定对话 调试转发', mentioned: true }))
+        .toEqual({ kind: 'bind', label: '调试转发' });
+    });
+
+    it('multiple @ mentions are stripped from the label', () => {
+      expect(parseCommand({ text: '@bot @teammate dr bind chat', mentioned: true }))
+        .toEqual({ kind: 'bind', label: 'dr' });
+    });
+
+    it('plain "@bot bind chat" with no extras → label undefined (no key in object)', () => {
+      const r = parseCommand({ text: '@bot bind chat', mentioned: true });
+      expect(r).toEqual({ kind: 'bind' });
+      expect((r as { label?: string }).label).toBeUndefined();
+    });
+
+    it('attack: very long label is truncated at 80 chars with ellipsis', () => {
+      const long = 'a'.repeat(200);
+      const r = parseCommand({ text: `@bot ${long} bind chat`, mentioned: true }) as { kind: string; label?: string };
+      expect(r.kind).toBe('bind');
+      expect(r.label).toBeDefined();
+      expect(r.label!.length).toBeLessThanOrEqual(80);
+      expect(r.label!.endsWith('…')).toBe(true);
+    });
+  });
 });
 
 describe('parseCommand — help', () => {

@@ -23,9 +23,11 @@
 import http from 'node:http';
 import type Database from 'better-sqlite3';
 import {
+  deleteHostSession,
   getHostSession,
   listActiveSessions,
   setHostSessionRole,
+  updateHostSession,
 } from '../storage/repos/host-sessions.js';
 import {
   getCampaign,
@@ -230,6 +232,19 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (chatRoleMatch) {
         if (req.method !== 'PUT') return methodNotAllowed(res);
         return handleSetChatRole(ctx, deps, chatRoleMatch[1]!);
+      }
+
+      // Phase 36: chat lifecycle UX. Two flavors:
+      //   ?cascade=false (default) → set status='closed'; row + bindings stay
+      //                              for history. Disappears from Active Chats.
+      //   ?cascade=true            → DELETE the row; FK ON DELETE CASCADE
+      //                              drops channel_bindings + queued msgs.
+      // Either way, emits session.closed SSE so the renderer refreshes.
+      const chatDeleteMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)$/);
+      if (chatDeleteMatch) {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        const cascade = url.searchParams.get('cascade') === 'true';
+        return handleDeleteChat(ctx, deps, chatDeleteMatch[1]!, cascade);
       }
 
       if (url.pathname === '/api/approvals') {
@@ -645,6 +660,30 @@ function handleSetChatRole(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: 
   deps.logger?.info('chat_role_set', { data: { hostSessionId, roleId: next } });
   const refreshed = getHostSession(deps.db, hostSessionId);
   return send(ctx.response, 200, { chat: refreshed });
+}
+
+function handleDeleteChat(
+  ctx: RouteContext,
+  deps: HttpApiDeps,
+  hostSessionId: string,
+  cascade: boolean,
+): void {
+  const session = getHostSession(deps.db, hostSessionId);
+  if (!session) {
+    return send(ctx.response, 404, { error: 'not_found', message: 'unknown host session' });
+  }
+  if (cascade) {
+    deleteHostSession(deps.db, hostSessionId);
+    deps.logger?.info('chat_deleted', { data: { hostSessionId, cascade: true } });
+  } else {
+    // Soft-close: row + bindings stay for history; the chat just falls out
+    // of `listActiveSessions`. Lets the user re-open the same Cursor chat
+    // later and have helm re-attach instead of treating it as brand-new.
+    updateHostSession(deps.db, hostSessionId, { status: 'closed' });
+    deps.logger?.info('chat_closed', { data: { hostSessionId } });
+  }
+  deps.events?.emit({ type: 'session.closed', hostSessionId });
+  return send(ctx.response, 200, { ok: true, hostSessionId, cascade });
 }
 
 function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): void {

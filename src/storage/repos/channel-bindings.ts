@@ -16,6 +16,7 @@ function rowToBinding(row: Record<string, unknown>): ChannelBinding {
     externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
     waitEnabled: Boolean(row['wait_enabled']),
     metadata: parseJson<Record<string, unknown>>(row['metadata'], {}),
+    label: row['label'] != null ? String(row['label']) : undefined,
     createdAt: String(row['created_at']),
   };
 }
@@ -24,13 +25,15 @@ function rowToBinding(row: Record<string, unknown>): ChannelBinding {
 
 export function insertChannelBinding(db: Database.Database, b: ChannelBinding): void {
   db.prepare(`
-    INSERT INTO channel_bindings (id, channel, host_session_id, external_chat, external_thread, external_root, wait_enabled, metadata, created_at)
-    VALUES (@id, @channel, @host_session_id, @external_chat, @external_thread, @external_root, @wait_enabled, @metadata, @created_at)
+    INSERT INTO channel_bindings (id, channel, host_session_id, external_chat, external_thread, external_root, wait_enabled, metadata, label, created_at)
+    VALUES (@id, @channel, @host_session_id, @external_chat, @external_thread, @external_root, @wait_enabled, @metadata, @label, @created_at)
   `).run({
     id: b.id, channel: b.channel, host_session_id: b.hostSessionId,
     external_chat: b.externalChat ?? null, external_thread: b.externalThread ?? null,
     external_root: b.externalRoot ?? null, wait_enabled: b.waitEnabled ? 1 : 0,
-    metadata: b.metadata ? JSON.stringify(b.metadata) : null, created_at: b.createdAt,
+    metadata: b.metadata ? JSON.stringify(b.metadata) : null,
+    label: b.label ?? null,
+    created_at: b.createdAt,
   });
 }
 
@@ -125,13 +128,25 @@ export function pendingMessageCount(db: Database.Database, bindingId: string): n
 
 // ── PendingBind ────────────────────────────────────────────────────────────
 
+function rowToPendingBind(row: Record<string, unknown>): PendingBind {
+  return {
+    code: String(row['code']), channel: String(row['channel']),
+    externalChat: row['external_chat'] != null ? String(row['external_chat']) : undefined,
+    externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
+    externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
+    label: row['label'] != null ? String(row['label']) : undefined,
+    expiresAt: String(row['expires_at']),
+  };
+}
+
 export function insertPendingBind(db: Database.Database, p: PendingBind): void {
   db.prepare(`
-    INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, expires_at)
-    VALUES (@code, @channel, @external_chat, @external_thread, @external_root, @expires_at)
+    INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, label, expires_at)
+    VALUES (@code, @channel, @external_chat, @external_thread, @external_root, @label, @expires_at)
   `).run({
     code: p.code, channel: p.channel, external_chat: p.externalChat ?? null,
     external_thread: p.externalThread ?? null, external_root: p.externalRoot ?? null,
+    label: p.label ?? null,
     expires_at: p.expiresAt,
   });
 }
@@ -140,14 +155,7 @@ export function getPendingBind(db: Database.Database, code: string): PendingBind
   const row = db.prepare(
     `SELECT * FROM pending_binds WHERE code = ? AND expires_at > ?`,
   ).get(code, new Date().toISOString()) as Record<string, unknown> | undefined;
-  if (!row) return undefined;
-  return {
-    code: String(row['code']), channel: String(row['channel']),
-    externalChat: row['external_chat'] != null ? String(row['external_chat']) : undefined,
-    externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
-    externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
-    expiresAt: String(row['expires_at']),
-  };
+  return row ? rowToPendingBind(row) : undefined;
 }
 
 export function deletePendingBind(db: Database.Database, code: string): void {
@@ -158,13 +166,7 @@ export function listPendingBinds(db: Database.Database): PendingBind[] {
   const now = new Date().toISOString();
   return (db.prepare(
     `SELECT * FROM pending_binds WHERE expires_at > ? ORDER BY expires_at ASC`,
-  ).all(now) as Record<string, unknown>[]).map((row) => ({
-    code: String(row['code']), channel: String(row['channel']),
-    externalChat: row['external_chat'] != null ? String(row['external_chat']) : undefined,
-    externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
-    externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
-    expiresAt: String(row['expires_at']),
-  }));
+  ).all(now) as Record<string, unknown>[]).map(rowToPendingBind);
 }
 
 export function purgeExpiredPendingBinds(db: Database.Database): number {

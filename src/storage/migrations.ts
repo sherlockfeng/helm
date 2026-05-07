@@ -222,6 +222,14 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE host_sessions ADD COLUMN first_prompt TEXT;
     `,
   },
+  {
+    version: 5,
+    description: 'pending_binds.label + channel_bindings.label — Phase 36 user annotation from the bind command, carried from pending → consumed binding',
+    up: `
+      ALTER TABLE pending_binds   ADD COLUMN label TEXT;
+      ALTER TABLE channel_bindings ADD COLUMN label TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

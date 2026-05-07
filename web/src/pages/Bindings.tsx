@@ -15,7 +15,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
-import type { ChannelBinding, PendingBind } from '../api/types.js';
+import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
 
 function timeUntil(iso: string): string {
   const ms = new Date(iso).getTime() - Date.now();
@@ -30,13 +30,29 @@ function shortId(id: string, len = 12): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
+function truncate(s: string, max = 60): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * Phase 36: most human-readable label for a Cursor chat. Falls back through
+ * firstPrompt (Phase 32) → cwd → short id so old / brand-new chats still get
+ * something useful instead of a UUID.
+ */
+function chatLabel(chat: ActiveChat | undefined, fallbackId: string): string {
+  if (chat?.firstPrompt) return truncate(chat.firstPrompt);
+  if (chat?.cwd) return chat.cwd;
+  return shortId(fallbackId);
+}
+
 function PendingRow({
   pending,
   chats,
   onBound,
 }: {
   pending: PendingBind;
-  chats: Array<{ id: string; cwd?: string }>;
+  chats: ActiveChat[];
   onBound: () => void;
 }) {
   const [hostSessionId, setHostSessionId] = useState<string>(chats[0]?.id ?? '');
@@ -93,7 +109,7 @@ function PendingRow({
             >
               {chats.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.cwd ? `${c.cwd} (${c.id.slice(0, 8)})` : c.id}
+                  {chatLabel(c, c.id)}{c.cwd && c.firstPrompt ? ` — ${c.cwd}` : ''} ({c.id.slice(0, 8)})
                 </option>
               ))}
             </select>
@@ -113,7 +129,15 @@ function PendingRow({
   );
 }
 
-function ActiveRow({ binding, onUnbind }: { binding: ChannelBinding; onUnbind: () => void }) {
+function ActiveRow({
+  binding,
+  chat,
+  onUnbind,
+}: {
+  binding: ChannelBinding;
+  chat?: ActiveChat;
+  onUnbind: () => void;
+}) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,14 +159,24 @@ function ActiveRow({ binding, onUnbind }: { binding: ChannelBinding; onUnbind: (
     <article className="helm-card">
       <div className="row">
         <div style={{ flex: 1 }}>
-          <div className="label">{binding.channel}</div>
-          <div style={{ fontSize: 14 }}>
-            session{' '}
-            <code title={binding.hostSessionId}>{shortId(binding.hostSessionId)}</code>
+          {/* Phase 36: top line carries the user's annotation label (from
+              `bind chat <hint>`) when present, then channel name. */}
+          <div className="label">
+            {binding.channel}{binding.label ? <> · &ldquo;{binding.label}&rdquo;</> : null}
+          </div>
+          {/* Phase 36: human-readable Cursor chat label (firstPrompt → cwd → id).
+              When the host_session row was deleted, fall back to the binding's
+              stored hostSessionId so this never reads as blank. */}
+          <div style={{ fontWeight: 600, fontSize: 14 }} title={chat?.firstPrompt ?? chat?.cwd ?? binding.hostSessionId}>
+            {chatLabel(chat, binding.hostSessionId)}
+          </div>
+          <div className="label" style={{ marginTop: 6 }}>
+            {chat?.cwd && chat?.firstPrompt ? <>{chat.cwd} • </> : null}
+            session <code title={binding.hostSessionId}>{shortId(binding.hostSessionId)}</code>
           </div>
           {(binding.externalChat || binding.externalThread) && (
             <div className="label" style={{ marginTop: 6 }}>
-              {binding.externalChat ?? '?'}{binding.externalThread ? ` / ${binding.externalThread}` : ''}
+              {binding.channel}: {binding.externalChat ?? '?'}{binding.externalThread ? ` / ${binding.externalThread}` : ''}
             </div>
           )}
         </div>
@@ -192,7 +226,7 @@ export function BindingsPage() {
         <PendingRow
           key={p.code}
           pending={p}
-          chats={(chatsQuery.data?.chats ?? []).map((c) => ({ id: c.id, cwd: c.cwd }))}
+          chats={chatsQuery.data?.chats ?? []}
           onBound={() => {
             pendingQuery.reload();
             bindingsQuery.reload();
@@ -213,6 +247,7 @@ export function BindingsPage() {
         <ActiveRow
           key={b.id}
           binding={b}
+          chat={chatsQuery.data?.chats.find((c) => c.id === b.hostSessionId)}
           onUnbind={() => bindingsQuery.reload()}
         />
       ))}

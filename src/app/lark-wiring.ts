@@ -193,17 +193,23 @@ async function handleInbound(
   if (intent.kind === 'bind') {
     const code = newBindingCode();
     const expiresAt = new Date(Date.now() + PENDING_BIND_TTL_MS).toISOString();
+    // Phase 36: pass the user's free-form annotation through to pending_binds
+    // so it survives until consume, then propagates to channel_bindings.label.
     insertPendingBind(db, {
       code,
       channel: 'lark',
       externalChat: meta.larkChatId,
       externalThread: meta.larkThreadId,
       externalRoot: meta.larkMessageId,
+      label: intent.label,
       expiresAt,
     });
-    log.info('lark_pending_bind_created', { data: { code, larkChatId: meta.larkChatId } });
+    log.info('lark_pending_bind_created', {
+      data: { code, larkChatId: meta.larkChatId, label: intent.label },
+    });
+    const labelHint = intent.label ? ` (label: "${intent.label}")` : '';
     void replyToLark(channel, meta.larkChatId, meta.larkMessageId,
-      `Binding code: \`${code}\`\n\nIn the Helm desktop app, open Pending Binds, choose the Cursor chat to mirror here, and click Bind. Code expires in 10 minutes.`);
+      `Binding code: \`${code}\`${labelHint}\n\nIn the Helm desktop app, open Pending Binds, choose the Cursor chat to mirror here, and click Bind. Code expires in 10 minutes.`);
     return;
   }
 
@@ -330,6 +336,9 @@ export function consumePendingBind(
     externalChat: row['external_chat'] != null ? String(row['external_chat']) : undefined,
     externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
     externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
+    // Phase 36: forward the label that the user typed in `bind chat <label>`
+    // — pending_binds had it stashed; channel_bindings is the long-lived home.
+    label: row['label'] != null ? String(row['label']) : undefined,
     waitEnabled: true,
     createdAt: new Date().toISOString(),
   });

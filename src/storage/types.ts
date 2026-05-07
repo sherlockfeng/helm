@@ -142,6 +142,10 @@ export interface ChannelBinding {
   externalRoot?: string;
   waitEnabled: boolean;
   metadata?: Record<string, unknown>;
+  /** Phase 36: free-form user annotation captured from the bind command
+   * (e.g. "dr" in `@bot dr bind chat`). Surfaces in the Bindings UI so the
+   * user can match a binding back to their own mental tag. */
+  label?: string;
   createdAt: string;
 }
 
@@ -160,6 +164,9 @@ export interface PendingBind {
   externalChat?: string;
   externalThread?: string;
   externalRoot?: string;
+  /** Phase 36: user-supplied annotation from the bind command, carried
+   * forward to channel_bindings.label on consume. */
+  label?: string;
   expiresAt: string;
 }
 

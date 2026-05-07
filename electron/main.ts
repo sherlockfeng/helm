@@ -199,7 +199,11 @@ async function shutdownHelm(): Promise<void> {
   }
 }
 
-const gotLock = app.requestSingleInstanceLock();
+// Phase 52: when running under Playwright/Electron e2e, skip the single-
+// instance lock so the test suite can launch alongside a developer's
+// running Helm. Each test points HELM_HOME at a fresh tmpdir, so DB / socket
+// don't collide either.
+const gotLock = process.env['HELM_E2E'] === '1' ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {

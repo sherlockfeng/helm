@@ -28,6 +28,7 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
+    "test:e2e:renderer": "./node_modules/.bin/electron-rebuild && ./node_modules/.bin/vitest run --config tests/e2e/renderer/vitest.config.ts; pnpm rebuild better-sqlite3",
     "typecheck": "tsc --noEmit && pnpm --filter helm-web typecheck",
     "lint": "echo \"(lint not yet configured)\"",
     "clean": "rm -rf dist node_modules/.cache"
@@ -45,6 +46,7 @@
     "@types/node": "^22.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0",
+    "playwright": "^1.59.1",
     "tsup": "^8.3.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

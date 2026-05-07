@@ -29,6 +29,8 @@ import { createApprovalHandler } from '../approval/handler.js';
 import type {
   HostApprovalRequestRequest,
   HostApprovalRequestResponse,
+  HostPromptSubmitRequest,
+  HostPromptSubmitResponse,
   HostSessionStartRequest,
   HostSessionStartResponse,
 } from '../bridge/protocol.js';
@@ -53,7 +55,11 @@ import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
-import { getHostSession, upsertHostSession } from '../storage/repos/host-sessions.js';
+import {
+  getHostSession,
+  setHostSessionFirstPrompt,
+  upsertHostSession,
+} from '../storage/repos/host-sessions.js';
 import {
   dequeueMessages,
   listBindingsForSession,
@@ -283,6 +289,29 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       event: 'approval_request', data: { tool: req.tool },
     });
     return approvalHandler(req);
+  });
+
+  // host_prompt_submit — Phase 32. Capture the chat's opening user message
+  // as `host_sessions.first_prompt` so the Active Chats UI has a stable,
+  // human-readable label. Cursor's auto-generated chat title isn't surfaced
+  // by any hook payload (it's invented client-side after the first reply),
+  // so the first prompt is the next-best signal we can grab.
+  //
+  // - First call on a session writes the prompt; subsequent calls are no-ops
+  //   (the SQL has `WHERE first_prompt IS NULL`).
+  // - Always returns `{ continue: true }` so we never block Cursor's flow.
+  // - lastSeenAt also bumps so Active Chats stays accurate during long chats
+  //   that don't fire other hooks for a while.
+  bridge.registerHandler('host_prompt_submit', async (req: HostPromptSubmitRequest): Promise<HostPromptSubmitResponse> => {
+    const trimmed = (req.prompt ?? '').trim();
+    if (trimmed) {
+      setHostSessionFirstPrompt(deps.db, req.host_session_id, trimmed);
+      log.session(req.host_session_id).info('prompt_submit', {
+        event: 'prompt_submit',
+        data: { promptLen: trimmed.length, cwd: req.cwd },
+      });
+    }
+    return { continue: true };
   });
 
   // host_stop — drains channel_message_queue and returns followup_message.

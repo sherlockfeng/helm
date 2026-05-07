@@ -1,6 +1,6 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getHostSession, listActiveSessions, setHostSessionRole, updateHostSession, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { getHostSession, listActiveSessions, setHostSessionFirstPrompt, setHostSessionRole, updateHostSession, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import type { HostSession } from '../../../src/storage/types.js';
@@ -129,6 +129,37 @@ describe('host sessions', () => {
     it('attack: binding to a non-existent role fails the FK', () => {
       upsertHostSession(db, makeSession());
       expect(() => setHostSessionRole(db, 's1', 'ghost-role')).toThrow();
+    });
+  });
+
+  // ── Phase 32: first_prompt capture ──────────────────────────────────
+  describe('Phase 32 first_prompt', () => {
+    it('setHostSessionFirstPrompt records the opening message', () => {
+      upsertHostSession(db, makeSession());
+      setHostSessionFirstPrompt(db, 's1', 'fix the login redirect bug');
+      expect(getHostSession(db, 's1')?.firstPrompt).toBe('fix the login redirect bug');
+    });
+
+    it('first-write-wins: subsequent calls do NOT overwrite (per WHERE first_prompt IS NULL)', () => {
+      upsertHostSession(db, makeSession());
+      setHostSessionFirstPrompt(db, 's1', 'first');
+      setHostSessionFirstPrompt(db, 's1', 'second-message-after');
+      expect(getHostSession(db, 's1')?.firstPrompt).toBe('first');
+    });
+
+    it('upsert preserves first_prompt on conflict — next session_start hook bumping last_seen_at must not clear it', () => {
+      upsertHostSession(db, makeSession({ cwd: '/proj' }));
+      setHostSessionFirstPrompt(db, 's1', 'kick off the audit');
+
+      const later = new Date(Date.now() + 1000).toISOString();
+      upsertHostSession(db, makeSession({ cwd: '/proj', lastSeenAt: later }));
+
+      expect(getHostSession(db, 's1')?.firstPrompt).toBe('kick off the audit');
+    });
+
+    it('attack: setting on a non-existent session is a no-op (UPDATE matches zero rows)', () => {
+      expect(() => setHostSessionFirstPrompt(db, 'ghost', 'whatever')).not.toThrow();
+      expect(getHostSession(db, 'ghost')).toBeUndefined();
     });
   });
 });

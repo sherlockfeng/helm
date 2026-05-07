@@ -26,6 +26,11 @@ function shortId(id: string, len = 12): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
+function truncate(s: string, max = 80): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}…`;
+}
+
 export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
   const { data: rolesData } = useApi(() => helmApi.roles());
@@ -73,8 +78,17 @@ export function ChatsPage() {
           <div className="row">
             <div>
               <div className="label">{chat.host}</div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>{chat.cwd ?? '(unknown cwd)'}</div>
+              {/* Phase 32: first user prompt is the most human-readable label —
+                  Cursor's chat title isn't surfaced to hooks. Falls back to
+                  cwd → session id so brand-new chats (no prompt yet) still
+                  show something useful. */}
+              <div style={{ fontWeight: 600, fontSize: 14 }} title={chat.firstPrompt ?? chat.cwd ?? chat.id}>
+                {chat.firstPrompt
+                  ? truncate(chat.firstPrompt)
+                  : (chat.cwd ?? '(awaiting first message)')}
+              </div>
               <div className="label" style={{ marginTop: 6 }}>
+                {chat.firstPrompt && chat.cwd ? <>{chat.cwd} • </> : null}
                 session <code title={chat.id}>{shortId(chat.id)}</code>
               </div>
             </div>

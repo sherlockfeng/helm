@@ -212,6 +212,20 @@ describe('listener — reconnect', () => {
     expect(cli.spawns).toHaveLength(1);
   });
 
+  it('Phase 37: stderr lines are reported under category "stderr", not "process_exit"', async () => {
+    const listener = makeListener();
+    listener.start();
+    cli.current().emitStderr('[lark-cli] [WARN] proxy detected');
+    await new Promise((r) => setTimeout(r, 30));
+    const stderrEvents = errors.filter((e) => e.msg.includes('proxy detected'));
+    expect(stderrEvents).toHaveLength(1);
+    expect(stderrEvents[0]!.where).toBe('stderr');
+    // Real exits stay 'process_exit' — separate category.
+    cli.current().exit(2);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(errors.some((e) => e.where === 'process_exit')).toBe(true);
+  });
+
   it('onConnected fires every (re)spawn', async () => {
     const seen: string[] = [];
     const listener = makeListener({ onConnected: () => seen.push('connect') });

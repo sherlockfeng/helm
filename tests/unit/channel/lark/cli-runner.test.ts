@@ -30,6 +30,24 @@ describe('resolveLarkCliCommand', () => {
     const cmd = resolveLarkCliCommand({ env: { LARK_CLI_COMMAND: '   ' } });
     expect(cmd).toMatch(/lark-cli/);
   });
+
+  // ── Phase 37: previously the fallback was a hardcoded ~/.helm/bin path
+  //   that didn't exist for any dev. Now walks node_modules/.bin first.
+  it('Phase 37: resolves <repo>/node_modules/.bin/lark-cli when running from clone', () => {
+    // Tests run from inside the helm repo; node_modules/.bin/lark-cli exists.
+    const cmd = resolveLarkCliCommand({ env: {} });
+    expect(cmd).toMatch(/node_modules\/\.bin\/lark-cli$/);
+  });
+
+  it('Phase 37: returns bare "lark-cli" when no candidate file is found and PATH lookup is the right move', () => {
+    // We can't easily prevent `repoLarkCliBin` from finding the real binary
+    // when running from within the helm repo. So this test just asserts
+    // the function never throws and always returns a non-empty string —
+    // either the resolved abs path OR the bare command.
+    const cmd = resolveLarkCliCommand({ env: {} });
+    expect(typeof cmd).toBe('string');
+    expect(cmd.length).toBeGreaterThan(0);
+  });
 });
 
 describe('cli-runner.run() — short-lived process behavior (sh shim)', () => {

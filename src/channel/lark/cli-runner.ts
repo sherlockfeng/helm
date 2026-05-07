@@ -13,8 +13,10 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const LARK_CLI_COMMAND_ENV = 'LARK_CLI_COMMAND';
 
@@ -50,18 +52,62 @@ export interface LarkCliRunnerOptions {
   cwd?: string;
 }
 
-function bundledCommand(): string {
-  const binName = process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli';
-  // Prefer node_modules/.bin from the installed package; fall back to PATH.
-  return path.join(homedir(), '.helm', 'bin', binName);
+/**
+ * Walk up from this compiled module to find `<repo>/node_modules/.bin/lark-cli`.
+ * Same trick Phase 33's `defaultHookBinPath()` uses: works from a clone with
+ * no global install, and from the dist bundle alike.
+ */
+function repoLarkCliBin(binName: string): string | null {
+  let here: string;
+  try {
+    here = fileURLToPath(import.meta.url);
+  } catch {
+    return null;
+  }
+  let dir = path.dirname(here);
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, 'node_modules', '.bin', binName);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
+/**
+ * Phase 37: resolve the `lark-cli` executable path with a sane fallback chain.
+ * Old code returned `~/.helm/bin/lark-cli` unconditionally — a path that only
+ * existed for packaged installs that bundle lark-cli, breaking every dev who
+ * has lark-cli on PATH or in node_modules. Symptom: helm's listener spawned a
+ * non-existent path in a tight retry loop, spamming `ENOENT` warnings.
+ *
+ * Resolution order:
+ *   1. options.command (Settings UI's `cliCommand` field)
+ *   2. LARK_CLI_COMMAND env var
+ *   3. <repo>/node_modules/.bin/lark-cli (works for `pnpm install`-d clones)
+ *   4. ~/.helm/bin/lark-cli (packaged install — only if the file exists)
+ *   5. Bare `lark-cli` — child_process.spawn falls back to PATH lookup
+ */
 export function resolveLarkCliCommand(options: LarkCliRunnerOptions = {}): string {
   if (options.command && options.command.trim()) return options.command.trim();
   const env = options.env ?? process.env;
   const fromEnv = String(env[LARK_CLI_COMMAND_ENV] ?? '').trim();
   if (fromEnv) return fromEnv;
-  return bundledCommand();
+
+  const binName = process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli';
+
+  const repoBin = repoLarkCliBin(binName);
+  if (repoBin) return repoBin;
+
+  // Packaged-install fallback: only return this path if the file actually
+  // exists. Previously returned unconditionally, which broke every dev.
+  const packagedBin = path.join(homedir(), '.helm', 'bin', binName);
+  if (existsSync(packagedBin)) return packagedBin;
+
+  // Bare command — relies on PATH lookup at spawn time. Faster than calling
+  // `which` ourselves; child_process.spawn does the work natively.
+  return binName;
 }
 
 /**

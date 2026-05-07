@@ -160,3 +160,46 @@ describe('handler — concurrency / attack', () => {
     expect(res.decision).toBe('ask');
   });
 });
+
+describe('handler — requireApproval gate (Phase 46a)', () => {
+  it('auto-allows when requireApproval returns false (no Lark binding)', async () => {
+    handle = createApprovalHandler({
+      policy,
+      registry,
+      resolveCwd: () => '/proj',
+      requireApproval: () => false,
+    });
+    const res = await handle(makeRequest({ command: 'rm -rf /' }));
+    expect(res.decision).toBe('allow');
+    // No pending row should be created — gate short-circuits before registry.create.
+    expect(registry.listPending()).toHaveLength(0);
+  });
+
+  it('still gates through normal flow when requireApproval returns true', async () => {
+    handle = createApprovalHandler({
+      policy,
+      registry,
+      resolveCwd: () => '/proj',
+      requireApproval: (sid) => sid === 's1',
+    });
+    const promise = handle(makeRequest());
+    await Promise.resolve();
+    expect(registry.listPending()).toHaveLength(1);
+    registry.settle(registry.listPending()[0]!.id, { permission: 'deny', decidedBy: 'local-ui' });
+    expect((await promise).decision).toBe('deny');
+  });
+
+  it('still allows policy-matched fast path even when gate would auto-allow (rule precedence first)', async () => {
+    // Policy rules run before requireApproval — verify the rule still wins so
+    // explicit deny rules can't be bypassed by an unbound chat.
+    policy.add({ tool: 'Shell', commandPrefix: 'rm', decision: 'deny' });
+    handle = createApprovalHandler({
+      policy,
+      registry,
+      resolveCwd: () => '/proj',
+      requireApproval: () => false,
+    });
+    const res = await handle(makeRequest({ command: 'rm -rf /' }));
+    expect(res.decision).toBe('deny');
+  });
+});

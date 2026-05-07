@@ -30,10 +30,18 @@ export interface ApprovalHandlerDeps {
    * wire in `getHostSession(id).cwd`; in tests we inject a fixed value.
    */
   resolveCwd?: (hostSessionId: string | undefined) => string | undefined;
+  /**
+   * Phase 46: scope filter. When this returns false, the request is auto-
+   * allowed without creating a pending row or pushing to any channel — the
+   * user clearly hasn't asked helm to gate this chat. Production wires it
+   * to "session has at least one Lark binding"; tests omit (defaults to
+   * always-required so existing behavior is unchanged).
+   */
+  requireApproval?: (hostSessionId: string | undefined) => boolean;
 }
 
 export function createApprovalHandler(deps: ApprovalHandlerDeps) {
-  const { policy, registry, resolveCwd } = deps;
+  const { policy, registry, resolveCwd, requireApproval } = deps;
 
   return async function handleHostApprovalRequest(
     req: HostApprovalRequestRequest,
@@ -45,7 +53,9 @@ export function createApprovalHandler(deps: ApprovalHandlerDeps) {
       cwd,
     };
 
-    // 1. Stored rule fast path.
+    // 1. Stored rule fast path. Runs BEFORE the requireApproval gate so
+    //    explicit deny rules still apply to chats that aren't bound to any
+    //    remote channel — the gate only skips the user-prompt path.
     const policyMatch = policy.match(matchInput);
     if (policyMatch) {
       // Persist a record so the audit trail shows what auto-decided.
@@ -71,7 +81,20 @@ export function createApprovalHandler(deps: ApprovalHandlerDeps) {
       };
     }
 
-    // 2. No rule — wait for a channel / UI / timeout.
+    // 2. Phase 46: scope gate. helm intercepts every Cursor tool call by
+    //    default, but if the user hasn't bound this chat to any remote channel
+    //    (Lark thread / etc.), there's nothing to ask — auto-allow without
+    //    creating a pending row that nobody will decide on. The Cursor app's
+    //    own permission UI is still in front, so this just suppresses helm's
+    //    additional layer for the unbound case.
+    if (requireApproval && !requireApproval(req.host_session_id)) {
+      return {
+        decision: 'allow',
+        reason: 'no remote channel binding — helm auto-allowed',
+      };
+    }
+
+    // 3. No rule, gate passed — wait for a channel / UI / timeout.
     const created = registry.create({
       hostSessionId: req.host_session_id,
       tool: req.tool,

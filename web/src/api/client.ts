@@ -92,11 +92,24 @@ export const helmApi = {
 
   approvals: () => request<{ approvals: PendingApproval[] }>('GET', '/api/approvals'),
 
-  decideApproval: (approvalId: string, decision: 'allow' | 'deny', reason?: string) =>
-    request<{ ok: true; approvalId: string }>(
+  decideApproval: (
+    approvalId: string,
+    decision: 'allow' | 'deny',
+    options: { reason?: string; remember?: boolean; scope?: string } = {},
+  ) =>
+    request<{
+      ok: true;
+      approvalId: string;
+      rememberedRule?: { id: string; tool: string; decision: 'allow' | 'deny' };
+    }>(
       'POST',
       `/api/approvals/${encodeURIComponent(approvalId)}/decide`,
-      { decision, ...(reason ? { reason } : {}) },
+      {
+        decision,
+        ...(options.reason ? { reason: options.reason } : {}),
+        ...(options.remember ? { remember: true } : {}),
+        ...(options.scope ? { scope: options.scope } : {}),
+      },
     ),
 
   campaigns: () => request<{ campaigns: Campaign[] }>('GET', '/api/campaigns'),

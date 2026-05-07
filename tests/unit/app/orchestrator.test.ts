@@ -5,9 +5,29 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { insertChannelBinding } from '../../../src/storage/repos/channel-bindings.js';
 import { createCapturingLoggerFactory } from '../../../src/logger/index.js';
 import { createHelmApp } from '../../../src/app/orchestrator.js';
 import { sendBridgeMessage } from '../../../src/bridge/client.js';
+
+/**
+ * Phase 46a: the orchestrator's requireApproval gate auto-allows requests
+ * from chats that are not bound to any remote channel. Tests that exercise
+ * the user-prompt path (HTTP /decide, registry pending, shutdown→ask) need
+ * an active Lark binding so the gate lets the request fall through.
+ */
+function bindLark(db: BetterSqlite3.Database, hostSessionId: string): void {
+  insertChannelBinding(db, {
+    id: `b_${hostSessionId}`,
+    channel: 'lark',
+    hostSessionId,
+    externalChat: 'oc_test',
+    externalThread: 'tr_test',
+    externalRoot: 'om_test',
+    waitEnabled: false,
+    createdAt: new Date().toISOString(),
+  });
+}
 
 let db: BetterSqlite3.Database;
 let tmpDir: string;
@@ -179,11 +199,14 @@ describe('createHelmApp — bridge handlers', () => {
     });
     await app.start();
     try {
-      // Seed a host_session so resolveCwd works
+      // Seed a host_session so resolveCwd works + Lark binding so the
+      // Phase 46a requireApproval gate routes us through the pending path
+      // (instead of auto-allowing).
       upsertHostSession(db, {
         id: 'sess-1', host: 'cursor', cwd: '/proj', status: 'active',
         firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
       });
+      bindLark(db, 'sess-1');
       const res = await sendBridgeMessage(
         { type: 'host_approval_request', host_session_id: 'sess-1', tool: 'Shell', command: 'rm -rf' },
         { socketPath, timeoutMs: 5000 },
@@ -202,6 +225,7 @@ describe('createHelmApp — bridge handlers', () => {
     try {
       const now = new Date().toISOString();
       upsertHostSession(db, { id: 'sess-1', host: 'cursor', cwd: '/proj', status: 'active', firstSeenAt: now, lastSeenAt: now });
+      bindLark(db, 'sess-1');
 
       const bridgeP = sendBridgeMessage(
         { type: 'host_approval_request', host_session_id: 'sess-1', tool: 'Shell', command: 'rm' },
@@ -443,6 +467,7 @@ describe('createHelmApp — shutdown wakes pendings', () => {
       id: 'sess-1', host: 'cursor', cwd: '/proj', status: 'active',
       firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
     });
+    bindLark(db, 'sess-1');
 
     const bridgeP = sendBridgeMessage(
       { type: 'host_approval_request', host_session_id: 'sess-1', tool: 'Shell', command: 'rm' },

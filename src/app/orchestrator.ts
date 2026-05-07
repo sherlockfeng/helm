@@ -242,6 +242,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   });
 
+  // Phase 46: dismiss the OS toast the moment the approval is finalized.
+  // Covers every settle path — local UI click, Lark `/allow`, policy rule,
+  // timeout — because `approval.settled` is the canonical "the gate
+  // cleared" signal. closeForApproval is a no-op when the notifier doesn't
+  // implement it (NoopNotifier in tests / headless) or when this id was
+  // never shown.
+  events.on((e) => {
+    if (e.type !== 'approval.settled') return;
+    deps.notifier?.closeForApproval?.(e.approvalId);
+  });
+
   // Bridge handlers. Phase 8 wires only the two flows we have engines for:
   // host_session_start (knowledge injection) + host_approval_request (registry/policy).
   const bridge = new BridgeServer({
@@ -255,6 +266,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     policy,
     registry,
     resolveCwd: (sessionId) => sessionId ? getHostSession(deps.db, sessionId)?.cwd : undefined,
+    // Phase 46: only chats with at least one remote-channel binding (Lark
+    // today) need helm's extra approval gate. Unbound chats are auto-
+    // allowed — the user clearly isn't using helm to remote-mediate this
+    // session, so creating pending rows for them is just noise.
+    requireApproval: (sessionId) => {
+      if (!sessionId) return false;
+      const bindings = listBindingsForSession(deps.db, sessionId);
+      return bindings.some((b) => b.channel === 'lark');
+    },
   });
 
   bridge.registerHandler('host_session_start', async (req: HostSessionStartRequest): Promise<HostSessionStartResponse> => {
@@ -454,7 +474,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
-      db: deps.db, registry, events, logger: deps.loggers.module('api'),
+      db: deps.db, registry, policy, events, logger: deps.loggers.module('api'),
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

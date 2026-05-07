@@ -4,6 +4,7 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import { getHostSession, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 import { ApprovalRegistry } from '../../../src/approval/registry.js';
+import { ApprovalPolicyEngine } from '../../../src/approval/policy.js';
 import { WorkflowEngine } from '../../../src/workflow/engine.js';
 import { createHttpApi, type HttpApiHandle } from '../../../src/api/server.js';
 
@@ -266,6 +267,98 @@ describe('POST /api/approvals/:id/decide', () => {
   it('attack: GET on the decide endpoint returns 405', async () => {
     const r = await fetchJson('/api/approvals/x/decide');
     expect(r.status).toBe(405);
+  });
+});
+
+describe('POST /api/approvals/:id/decide — Phase 46d remember', () => {
+  let policy: ApprovalPolicyEngine;
+
+  beforeEach(async () => {
+    const now = new Date().toISOString();
+    upsertHostSession(db, { id: 's1', host: 'cursor', status: 'active', firstSeenAt: now, lastSeenAt: now });
+    // Rebuild api with the policy engine wired so this branch is exercised.
+    await api.stop();
+    policy = new ApprovalPolicyEngine(db);
+    api = createHttpApi({ db, registry, policy });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+  });
+
+  it('remember=true on Shell command inserts a commandPrefix rule (first token)', async () => {
+    const a = registry.create({ hostSessionId: 's1', tool: 'Shell', command: 'pnpm install --frozen-lockfile' });
+    const r = await fetchJson(`/api/approvals/${a.request.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: true }),
+    });
+    expect(r.status).toBe(200);
+    const body = r.body as { rememberedRule?: { tool: string; decision: string } };
+    expect(body.rememberedRule).toMatchObject({ tool: 'Shell', decision: 'allow' });
+    const rules = policy.list();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ tool: 'Shell', commandPrefix: 'pnpm', decision: 'allow' });
+  });
+
+  it('remember=true on mcp__ tool inserts a toolScope rule', async () => {
+    const a = registry.create({ hostSessionId: 's1', tool: 'mcp__helm__ping', command: '' });
+    const r = await fetchJson(`/api/approvals/${a.request.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: true }),
+    });
+    expect(r.status).toBe(200);
+    const rules = policy.list();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ tool: 'mcp__helm__ping', toolScope: true, decision: 'allow' });
+  });
+
+  it('explicit scope overrides the inferred default', async () => {
+    const a = registry.create({ hostSessionId: 's1', tool: 'Shell', command: 'pnpm test' });
+    const r = await fetchJson(`/api/approvals/${a.request.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: true, scope: 'shell pnpm test' }),
+    });
+    expect(r.status).toBe(200);
+    const rules = policy.list();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ tool: 'Shell', commandPrefix: 'pnpm test' });
+  });
+
+  it('remember=true without policy engine wired returns 501', async () => {
+    // Rebuild api WITHOUT policy.
+    await api.stop();
+    api = createHttpApi({ db, registry });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+    const a = registry.create({ hostSessionId: 's1', tool: 'Shell', command: 'rm' });
+    const r = await fetchJson(`/api/approvals/${a.request.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: true }),
+    });
+    expect(r.status).toBe(501);
+  });
+
+  it('attack: remember on unknown approvalId returns 404 BEFORE settling', async () => {
+    const r = await fetchJson('/api/approvals/ghost/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: true }),
+    });
+    expect(r.status).toBe(404);
+    expect(policy.list()).toHaveLength(0);
+  });
+
+  it('attack: remember=non-boolean returns 400 and inserts no rule', async () => {
+    const a = registry.create({ hostSessionId: 's1', tool: 'Shell', command: 'ls' });
+    const r = await fetchJson(`/api/approvals/${a.request.id}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: 'yes' }),
+    });
+    expect(r.status).toBe(400);
+    expect(policy.list()).toHaveLength(0);
   });
 });
 

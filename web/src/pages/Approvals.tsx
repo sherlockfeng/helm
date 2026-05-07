@@ -12,6 +12,12 @@
  * A11y note (a11y-audit A7): we deliberately do NOT confirm Allow/Deny
  * clicks. A confirm dialog kills the speed of the flow; users with assistive
  * tech should be aware that space/enter on these buttons is irreversible.
+ *
+ * Phase 46d: per-card "Remember as policy rule" toggle. When checked, the
+ * decision posts `remember: true` and (optionally) `scope`; the backend
+ * derives a sensible default scope from the pending request (toolScope for
+ * mcp__ tools, commandPrefix=firstToken for shell commands) so most flows
+ * need no further input from the user. Mirrors Lark's `/allow! <scope>`.
  */
 
 import { useState } from 'react';
@@ -45,11 +51,15 @@ export function ApprovalsPage() {
     types: ['approval.pending', 'approval.settled'],
   });
 
-  const decide = async (id: string, decision: 'allow' | 'deny'): Promise<void> => {
+  const decide = async (
+    id: string,
+    decision: 'allow' | 'deny',
+    options: { remember?: boolean; scope?: string } = {},
+  ): Promise<void> => {
     setActing(id);
     setActionError(null);
     try {
-      await helmApi.decideApproval(id, decision);
+      await helmApi.decideApproval(id, decision, options);
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
@@ -83,12 +93,26 @@ export function ApprovalsPage() {
           key={req.id}
           approval={req}
           acting={acting === req.id}
-          onAllow={() => decide(req.id, 'allow')}
+          onAllow={(opts) => decide(req.id, 'allow', opts)}
           onDeny={() => decide(req.id, 'deny')}
         />
       ))}
     </>
   );
+}
+
+/**
+ * Phase 46d: client-side preview of the rule the backend will create when
+ * `remember` is checked. Pure cosmetic — the backend derives the rule
+ * authoritatively. We just want users to see roughly what they're committing
+ * to before they click Allow.
+ */
+function suggestScope(approval: PendingApproval): string {
+  if (approval.tool.startsWith('mcp__')) return `${approval.tool} (entire tool)`;
+  const cmd = (approval.command ?? '').trim();
+  if (!cmd) return `${approval.tool} (entire tool)`;
+  const first = cmd.split(/\s+/, 1)[0] ?? '';
+  return first ? `${approval.tool} commands starting with "${first}"` : `${approval.tool} (entire tool)`;
 }
 
 function ApprovalCard({
@@ -99,9 +123,15 @@ function ApprovalCard({
 }: {
   approval: PendingApproval;
   acting: boolean;
-  onAllow: () => void;
+  onAllow: (options: { remember?: boolean; scope?: string }) => void;
   onDeny: () => void;
 }) {
+  const [remember, setRemember] = useState(false);
+  const [scope, setScope] = useState('');
+  const checkboxId = `remember-${approval.id}`;
+  const scopeId = `scope-${approval.id}`;
+  const effectiveScope = scope.trim() || suggestScope(approval);
+
   return (
     <article className="helm-card">
       <div className="row">
@@ -126,14 +156,45 @@ function ApprovalCard({
         <pre>{JSON.stringify(approval.payload, null, 2)}</pre>
       )}
 
+      <div className="approval-remember">
+        <label htmlFor={checkboxId} className="approval-remember-toggle">
+          <input
+            id={checkboxId}
+            type="checkbox"
+            checked={remember}
+            disabled={acting}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          <span>Remember as a policy rule</span>
+        </label>
+        {remember && (
+          <div className="approval-remember-detail">
+            <input
+              id={scopeId}
+              type="text"
+              className="approval-scope-input"
+              placeholder={suggestScope(approval)}
+              value={scope}
+              disabled={acting}
+              onChange={(e) => setScope(e.target.value)}
+              aria-label="Policy scope"
+            />
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+              On Allow: <code>{effectiveScope}</code> will auto-approve future requests.
+              Manage rules in Settings.
+            </p>
+          </div>
+        )}
+      </div>
+
       <div className="actions">
         <button
           className="primary"
           disabled={acting}
           aria-busy={acting}
-          onClick={onAllow}
+          onClick={() => onAllow(remember ? { remember: true, ...(scope.trim() ? { scope: scope.trim() } : {}) } : {})}
         >
-          Allow
+          {remember ? 'Allow & remember' : 'Allow'}
         </button>
         <button
           className="danger-outline"

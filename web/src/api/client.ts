@@ -56,13 +56,27 @@ export const helmApi = {
 
   activeChats: () => request<{ chats: ActiveChat[] }>('GET', '/api/active-chats'),
 
-  // Phase 25: bind a chat to a role (or null to unbind). The next session_start
-  // hook for this chat will auto-inject the role's system prompt + chunks.
+  // Phase 25 / 42: legacy single-role setter — replaces the chat's entire
+  // role list with this one role (or empty when null). Kept for clients that
+  // haven't switched to addChatRole / removeChatRole.
   setChatRole: (hostSessionId: string, roleId: string | null) =>
     request<{ chat: ActiveChat }>(
       'PUT',
       `/api/active-chats/${encodeURIComponent(hostSessionId)}/role`,
       { roleId },
+    ),
+
+  // Phase 42: stack multiple roles on a chat (e.g. Goofy + 容灾大盘).
+  addChatRole: (hostSessionId: string, roleId: string) =>
+    request<{ chat: ActiveChat }>(
+      'POST',
+      `/api/active-chats/${encodeURIComponent(hostSessionId)}/roles`,
+      { roleId },
+    ),
+  removeChatRole: (hostSessionId: string, roleId: string) =>
+    request<{ chat: ActiveChat }>(
+      'DELETE',
+      `/api/active-chats/${encodeURIComponent(hostSessionId)}/roles/${encodeURIComponent(roleId)}`,
     ),
 
   // Phase 36: close (default — soft) or delete (?cascade=true — hard, cascades

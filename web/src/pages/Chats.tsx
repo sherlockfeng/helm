@@ -1,13 +1,12 @@
 /**
  * Active Chats — every host_session that's still open.
  *
- * Phase 25: each chat row has a role picker. Selecting a role binds the chat
- * to that role; the next session_start hook auto-injects the role's system
- * prompt + chunks via LocalRolesProvider.
- *
- * Phase 36: each row has Close + Delete buttons. Close (soft) marks
- * status='closed' so the row falls out of the list but history is kept;
- * Delete (cascade) removes the row + its bindings + queued messages.
+ * Phase 25: each chat row had a single-role picker dropdown.
+ * Phase 36: Close + Delete buttons (soft / cascade).
+ * Phase 42: dropdown → multi-select chips. Each bound role shows as a chip
+ * with an inline ✕ to remove. An "+ Add role" picker beneath lets the user
+ * stack more (e.g. Goofy + 容灾大盘 + Developer). The next session_start
+ * concatenates every role's prompt + chunks into the injected context.
  */
 
 import { useState } from 'react';
@@ -42,11 +41,25 @@ export function ChatsPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
 
-  async function changeRole(hostSessionId: string, roleId: string | null): Promise<void> {
+  async function addRole(hostSessionId: string, roleId: string): Promise<void> {
     setSavingId(hostSessionId);
     setRowError(null);
     try {
-      await helmApi.setChatRole(hostSessionId, roleId);
+      await helmApi.addChatRole(hostSessionId, roleId);
+      reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setRowError({ id: hostSessionId, message: msg });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function removeRole(hostSessionId: string, roleId: string): Promise<void> {
+    setSavingId(hostSessionId);
+    setRowError(null);
+    try {
+      await helmApi.removeChatRole(hostSessionId, roleId);
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
@@ -121,26 +134,70 @@ export function ChatsPage() {
             </span>
           </div>
 
-          <div className="helm-form-row" style={{ marginTop: 12 }}>
-            <div className="muted">Role</div>
-            <select
-              aria-label={`Role for chat ${chat.id}`}
-              value={chat.roleId ?? ''}
-              disabled={savingId === chat.id || roles.length === 0}
-              onChange={(e) => {
-                const next = e.target.value || null;
-                void changeRole(chat.id, next);
-              }}
-              style={{ minWidth: 220 }}
-            >
-              <option value="">(none — no auto-inject)</option>
-              {roles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}{r.isBuiltin ? ' (built-in)' : ''}
-                </option>
-              ))}
-            </select>
-            {savingId === chat.id && <span className="muted" style={{ fontSize: 11 }}>saving…</span>}
+          {/* Phase 42: every bound role renders as a chip with inline ✕.
+              "+ Add role" dropdown lists only roles NOT yet attached. */}
+          <div style={{ marginTop: 12 }}>
+            <div className="muted" style={{ marginBottom: 6 }}>Roles</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {chat.roleIds.length === 0 && (
+                <span className="muted" style={{ fontSize: 12 }}>(none — no auto-inject)</span>
+              )}
+              {chat.roleIds.map((rid) => {
+                const role = roles.find((r) => r.id === rid);
+                const display = role
+                  ? `${role.name}${role.isBuiltin ? ' (built-in)' : ''}`
+                  : `${rid} (unknown)`;
+                return (
+                  <span
+                    key={rid}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '2px 8px', borderRadius: 12,
+                      background: 'var(--surface-2, #eef)',
+                      fontSize: 12, fontWeight: 500,
+                    }}
+                  >
+                    {display}
+                    <button
+                      type="button"
+                      aria-label={`Remove role ${role?.name ?? rid} from chat ${chat.id}`}
+                      disabled={savingId === chat.id}
+                      onClick={() => { void removeRole(chat.id, rid); }}
+                      style={{
+                        all: 'unset', cursor: 'pointer', fontSize: 14,
+                        opacity: savingId === chat.id ? 0.4 : 0.7, lineHeight: 1,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                );
+              })}
+              {(() => {
+                const addable = roles.filter((r) => !chat.roleIds.includes(r.id));
+                if (addable.length === 0) return null;
+                return (
+                  <select
+                    aria-label={`Add role to chat ${chat.id}`}
+                    value=""
+                    disabled={savingId === chat.id}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v) void addRole(chat.id, v);
+                    }}
+                    style={{ fontSize: 12, padding: '2px 4px' }}
+                  >
+                    <option value="">+ Add role…</option>
+                    {addable.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}{r.isBuiltin ? ' (built-in)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                );
+              })()}
+              {savingId === chat.id && <span className="muted" style={{ fontSize: 11 }}>saving…</span>}
+            </div>
           </div>
           {rowError && rowError.id === chat.id && (
             <p className="muted" style={{ color: 'var(--danger)', fontSize: 12, marginTop: 6 }}>

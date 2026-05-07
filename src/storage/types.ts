@@ -121,9 +121,17 @@ export interface HostSession {
   composerMode?: string;
   campaignId?: string;
   cycleId?: string;
-  /** Phase 25: optional role binding; LocalRolesProvider injects this role's
-   * system prompt + chunks at sessionStart. */
+  /** @deprecated Phase 25 single-role column. Phase 42 moved bindings into
+   * the `host_session_roles` join table; this column is dead weight kept
+   * only because SQLite DROP COLUMN is awkward. New code reads `roleIds`. */
   roleId?: string;
+  /** Phase 42: zero-or-more role bindings. LocalRolesProvider concatenates
+   * each role's system prompt + chunks at sessionStart so the user can stack
+   * e.g. Goofy 专家 + 容灾大盘专家 onto one chat. Optional in the type but
+   * the repo always populates it on read (empty array when no roles bound);
+   * callers constructing HostSession instances for upsert can leave it
+   * undefined. */
+  roleIds?: readonly string[];
   /** Phase 32: first user prompt seen on this session. Captured by the
    * host_prompt_submit handler on the first message and never overwritten,
    * so the UI has a stable human-readable label per chat. */

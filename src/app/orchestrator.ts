@@ -160,17 +160,19 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // Additional providers come from `liveConfig.knowledge.providers` and are
   // re-registered whenever PUT /api/config rewrites them (D4).
   //
-  // Phase 25: resolveRoleId reads host_sessions.role_id so a user-bound role
-  // gets auto-injected at session_start. Without a binding the resolver
-  // returns undefined and getSessionContext is a no-op (no surprise prompt
-  // for unbound chats).
+  // Phase 42: resolveRoleId now returns the full set of role bindings from
+  // the host_session_roles join table. LocalRolesProvider concatenates each
+  // role's system prompt + chunks at sessionStart so the user can stack
+  // multiple experts (e.g. Goofy 专家 + 容灾大盘专家) on a single chat.
+  // Empty array → provider is a no-op (no surprise injection).
   const knowledge = new KnowledgeProviderRegistry();
   knowledge.register(new LocalRolesProvider({
     db: deps.db,
     embedFn: makePseudoEmbedFn(),
     resolveRoleId: (ctx) => {
       if (!ctx.hostSessionId) return undefined;
-      return getHostSession(deps.db, ctx.hostSessionId)?.roleId;
+      const session = getHostSession(deps.db, ctx.hostSessionId);
+      return session?.roleIds ?? [];
     },
   }));
   knowledge.register(new RequirementsArchiveProvider());

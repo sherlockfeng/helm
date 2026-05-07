@@ -230,6 +230,27 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE channel_bindings ADD COLUMN label TEXT;
     `,
   },
+  {
+    version: 6,
+    description: 'host_session_roles join table — Phase 42: a chat can be bound to multiple expert roles whose system prompts + chunks all get auto-injected at sessionStart',
+    up: `
+      CREATE TABLE IF NOT EXISTS host_session_roles (
+        host_session_id TEXT NOT NULL REFERENCES host_sessions(id) ON DELETE CASCADE,
+        role_id         TEXT NOT NULL REFERENCES roles(id)         ON DELETE CASCADE,
+        created_at      TEXT NOT NULL,
+        PRIMARY KEY (host_session_id, role_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_roles_session ON host_session_roles(host_session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_roles_role    ON host_session_roles(role_id);
+
+      -- Backfill: copy any existing single-role binding from host_sessions.role_id
+      -- into the new join table. The role_id column itself stays in place as
+      -- harmless dead weight (SQLite DROP COLUMN is awkward on older versions);
+      -- nothing reads it after this migration.
+      INSERT OR IGNORE INTO host_session_roles (host_session_id, role_id, created_at)
+        SELECT id, role_id, last_seen_at FROM host_sessions WHERE role_id IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

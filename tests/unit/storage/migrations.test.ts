@@ -77,6 +77,34 @@ describe('migrations', () => {
     expect(bindingsCols).toContain('label');
   });
 
+  it('Phase 42 migration: host_session_roles join table + indexes', () => {
+    runMigrations(db);
+    const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map((r) => r.name);
+    expect(tables).toContain('host_session_roles');
+    const indexes = (db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='host_session_roles'`).all() as { name: string }[]).map((i) => i.name);
+    expect(indexes).toContain('idx_session_roles_session');
+    expect(indexes).toContain('idx_session_roles_role');
+  });
+
+  it('Phase 42 migration: backfills legacy host_sessions.role_id into host_session_roles', async () => {
+    // Apply 1..5 only, seed a legacy single-role binding, run 6, verify backfill.
+    const { MIGRATIONS } = await import('../../../src/storage/migrations.js');
+    db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);`);
+    for (const m of MIGRATIONS.filter((x) => x.version <= 5)) {
+      db.exec(m.up);
+      db.prepare(`INSERT INTO schema_migrations VALUES (?, ?, ?)`).run(m.version, m.description, new Date().toISOString());
+    }
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, 0, ?)`)
+      .run('legacy-pm', 'Legacy PM', 'sp', new Date().toISOString());
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO host_sessions (id, host, status, role_id, first_seen_at, last_seen_at) VALUES ('s', 'cursor', 'active', 'legacy-pm', ?, ?)`).run(now, now);
+
+    runMigrations(db);
+
+    const back = db.prepare(`SELECT role_id FROM host_session_roles WHERE host_session_id = ?`).get('s') as { role_id: string } | undefined;
+    expect(back?.role_id).toBe('legacy-pm');
+  });
+
   it('attack: foreign_keys pragma is respected by runMigrations (FK violation throws)', () => {
     runMigrations(db);
     // WAL is not available in :memory: databases; foreign_keys should be enforced

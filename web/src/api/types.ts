@@ -13,8 +13,13 @@ export interface ActiveChat {
   composerMode?: string;
   campaignId?: string;
   cycleId?: string;
-  /** Phase 25: chat → role binding for sessionStart auto-inject. */
+  /** @deprecated Phase 25 single-role field. Phase 42 made it a deprecated
+   * alias of `roleIds[0]`; new code reads `roleIds`. */
   roleId?: string;
+  /** Phase 42: every role bound to this chat, in insertion order. Each
+   * role's system prompt + chunks are concatenated into the sessionStart
+   * `additional_context`. Empty when no roles are bound. */
+  roleIds: string[];
   /** Phase 32: opening user prompt — used as the chat's human-readable label. */
   firstPrompt?: string;
   status: 'active' | 'closed';

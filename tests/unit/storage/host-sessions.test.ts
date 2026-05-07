@@ -1,6 +1,17 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getHostSession, listActiveSessions, setHostSessionFirstPrompt, setHostSessionRole, updateHostSession, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import {
+  addHostSessionRole,
+  getHostSession,
+  listActiveSessions,
+  listHostSessionRoles,
+  removeHostSessionRole,
+  setHostSessionFirstPrompt,
+  setHostSessionRole,
+  setHostSessionRoles,
+  updateHostSession,
+  upsertHostSession,
+} from '../../../src/storage/repos/host-sessions.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import type { HostSession } from '../../../src/storage/types.js';
@@ -160,6 +171,101 @@ describe('host sessions', () => {
     it('attack: setting on a non-existent session is a no-op (UPDATE matches zero rows)', () => {
       expect(() => setHostSessionFirstPrompt(db, 'ghost', 'whatever')).not.toThrow();
       expect(getHostSession(db, 'ghost')).toBeUndefined();
+    });
+  });
+
+  // ── Phase 42: multi-role per chat ─────────────────────────────────────
+  describe('Phase 42 multi-role bindings', () => {
+    function seedRole(id: string): void {
+      upsertRole(db, {
+        id, name: `Role ${id}`, systemPrompt: `prompt-${id}`,
+        isBuiltin: false, createdAt: new Date().toISOString(),
+      });
+    }
+
+    it('addHostSessionRole + getHostSession exposes roleIds in insertion order', () => {
+      seedRole('a'); seedRole('b'); seedRole('c');
+      upsertHostSession(db, makeSession());
+      expect(addHostSessionRole(db, 's1', 'a')).toBe(true);
+      expect(addHostSessionRole(db, 's1', 'b')).toBe(true);
+      expect(addHostSessionRole(db, 's1', 'c')).toBe(true);
+      expect(getHostSession(db, 's1')?.roleIds).toEqual(['a', 'b', 'c']);
+    });
+
+    it('addHostSessionRole is idempotent — re-adding returns false', () => {
+      seedRole('a');
+      upsertHostSession(db, makeSession());
+      expect(addHostSessionRole(db, 's1', 'a')).toBe(true);
+      expect(addHostSessionRole(db, 's1', 'a')).toBe(false);
+      expect(listHostSessionRoles(db, 's1')).toEqual(['a']);
+    });
+
+    it('removeHostSessionRole returns false when binding doesn\'t exist', () => {
+      seedRole('a');
+      upsertHostSession(db, makeSession());
+      expect(removeHostSessionRole(db, 's1', 'a')).toBe(false);
+      addHostSessionRole(db, 's1', 'a');
+      expect(removeHostSessionRole(db, 's1', 'a')).toBe(true);
+      expect(getHostSession(db, 's1')?.roleIds).toEqual([]);
+    });
+
+    it('setHostSessionRoles replaces the entire list atomically + dedupes', () => {
+      seedRole('a'); seedRole('b'); seedRole('c');
+      upsertHostSession(db, makeSession());
+      addHostSessionRole(db, 's1', 'a');
+      setHostSessionRoles(db, 's1', ['b', 'c', 'b']);
+      expect([...(getHostSession(db, 's1')?.roleIds ?? [])].sort()).toEqual(['b', 'c']);
+    });
+
+    it('setHostSessionRole back-compat: writes through to the join table (single)', () => {
+      seedRole('pm');
+      upsertHostSession(db, makeSession());
+      setHostSessionRole(db, 's1', 'pm');
+      expect(getHostSession(db, 's1')?.roleIds).toEqual(['pm']);
+      expect(getHostSession(db, 's1')?.roleId).toBe('pm');
+      // Clearing also clears the join table.
+      setHostSessionRole(db, 's1', null);
+      expect(getHostSession(db, 's1')?.roleIds).toEqual([]);
+    });
+
+    it('FK ON DELETE CASCADE: deleting a role drops it from every binding', () => {
+      seedRole('a'); seedRole('b');
+      upsertHostSession(db, makeSession());
+      addHostSessionRole(db, 's1', 'a');
+      addHostSessionRole(db, 's1', 'b');
+      db.prepare(`DELETE FROM roles WHERE id = ?`).run('a');
+      expect(getHostSession(db, 's1')?.roleIds).toEqual(['b']);
+    });
+
+    it('FK ON DELETE CASCADE: deleting a host_session drops all its role bindings', () => {
+      seedRole('a');
+      upsertHostSession(db, makeSession());
+      addHostSessionRole(db, 's1', 'a');
+      db.prepare(`DELETE FROM host_sessions WHERE id = ?`).run('s1');
+      const remaining = db.prepare(
+        `SELECT count(*) AS n FROM host_session_roles WHERE host_session_id = ?`,
+      ).get('s1') as { n: number };
+      expect(remaining.n).toBe(0);
+    });
+
+    it('listActiveSessions populates roleIds via single batched query (no N+1)', () => {
+      seedRole('a'); seedRole('b');
+      upsertHostSession(db, makeSession({ id: 's1' }));
+      upsertHostSession(db, makeSession({ id: 's2' }));
+      addHostSessionRole(db, 's1', 'a');
+      addHostSessionRole(db, 's1', 'b');
+      addHostSessionRole(db, 's2', 'b');
+
+      const list = listActiveSessions(db);
+      const s1 = list.find((s) => s.id === 's1')!;
+      const s2 = list.find((s) => s.id === 's2')!;
+      expect([...(s1.roleIds ?? [])].sort()).toEqual(['a', 'b']);
+      expect(s2.roleIds).toEqual(['b']);
+    });
+
+    it('attack: adding an unknown role id throws (FK enforcement)', () => {
+      upsertHostSession(db, makeSession());
+      expect(() => addHostSessionRole(db, 's1', 'ghost')).toThrow();
     });
   });
 });

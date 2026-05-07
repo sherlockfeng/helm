@@ -2,6 +2,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addHostSessionRole,
+  closeStaleHostSessions,
   getHostSession,
   listActiveSessions,
   listHostSessionRoles,
@@ -80,6 +81,37 @@ describe('host sessions', () => {
     upsertHostSession(db, makeSession({ lastSeenAt: t1 }));
     upsertHostSession(db, makeSession({ lastSeenAt: t2 }));
     expect(getHostSession(db, 's1')?.lastSeenAt).toBe(t2);
+  });
+
+  // ── Phase 47: stale-prune on boot ─────────────────────────────────────
+  describe('Phase 47 closeStaleHostSessions', () => {
+    it('flips active sessions older than cutoff to closed; leaves fresh ones alone', () => {
+      const stale = '2025-01-01T00:00:00.000Z';
+      const fresh = new Date().toISOString();
+      upsertHostSession(db, makeSession({ id: 'old', lastSeenAt: stale }));
+      upsertHostSession(db, makeSession({ id: 'new', lastSeenAt: fresh }));
+
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const n = closeStaleHostSessions(db, cutoff);
+      expect(n).toBe(1);
+      expect(getHostSession(db, 'old')?.status).toBe('closed');
+      expect(getHostSession(db, 'new')?.status).toBe('active');
+    });
+
+    it('does not touch already-closed rows (idempotent re-prune)', () => {
+      const stale = '2025-01-01T00:00:00.000Z';
+      upsertHostSession(db, makeSession({ id: 'old', status: 'closed', lastSeenAt: stale }));
+      const cutoff = new Date().toISOString();
+      const n = closeStaleHostSessions(db, cutoff);
+      expect(n).toBe(0);
+    });
+
+    it('returns 0 when no rows match', () => {
+      const fresh = new Date().toISOString();
+      upsertHostSession(db, makeSession({ id: 's1', lastSeenAt: fresh }));
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      expect(closeStaleHostSessions(db, cutoff)).toBe(0);
+    });
   });
 
   // ── Phase 25: chat ↔ role binding ────────────────────────────────────

@@ -22,6 +22,30 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import { createHelmApp, type HelmAppDeps, type HelmAppHandle } from '../../../src/app/orchestrator.js';
 import { createCapturingLoggerFactory, type LoggerFactory } from '../../../src/logger/index.js';
 import { runHook } from '../../../src/host/cursor/hook-entry.js';
+import { insertChannelBinding } from '../../../src/storage/repos/channel-bindings.js';
+
+/**
+ * Phase 46a: the orchestrator's requireApproval gate auto-allows requests
+ * from chats that aren't bound to any remote channel. E2e tests that
+ * exercise the full approval round-trip (pending row → user click → settle)
+ * must seed a Lark binding so the gate routes through the pending path.
+ *
+ * Lower-cost than threading a `requireApproval` test override — this
+ * matches production wiring (only Lark-bound chats need approvals) and
+ * keeps the e2e surface honest.
+ */
+export function seedLarkBinding(db: BetterSqlite3.Database, hostSessionId: string): void {
+  insertChannelBinding(db, {
+    id: `b_${hostSessionId}`,
+    channel: 'lark',
+    hostSessionId,
+    externalChat: 'oc_e2e',
+    externalThread: 'tr_e2e',
+    externalRoot: 'om_e2e',
+    waitEnabled: false,
+    createdAt: new Date().toISOString(),
+  });
+}
 
 export interface E2eHarness {
   app: HelmAppHandle;

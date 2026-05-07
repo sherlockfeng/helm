@@ -27,6 +27,8 @@ import { ApprovalPolicyEngine } from '../approval/policy.js';
 import { ApprovalRegistry } from '../approval/registry.js';
 import { createApprovalHandler } from '../approval/handler.js';
 import type {
+  HostAgentResponseRequest,
+  HostAgentResponseResponse,
   HostApprovalRequestRequest,
   HostApprovalRequestResponse,
   HostPromptSubmitRequest,
@@ -320,6 +322,45 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       });
     }
     return { continue: true };
+  });
+
+  // host_agent_response — Phase 38. After Cursor's agent finishes its reply,
+  // mirror the response text back to every Lark binding for this session so
+  // the user sees the bidirectional conversation in their Lark thread without
+  // having to toggle to Cursor.
+  //
+  // Returns `{ ok: true, suppressed }` always — never blocks Cursor on Lark
+  // delivery problems. `suppressed=true` when no bindings → caller knows it
+  // was intentionally a no-op (vs. quietly failing).
+  bridge.registerHandler('host_agent_response', async (req: HostAgentResponseRequest): Promise<HostAgentResponseResponse> => {
+    const text = (req.response_text ?? '').trim();
+    if (!text) return { ok: true, suppressed: true };
+
+    const allBindings = listBindingsForSession(deps.db, req.host_session_id);
+    const larkBindings = allBindings.filter((b) => b.channel === 'lark');
+    if (larkBindings.length === 0) return { ok: true, suppressed: true };
+
+    if (!larkChannel) {
+      log.warn('agent_response_no_lark_channel', {
+        data: { hostSessionId: req.host_session_id, bindings: larkBindings.length },
+      });
+      return { ok: true, suppressed: true };
+    }
+
+    // Fire-and-forget per binding. One Lark thread failing must not block
+    // delivery to others or the host_agent_response RPC itself.
+    for (const binding of larkBindings) {
+      void larkChannel.sendMessage(binding, text).catch((err) => {
+        log.warn('lark_send_agent_response_failed', {
+          data: { bindingId: binding.id, error: (err as Error).message },
+        });
+      });
+    }
+    log.session(req.host_session_id).info('agent_response_mirrored', {
+      event: 'agent_response',
+      data: { bindings: larkBindings.length, textLen: text.length },
+    });
+    return { ok: true };
   });
 
   // host_stop — drains channel_message_queue and returns followup_message.

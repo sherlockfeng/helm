@@ -267,6 +267,100 @@ describe('createHelmApp — provider hot-reload (Phase 27 / D4)', () => {
   });
 });
 
+describe('createHelmApp — host_agent_response → Lark mirror (Phase 38)', () => {
+  it('mirrors response_text to every Lark binding for the session', async () => {
+    const loggers = createCapturingLoggerFactory();
+
+    // Minimal LarkChannel stub. We cast through unknown so we don't need to
+    // implement every method — only sendMessage is exercised here.
+    const sentMessages: Array<{ bindingId: string; text: string }> = [];
+    const fakeLark = {
+      id: 'lark',
+      isStarted: () => true,
+      start: async () => undefined,
+      stop: async () => undefined,
+      sendMessage: async (binding: { id: string }, text: string) => {
+        sentMessages.push({ bindingId: binding.id, text });
+      },
+      sendApprovalRequest: async () => undefined,
+      onInboundMessage: () => () => undefined,
+      onApprovalDecision: () => () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const app = createHelmApp({
+      db, loggers, bridgeSocketPath: socketPath,
+      lark: { channel: fakeLark },
+    });
+    await app.start();
+    try {
+      // Seed a host_session + 2 lark bindings (multi-fanout) + 1 unrelated channel.
+      const now = new Date().toISOString();
+      upsertHostSession(db, {
+        id: 'sess-mirror', host: 'cursor', cwd: '/p',
+        status: 'active', firstSeenAt: now, lastSeenAt: now,
+      });
+      db.prepare(`
+        INSERT INTO channel_bindings (id, channel, host_session_id, external_chat, external_thread, wait_enabled, created_at)
+        VALUES ('bnd-l1', 'lark', 'sess-mirror', 'oc_a', 'om_t', 1, ?),
+               ('bnd-l2', 'lark', 'sess-mirror', 'oc_b', 'om_t', 1, ?),
+               ('bnd-x',  'other', 'sess-mirror', 'x', 'y', 1, ?)
+      `).run(now, now, now);
+
+      const r = await sendBridgeMessage(
+        { type: 'host_agent_response', host_session_id: 'sess-mirror', response_text: 'agent says hi' },
+        { socketPath, timeoutMs: 5000 },
+      ) as { ok: boolean; suppressed?: boolean };
+
+      expect(r.ok).toBe(true);
+      expect(r.suppressed).toBeUndefined();
+
+      // Allow the fire-and-forget sends to complete.
+      await waitFor(() => sentMessages.length === 2);
+      const ids = sentMessages.map((m) => m.bindingId).sort();
+      expect(ids).toEqual(['bnd-l1', 'bnd-l2']);
+      expect(sentMessages.every((m) => m.text === 'agent says hi')).toBe(true);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('returns suppressed=true when the session has no Lark bindings', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      const now = new Date().toISOString();
+      upsertHostSession(db, {
+        id: 'sess-quiet', host: 'cursor', status: 'active',
+        firstSeenAt: now, lastSeenAt: now,
+      });
+      const r = await sendBridgeMessage(
+        { type: 'host_agent_response', host_session_id: 'sess-quiet', response_text: 'tree falls' },
+        { socketPath, timeoutMs: 5000 },
+      ) as { ok: boolean; suppressed?: boolean };
+      expect(r).toEqual({ ok: true, suppressed: true });
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('attack: empty / whitespace response_text suppresses the mirror', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      const r = await sendBridgeMessage(
+        { type: 'host_agent_response', host_session_id: 's', response_text: '   ' },
+        { socketPath, timeoutMs: 5000 },
+      ) as { suppressed?: boolean };
+      expect(r.suppressed).toBe(true);
+    } finally {
+      await app.stop();
+    }
+  });
+});
+
 describe('createHelmApp — shutdown wakes pendings', () => {
   it('in-flight host_approval_request resolves with ask after stop()', async () => {
     const loggers = createCapturingLoggerFactory();

@@ -125,8 +125,50 @@ describe('listener — startup + event parsing', () => {
     const msg = events[0] as LarkInboundMessage;
     expect(msg.kind).toBe('message');
     expect(msg.messageId).toBe('om_1');
-    expect(msg.text).toBe('hello @bot');
+    // Phase 38: mention spans are stripped from the parsed text so a multi-
+    // word display name (Lark's "@chat with cursor" rendered bubble) doesn't
+    // contaminate downstream label / queue text. mentioned stays true.
+    expect(msg.text).toBe('hello');
     expect(msg.mentioned).toBe(true);
+  });
+
+  it('Phase 38: multi-word @mention display name is stripped, not just the @-prefix', () => {
+    const listener = makeListener();
+    listener.onEvent((e) => events.push(e));
+    listener.start();
+
+    cli.current().emitStdout(JSON.stringify({
+      event_type: 'im.message.receive_v1',
+      message: {
+        message_id: 'om_2', chat_id: 'oc_a',
+        text: '@chat with cursor dr bind chat',
+        mentions: [{ name: 'chat with cursor', key: '@_user_1' }],
+      },
+    }));
+
+    const msg = events[0] as LarkInboundMessage;
+    // Old behavior left "with cursor dr bind chat"; the bug spec.
+    expect(msg.text).toBe('dr bind chat');
+    expect(msg.mentioned).toBe(true);
+  });
+
+  it('Phase 38: mention.key placeholder form is also stripped', () => {
+    const listener = makeListener();
+    listener.onEvent((e) => events.push(e));
+    listener.start();
+
+    cli.current().emitStdout(JSON.stringify({
+      event_type: 'im.message.receive_v1',
+      message: {
+        message_id: 'om_3', chat_id: 'oc_a',
+        // Some Lark events send the placeholder rather than the rendered name.
+        text: '@_user_1 hello',
+        mentions: [{ name: 'chat with cursor', key: '@_user_1' }],
+      },
+    }));
+
+    const msg = events[0] as LarkInboundMessage;
+    expect(msg.text).toBe('hello');
   });
 
   it('parses card.action.trigger', () => {

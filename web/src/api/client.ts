@@ -181,6 +181,14 @@ export const helmApi = {
     ),
   unbind: (bindingId: string) =>
     request<{ ok: true }>('DELETE', `/api/bindings/${encodeURIComponent(bindingId)}`),
+  // Phase 62: from Active Chats "Mirror to Lark" — mints a pending_binds
+  // code without requiring the user to first send `@bot bind chat` in Lark.
+  // Returns 501 when Lark isn't wired (renderer should hide the button or
+  // surface "Configure Lark in Settings").
+  initiateLarkBind: (label?: string) =>
+    request<{ code: string; expiresAt: string; instruction: string }>(
+      'POST', '/api/bindings/initiate', label ? { label } : {},
+    ),
 
   // ── Roles (B3) ──
   roles: () => request<{ roles: RoleSummary[] }>('GET', '/api/roles'),

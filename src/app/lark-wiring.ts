@@ -348,3 +348,29 @@ export function consumePendingBind(
   if (created) events.emit({ type: 'binding.created', binding: created });
   return created ?? null;
 }
+
+/**
+ * Phase 62: create a pending_binds row from the helm-app side (renderer's
+ * "Mirror to Lark" button). Returns the freshly minted code + the
+ * instruction message the UI surfaces. Mirrors the no-thread branch of
+ * `bindToRemoteChannel` (Phase 6) but keeps things in `lark-wiring` so
+ * the same TTL + code-generator are the single source of truth.
+ *
+ * No `hostSessionId` here — by design. The user attaches the Cursor chat
+ * later via `consumePendingBind` (or the lark-wiring inbound handler).
+ */
+export function createPendingLarkBind(
+  db: Database.Database,
+  opts: { label?: string } = {},
+): { code: string; expiresAt: string; instruction: string } {
+  const code = newBindingCode();
+  const expiresAt = new Date(Date.now() + PENDING_BIND_TTL_MS).toISOString();
+  insertPendingBind(db, {
+    code,
+    channel: 'lark',
+    ...(opts.label ? { label: opts.label } : {}),
+    expiresAt,
+  });
+  const instruction = `Send "@bot bind ${code}" in the Lark thread you want to mirror. Code expires in 10 minutes.`;
+  return { code, expiresAt, instruction };
+}

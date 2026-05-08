@@ -66,6 +66,7 @@ import {
 } from '../storage/repos/host-sessions.js';
 import {
   dequeueMessages,
+  enqueueMessage,
   listBindingsForSession,
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
@@ -541,6 +542,66 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       policy,
       events,
       log: deps.loggers.module('channel.lark.wiring'),
+    });
+
+    // Phase 61: bind-ack — when a Lark binding lands, post an immediate ack
+    // to the bound thread AND enqueue a one-shot confirm-request for the
+    // Cursor side. The Lark post is instant (doesn't depend on Cursor being
+    // open); the queued message fires on the next `host_stop` long-poll so
+    // the user also sees a "Cursor agent is alive" reply mirrored back to
+    // Lark. Both are best-effort — failures here never undo the bind.
+    const ackLog = deps.loggers.module('lark.bind-ack');
+    events.on((e) => {
+      if (e.type !== 'binding.created') return;
+      const binding = e.binding;
+      if (binding.channel !== 'lark' || !larkChannel) return;
+      const session = binding.hostSessionId
+        ? getHostSession(deps.db, binding.hostSessionId)
+        : undefined;
+      const cwd = session?.cwd ?? '(cwd unknown)';
+      const labelSuffix = binding.label ? ` (${binding.label})` : '';
+      const shortSession = (binding.hostSessionId ?? '').slice(0, 8) || '?';
+
+      // 1. Direct Lark ack — instant feedback, doesn't depend on Cursor.
+      const ackText = [
+        `✅ Helm 已绑定到 Cursor chat${labelSuffix}`,
+        `cwd: \`${cwd}\``,
+        `chat: \`${shortSession}\``,
+        '',
+        '在这个 thread 里发的消息会被转发到 Cursor。',
+      ].join('\n');
+      void larkChannel.sendMessage(binding, ackText, { kind: 'notice' })
+        .catch((err) => ackLog.warn('lark_post_failed', {
+          data: { error: (err as Error).message, bindingId: binding.id },
+        }));
+
+      // 2. Cursor-side confirm-request — fires on next host_stop. Phrased to
+      // discourage real work; we just want a one-line "alive" reply that
+      // the afterAgentResponse mirror will bounce back to Lark.
+      const confirmPrompt = [
+        '【Helm 绑定确认 · 自动注入，请勿当作真实 user 任务】',
+        '',
+        `Helm 刚把这个 chat 绑定到 Lark。请用一句话回复"已收到来自 Lark 的连接确认（cwd: ${cwd}）"，不要做任何工具调用、代码修改或推理 — 这只是连通性测试。`,
+      ].join('\n');
+      try {
+        const messageRowId = enqueueMessage(deps.db, {
+          bindingId: binding.id,
+          text: confirmPrompt,
+          createdAt: new Date().toISOString(),
+        });
+        events.emit({
+          type: 'channel.message_enqueued',
+          bindingId: binding.id,
+          messageId: messageRowId,
+        });
+        ackLog.info('bind_ack_enqueued', {
+          data: { bindingId: binding.id, messageId: messageRowId },
+        });
+      } catch (err) {
+        ackLog.warn('enqueue_failed', {
+          data: { error: (err as Error).message, bindingId: binding.id },
+        });
+      }
     });
   }
 

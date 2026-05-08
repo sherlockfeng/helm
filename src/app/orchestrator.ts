@@ -607,6 +607,24 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // upload screenshots from agent → bound thread without spawning a
       // second lark-cli process.
       ...(larkChannel ? { larkChannel } : {}),
+      // Phase 59: pass a lark-cli runner so `read_lark_doc` can fetch
+      // wiki/docx markdown for any Cursor agent connected to helm's MCP
+      // SSE — including the role-trainer's Cursor backend, mainstream
+      // Cursor IDE chats, and Claude Desktop. Constructed lazily; if
+      // lark-cli isn't on PATH the tool itself surfaces an actionable
+      // error rather than the factory throwing.
+      ...((): { larkCli?: ReturnType<typeof createLarkCliRunner> } => {
+        try {
+          return {
+            larkCli: createLarkCliRunner({
+              command: liveConfig.lark.cliCommand,
+              env: liveConfig.lark.env ?? process.env,
+            }),
+          };
+        } catch {
+          return {};
+        }
+      })(),
     });
   }
 
@@ -652,9 +670,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // toggle, etc.) takes effect on the next request without restart.
       // Returns null when no provider is reachable so the handler can
       // surface 501 rather than crash.
-      llmChatFactory: () => {
+      llmChatFactory: (opts) => {
         try {
-          return createLlmChatClient({ config: liveConfig });
+          // Phase 59: when a project path is supplied AND the Cursor backend
+          // is selected, the agent gets file access to that path. Helm's
+          // own MCP HTTP/SSE URL is wired so the agent can also use
+          // `read_lark_doc` (and any other helm MCP tool) alongside its
+          // built-in shell / read / grep / edit.
+          const httpPort = httpApi.port();
+          const helmMcpUrl = httpPort
+            ? `http://127.0.0.1:${httpPort}/mcp/sse`
+            : undefined;
+          return createLlmChatClient({
+            config: liveConfig,
+            ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+            ...(helmMcpUrl ? { helmMcpUrl } : {}),
+          });
         } catch (err) {
           log.warn('llm_chat_factory_unavailable', { data: { error: (err as Error).message } });
           return null;

@@ -197,7 +197,10 @@ export const helmApi = {
   // turn — the renderer keeps the message history client-side and replays
   // it on each call. `roleTrainChatCommit` distills the conversation into
   // a {name, systemPrompt} role spec via the same LLM and saves the role.
-  roleTrainChat: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) =>
+  roleTrainChat: (
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    options: { projectPath?: string } = {},
+  ) =>
     request<{
       message: { role: 'assistant'; content: string };
       provider: 'cursor' | 'anthropic';
@@ -214,7 +217,12 @@ export const helmApi = {
         resultPreview: string;
         error?: boolean;
       }>;
-    }>('POST', '/api/roles/train-chat', { messages }),
+    }>('POST', '/api/roles/train-chat', {
+      messages,
+      // Phase 59: when set, the Cursor agent gets file access to this path.
+      // Anthropic backend ignores it.
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+    }),
   roleTrainChatCommit: (
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,
     options: { roleId?: string } = {},

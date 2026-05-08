@@ -212,15 +212,38 @@ describe('AnthropicChatClient — tool-use loop (Phase 58)', () => {
   });
 });
 
-describe('CursorChatClient', () => {
-  it('serializes the conversation as a transcript and surfaces RunResult.result', async () => {
-    const promptFn = vi.fn().mockResolvedValue({
-      id: 'r1', status: 'finished', result: 'cursor reply',
+describe('CursorChatClient — Phase 59 Agent.create + stream', () => {
+  /**
+   * Build a fake `Agent.create`-compatible factory whose `agent.send().stream()`
+   * yields the supplied SDKMessage events. `wait()` returns finished+result.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function fakeAgentFactory(events: any[], finalResult = 'cursor reply'): any {
+    const captured: { createOptions?: unknown; sentPrompt?: string } = {};
+    const factory = vi.fn().mockImplementation(async (opts: unknown) => {
+      captured.createOptions = opts;
+      return {
+        send: vi.fn().mockImplementation(async (prompt: string) => {
+          captured.sentPrompt = prompt;
+          return {
+            stream: () => (async function* () { for (const e of events) yield e; })(),
+            wait: async () => ({ id: 'r1', status: 'finished', result: finalResult }),
+          };
+        }),
+        [Symbol.asyncDispose]: async () => undefined,
+      };
     });
+    return Object.assign(factory, { __captured: captured });
+  }
+
+  it('streams assistant text deltas and aggregates them as final content', async () => {
+    const factory = fakeAgentFactory([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'hello ' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'world' }] } },
+    ]);
     const client = new CursorChatClient({
       mode: 'local',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      promptFn: promptFn as any,
+      agentFactory: factory,
     });
     const r = await client.chat(
       [
@@ -230,24 +253,137 @@ describe('CursorChatClient', () => {
       ],
       { system: 'be polite' },
     );
-    expect(r.content).toBe('cursor reply');
+    expect(r.content).toBe('hello world');
     expect(r.provider).toBe('cursor');
-    const transcript = promptFn.mock.calls[0]?.[0] as string;
-    expect(transcript).toContain('System:\nbe polite');
-    expect(transcript).toContain('User:\nhello');
-    expect(transcript).toContain('Assistant:\nhi');
-    expect(transcript).toContain('User:\nhow are you?');
-    // Trailing "Assistant:\n" cue so the LLM continues as the assistant.
-    expect(transcript.trim().endsWith('Assistant:')).toBe(true);
+    // Transcript is built from messages + system; verify format.
+    expect(factory.__captured.sentPrompt).toContain('System:\nbe polite');
+    expect(factory.__captured.sentPrompt).toContain('User:\nhello');
+    expect(factory.__captured.sentPrompt).toContain('Assistant:\nhi');
+    expect(factory.__captured.sentPrompt!.trim().endsWith('Assistant:')).toBe(true);
   });
 
-  it('attack: agent did not finish → throws with the status code visible', async () => {
+  it('passes cwd to Agent.create local options for file access', async () => {
+    const factory = fakeAgentFactory([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ]);
     const client = new CursorChatClient({
+      mode: 'local',
+      cwd: '/Users/me/projects/foo',
+      agentFactory: factory,
+    });
+    await client.chat([{ role: 'user', content: 'q' }]);
+    const opts = factory.__captured.createOptions as { local?: { cwd?: string } };
+    expect(opts.local?.cwd).toBe('/Users/me/projects/foo');
+  });
+
+  it('passes helm MCP SSE URL into agent.mcpServers when supplied', async () => {
+    const factory = fakeAgentFactory([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
+    ]);
+    const client = new CursorChatClient({
+      mode: 'local',
+      helmMcpUrl: 'http://127.0.0.1:17317/mcp/sse',
+      agentFactory: factory,
+    });
+    await client.chat([{ role: 'user', content: 'q' }]);
+    const opts = factory.__captured.createOptions as {
+      mcpServers?: Record<string, { type?: string; url?: string }>;
+    };
+    expect(opts.mcpServers?.helm).toEqual({ type: 'sse', url: 'http://127.0.0.1:17317/mcp/sse' });
+  });
+
+  it('captures tool_use blocks and matching tool_call completed events into toolCalls[]', async () => {
+    const factory = fakeAgentFactory([
+      // Agent decides to call read_lark_doc.
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'reading docs… ' },
+            { type: 'tool_use', id: 'tu_1', name: 'read_lark_doc', input: { url_or_token: 'https://x.com/wiki/abc' } },
+          ],
+        },
+      },
+      // Tool completes with a result.
+      {
+        type: 'tool_call',
+        call_id: 'tu_1',
+        name: 'read_lark_doc',
+        args: { url_or_token: 'https://x.com/wiki/abc' },
+        status: 'completed',
+        result: '# heading\nbody',
+      },
+      // Agent's final reply after seeing the doc.
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'based on the doc, ...' }] },
+      },
+    ]);
+    const client = new CursorChatClient({ mode: 'local', agentFactory: factory });
+    const r = await client.chat([{ role: 'user', content: 'read https://x.com/wiki/abc' }]);
+    expect(r.content).toBe('reading docs… based on the doc, ...');
+    expect(r.toolCalls).toEqual([
+      expect.objectContaining({
+        name: 'read_lark_doc',
+        input: { url_or_token: 'https://x.com/wiki/abc' },
+        resultPreview: '# heading\nbody',
+      }),
+    ]);
+  });
+
+  it('flags tool_call with status=failed as error in toolCalls[]', async () => {
+    const factory = fakeAgentFactory([
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'tu_1', name: 'flaky', input: { x: 'a' } }],
+        },
+      },
+      {
+        type: 'tool_call', call_id: 'tu_1', name: 'flaky',
+        args: { x: 'a' }, status: 'failed', result: 'rate limited',
+      },
+    ]);
+    const client = new CursorChatClient({ mode: 'local', agentFactory: factory });
+    const r = await client.chat([{ role: 'user', content: 'go' }]);
+    expect(r.toolCalls?.[0]).toMatchObject({ name: 'flaky', error: true, resultPreview: 'rate limited' });
+  });
+
+  it('attack: run.wait() returns non-finished status → throws diagnostic', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const factory = vi.fn().mockResolvedValue({
+      send: async () => ({
+        stream: async function* () { /* no events */ },
+        wait: async () => ({ id: 'r', status: 'errored', result: 'agent crashed' }),
+      }),
+      [Symbol.asyncDispose]: async () => undefined,
+    });
+    const client = new CursorChatClient({
+      mode: 'local',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      promptFn: (async () => ({ id: 'r', status: 'errored', result: 'rate limited' })) as any,
+      agentFactory: factory as any,
     });
     await expect(client.chat([{ role: 'user', content: 'hi' }]))
-      .rejects.toThrow(/status=errored.*rate limited/);
+      .rejects.toThrow(/status=errored.*agent crashed/);
+  });
+
+  it('disposes the agent (Symbol.asyncDispose) even when the run throws mid-stream', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const factory = vi.fn().mockResolvedValue({
+      send: async () => ({
+        stream: async function* () { throw new Error('stream boom'); },
+        wait: async () => ({ status: 'finished', result: '' }),
+      }),
+      [Symbol.asyncDispose]: dispose,
+    });
+    const client = new CursorChatClient({
+      mode: 'local',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      agentFactory: factory as any,
+    });
+    await expect(client.chat([{ role: 'user', content: 'hi' }])).rejects.toThrow(/stream boom/);
+    expect(dispose).toHaveBeenCalled();
   });
 });
 

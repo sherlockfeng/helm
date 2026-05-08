@@ -202,18 +202,50 @@ export interface CursorChatClientOptions {
   /** Default 'auto'. */
   model?: string;
   mode?: 'local' | 'cloud';
-  /** Test seam — replaces `Agent.prompt`. */
-  promptFn?: typeof Agent.prompt;
+  /**
+   * Phase 59: working directory the agent has file access to. When set, the
+   * agent's built-in `read` / `glob` / `grep` / `shell` / `edit` tools
+   * operate against this path — gives the role-trainer "read code" without
+   * us having to define those tools ourselves. Defaults to `process.cwd()`
+   * when unset (helm's own checkout, not super useful — caller should
+   * supply the user's project path).
+   */
+  cwd?: string;
+  /**
+   * Phase 59: helm's own MCP HTTP/SSE URL. When set, the Cursor agent
+   * mounts it as an MCP server and gains access to all helm tools — most
+   * notably `read_lark_doc` so the agent can pull Lark docs into context.
+   * Typically `http://127.0.0.1:17317/mcp/sse`.
+   */
+  helmMcpUrl?: string;
+  /**
+   * Phase 59: test seam — inject a fake `Agent.create`-compatible factory.
+   * Fake returns an SDKAgent-shaped object whose `send()` returns a Run
+   * whose `stream()` yields fake SDKMessage events.
+   */
+  agentFactory?: typeof Agent.create;
 }
 
 const DEFAULT_CURSOR_MODEL = 'auto';
 
 /**
- * Cursor doesn't yet have a multi-turn chat primitive in the SDK we're using
- * — `Agent.prompt(text)` is one-shot. We synthesize multi-turn by serializing
- * the message history into a single transcript and re-prompting each time.
- * This costs more tokens than Anthropic's native multi-turn but works without
- * any extra Cursor SDK surface.
+ * Phase 59: rewritten on top of `Agent.create() + agent.send().stream()`
+ * (the pattern shown in the cursor cookbook). Each call to `chat()`:
+ *
+ *   1. Creates a fresh agent — stateless from helm's HTTP-request lifecycle
+ *      perspective; each turn replays the conversation as a single prompt
+ *      that the agent works through with its built-in tools.
+ *   2. Mounts helm's MCP server (when `helmMcpUrl` is set) so the agent has
+ *      `read_lark_doc` (and any future helm tools) available alongside its
+ *      own native `read`/`grep`/`shell`/`edit` tools.
+ *   3. Streams the run, capturing tool_call events into `toolCalls[]` so
+ *      the renderer can render chips inline (same shape as the Anthropic
+ *      path).
+ *
+ * The `tools` field on `LlmChatOptions` is intentionally ignored on this
+ * path — Cursor agents have their own tool surface (built-ins + MCP) that
+ * doesn't fit our `ToolDef` shape. Helm-side tools should be exposed via
+ * the MCP server so both providers can use them.
  */
 export class CursorChatClient implements LlmChatClient {
   readonly provider = 'cursor' as const;
@@ -226,31 +258,119 @@ export class CursorChatClient implements LlmChatClient {
   }
 
   async chat(messages: readonly LlmChatMessage[], options: LlmChatOptions = {}): Promise<LlmChatResult> {
-    const promptFn = this.options.promptFn ?? Agent.prompt;
+    const agentCreate = this.options.agentFactory ?? Agent.create;
     const transcript = serializeTranscript(messages, options.system);
-    const agentOptions: Parameters<typeof Agent.prompt>[1] = {
+
+    const createOptions: Parameters<typeof Agent.create>[0] = {
+      name: 'helm role-coach',
       model: { id: options.model ?? this.model },
     };
     if (this.options.mode === 'local' || !this.options.mode) {
-      agentOptions.local = { cwd: process.cwd() };
+      createOptions.local = { cwd: this.options.cwd ?? process.cwd() };
     } else if (this.options.apiKey) {
-      // Cloud mode — apiKey lives at the AgentOptions root, not inside
-      // `cloud`. (Mirrors src/summarizer/cursor-client.ts.)
-      agentOptions.apiKey = this.options.apiKey;
+      createOptions.apiKey = this.options.apiKey;
     }
-    const result = await promptFn(transcript, agentOptions);
-    if (result.status !== 'finished') {
-      throw new Error(
-        `Cursor agent did not finish (status=${result.status})`
-        + (result.result ? `: ${result.result.slice(0, 200)}` : ''),
-      );
+    if (this.options.helmMcpUrl) {
+      createOptions.mcpServers = {
+        helm: { type: 'sse', url: this.options.helmMcpUrl },
+      };
     }
-    return {
-      content: result.result ?? '',
-      provider: 'cursor',
-      model: options.model ?? this.model,
-    };
+
+    const agent = await agentCreate(createOptions);
+    const toolCalls: ToolCallRecord[] = [];
+    let assistantText = '';
+
+    try {
+      const run = await agent.send(transcript);
+
+      for await (const event of run.stream()) {
+        // Streaming SDKMessage events. Two shapes that matter for us:
+        //   - `assistant` with content blocks (text + tool_use);
+        //   - `tool_call` with status updates (requested, running, completed).
+        if (event.type === 'assistant') {
+          for (const block of event.message.content) {
+            if (block.type === 'text') {
+              assistantText += block.text;
+            } else if (block.type === 'tool_use') {
+              // Insert a placeholder so order is preserved; the matching
+              // `tool_call` event with status=completed will fill in the
+              // resultPreview if the SDK surfaces it.
+              toolCalls.push({
+                name: block.name,
+                input: block.input,
+                resultPreview: '',
+              });
+            }
+          }
+        } else if (event.type === 'tool_call') {
+          // Update the in-flight tool call with the latest status. The
+          // SDK emits multiple tool_call events per tool (requested →
+          // running → completed); only "completed" carries a result.
+          // Our shape is a flat list so we update the most recent call
+          // matching the name + input.
+          const status = (event as { status?: string }).status;
+          const name = (event as { name?: string }).name ?? '';
+          const args = (event as { args?: unknown }).args;
+          const result = (event as { result?: unknown }).result;
+          if (status === 'completed' || status === 'failed') {
+            const matchIdx = findLastMatchingToolCall(toolCalls, name, args);
+            const target = matchIdx >= 0
+              ? toolCalls[matchIdx]!
+              : (toolCalls.push({ name, input: args, resultPreview: '' }), toolCalls[toolCalls.length - 1]!);
+            target.resultPreview = stringifyForPreview(result).slice(0, 200);
+            if (status === 'failed') target.error = true;
+          }
+        }
+      }
+
+      const result = await run.wait();
+      if (result.status !== 'finished') {
+        throw new Error(
+          `Cursor agent did not finish (status=${result.status})`
+          + (result.result ? `: ${result.result.slice(0, 200)}` : ''),
+        );
+      }
+      // Some agent runs deliver the final answer only via run.result rather
+      // than streamed assistant text. Use whichever is non-empty.
+      const content = assistantText || (result.result ?? '');
+      return {
+        content,
+        provider: 'cursor',
+        model: options.model ?? this.model,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      };
+    } finally {
+      // Best-effort dispose — the SDK exposes Symbol.asyncDispose on agents.
+      try { await agent[Symbol.asyncDispose](); } catch { /* ignored */ }
+    }
   }
+}
+
+function findLastMatchingToolCall(
+  calls: readonly ToolCallRecord[],
+  name: string,
+  args: unknown,
+): number {
+  // Walk backwards because tool_call events arrive shortly after the
+  // assistant's tool_use block; the most recent insertion is almost always
+  // the right match.
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const c = calls[i]!;
+    if (c.name === name && deepEqual(c.input, args)) return i;
+  }
+  return -1;
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try { return JSON.stringify(a) === JSON.stringify(b); }
+  catch { return false; }
+}
+
+function stringifyForPreview(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function serializeTranscript(messages: readonly LlmChatMessage[], system?: string): string {
@@ -270,6 +390,17 @@ function serializeTranscript(messages: readonly LlmChatMessage[], system?: strin
 
 export interface CreateLlmChatClientDeps {
   config: HelmConfig;
+  /**
+   * Phase 59: working directory the Cursor agent has file access to.
+   * Forwarded as `local: { cwd }` when the Cursor backend is selected.
+   * Doesn't affect the Anthropic backend (no file access there).
+   */
+  cwd?: string;
+  /**
+   * Phase 59: helm MCP server URL. When set + Cursor backend is selected,
+   * the agent mounts helm's MCP via SSE and gains `read_lark_doc` etc.
+   */
+  helmMcpUrl?: string;
   /** Test override — return a fake client. */
   factory?: (config: HelmConfig) => LlmChatClient;
 }
@@ -303,6 +434,8 @@ export function createLlmChatClient(deps: CreateLlmChatClientDeps): LlmChatClien
       mode: cursorMode,
       ...(cursorKey ? { apiKey: cursorKey } : {}),
       ...(deps.config.cursor.model ? { model: deps.config.cursor.model } : {}),
+      ...(deps.cwd ? { cwd: deps.cwd } : {}),
+      ...(deps.helmMcpUrl ? { helmMcpUrl: deps.helmMcpUrl } : {}),
     });
   }
 

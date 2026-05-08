@@ -149,8 +149,14 @@ export interface HttpApiDeps {
    * lazily so a Settings save updates the next call without restart. Returns
    * `null` when no provider is configured (no anthropic.apiKey AND no
    * Cursor); handlers surface a 501 with an actionable message.
+   *
+   * Phase 59: takes optional per-call options. `cwd` lets the caller pin
+   * the Cursor agent's file-access root to a user-supplied project path
+   * (so the agent's built-in `read`/`grep` tools see the right code).
    */
-  llmChatFactory?: () => import('../llm/chat.js').LlmChatClient | null;
+  llmChatFactory?: (
+    opts?: { cwd?: string },
+  ) => import('../llm/chat.js').LlmChatClient | null;
   /**
    * Phase 58: factory for the tools the role-trainer chat may call (e.g.
    * `read_lark_doc`). Built lazily so a Settings change to lark.cliCommand
@@ -1054,13 +1060,15 @@ const ROLE_TRAIN_SYSTEM_PROMPT = [
   '  3. Once the user confirms, briefly say "Ready to save — click Save in the UI"',
   '     and stop.',
   '',
-  'Tools (Phase 58):',
-  '  - When the user pastes a Lark / Feishu doc URL or token, call',
-  '    `read_lark_doc` to fetch the content and use it to inform your',
-  '    questions and the eventual system prompt. Do not paraphrase a doc',
-  '    you have not actually read.',
+  'Tools available to you:',
+  '  - `read_lark_doc(url_or_token)` — fetch a Lark / Feishu doc. When the',
+  '    user pastes a URL, call this rather than paraphrasing. Works on',
+  '    both backends (Cursor agent gets it via helm\'s MCP server).',
+  '  - On the Cursor backend, you also have native `read`, `grep`, `glob`,',
+  '    `shell`, and `edit` tools scoped to the user\'s project path (when',
+  '    they supplied one). Use them to look at code the role should know.',
   '  - If a tool call fails, mention it briefly and continue without',
-  '    inventing the doc content.',
+  '    inventing content.',
   '',
   'Hard rules:',
   '  - Never invent expertise the user did not describe.',
@@ -1101,9 +1109,12 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
   if (!parsed || typeof parsed !== 'object') {
     return badRequest(ctx.response, 'body must be a JSON object');
   }
-  const { messages } = parsed as { messages?: unknown };
+  const { messages, projectPath } = parsed as { messages?: unknown; projectPath?: unknown };
   if (!Array.isArray(messages) || messages.length === 0) {
     return badRequest(ctx.response, 'messages must be a non-empty array of {role,content}');
+  }
+  if (projectPath !== undefined && typeof projectPath !== 'string') {
+    return badRequest(ctx.response, 'projectPath must be a string when provided');
   }
   const validated: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const raw of messages) {
@@ -1121,7 +1132,11 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
   }
 
   let client;
-  try { client = factory(); }
+  try {
+    // Phase 59: forward projectPath as cwd so a Cursor backend agent can
+    // read code from the user's actual project.
+    client = factory(projectPath ? { cwd: projectPath } : undefined);
+  }
   catch (err) {
     return send(ctx.response, 501, {
       error: 'no_provider',

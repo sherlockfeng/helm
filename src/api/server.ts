@@ -144,6 +144,20 @@ export interface HttpApiDeps {
    * return 501.
    */
   mcpFactory?: () => McpServer;
+  /**
+   * Phase 57: factory for the conversational role-trainer LLM client. Built
+   * lazily so a Settings save updates the next call without restart. Returns
+   * `null` when no provider is configured (no anthropic.apiKey AND no
+   * Cursor); handlers surface a 501 with an actionable message.
+   */
+  llmChatFactory?: () => import('../llm/chat.js').LlmChatClient | null;
+  /**
+   * Phase 58: factory for the tools the role-trainer chat may call (e.g.
+   * `read_lark_doc`). Built lazily so a Settings change to lark.cliCommand
+   * picks up on the next request. Returns an empty array when no tools are
+   * available — the chat still works, just text-only.
+   */
+  llmToolsFactory?: () => readonly import('../llm/chat.js').ToolDef[];
 }
 
 export interface HttpApiOptions {
@@ -418,6 +432,16 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (roleTrainMatch) {
         if (req.method !== 'POST') return methodNotAllowed(res);
         return handleTrainRole(ctx, deps, roleTrainMatch[1]!);
+      }
+      // Phase 57: conversational role-training endpoints. Multi-turn chat
+      // first; commit distills the conversation into a role spec and saves.
+      if (url.pathname === '/api/roles/train-chat') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleRoleTrainChat(ctx, deps);
+      }
+      if (url.pathname === '/api/roles/train-chat/commit') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleRoleTrainChatCommit(ctx, deps);
       }
       const roleMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
       if (roleMatch) {
@@ -1006,4 +1030,259 @@ function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): 
       internalError(ctx.response, err);
     }
   })();
+}
+
+/**
+ * Phase 57: instructions the LLM follows when role-coaching the user. Kept
+ * inline so the user can read it in the source rather than guessing what
+ * the LLM is up to. The coach asks clarifying questions, summarizes when
+ * confident, and refuses to invent — it only distills what the user has
+ * actually told it.
+ */
+const ROLE_TRAIN_SYSTEM_PROMPT = [
+  'You are a role-coach helping the user define a new AI agent role for the helm system.',
+  '',
+  'Your job, in order:',
+  '  1. Ask clarifying questions, ONE OR TWO AT A TIME, to figure out:',
+  '     - The role\'s name (e.g. "Goofy 专家", "容灾大盘 reviewer")',
+  '     - Domain expertise (what topics, products, codebases)',
+  '     - Voice / style (terse code-reviewer, patient teacher, ...)',
+  '     - Concrete tasks the role should handle well',
+  '     - Edge cases / failure modes the role should NOT do',
+  '  2. When you have enough to draft a useful system prompt, summarize what',
+  '     you understand about the role and ask the user to confirm or correct.',
+  '  3. Once the user confirms, briefly say "Ready to save — click Save in the UI"',
+  '     and stop.',
+  '',
+  'Tools (Phase 58):',
+  '  - When the user pastes a Lark / Feishu doc URL or token, call',
+  '    `read_lark_doc` to fetch the content and use it to inform your',
+  '    questions and the eventual system prompt. Do not paraphrase a doc',
+  '    you have not actually read.',
+  '  - If a tool call fails, mention it briefly and continue without',
+  '    inventing the doc content.',
+  '',
+  'Hard rules:',
+  '  - Never invent expertise the user did not describe.',
+  '  - Stay in English unless the user writes in Chinese; mirror their language.',
+  '  - Keep each turn short (under 200 words). The user is in a chat box, not reading docs.',
+].join('\n');
+
+/**
+ * Phase 57 commit: distills the chat history into a structured role spec.
+ * Uses a strict JSON-only system prompt so we can parse the response without
+ * regex hacks. The LLM emits exactly:
+ *   { "name": string, "systemPrompt": string }
+ */
+const ROLE_TRAIN_COMMIT_PROMPT = [
+  'You are converting a coaching conversation into a finalized role spec.',
+  'Read the entire conversation above and emit ONLY a JSON object with two fields:',
+  '  - "name": the role\'s human-readable name (the value the user agreed on).',
+  '  - "systemPrompt": a self-contained system prompt that captures the role\'s',
+  '    expertise, style, and task focus. Written in second person ("You are ...").',
+  '    300-700 characters is plenty.',
+  '',
+  'Output ONLY the JSON object — no markdown, no commentary, no fences.',
+  'If the conversation is too thin to produce a coherent role, emit:',
+  '  {"error": "<short reason>"}',
+].join('\n');
+
+function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
+  const factory = deps.llmChatFactory;
+  if (!factory) {
+    return send(ctx.response, 501, {
+      error: 'not_implemented',
+      message: 'role-train chat factory not wired',
+    });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { messages } = parsed as { messages?: unknown };
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return badRequest(ctx.response, 'messages must be a non-empty array of {role,content}');
+  }
+  const validated: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== 'object') {
+      return badRequest(ctx.response, 'each message must be an object');
+    }
+    const m = raw as Record<string, unknown>;
+    if (m['role'] !== 'user' && m['role'] !== 'assistant') {
+      return badRequest(ctx.response, 'message.role must be "user" or "assistant"');
+    }
+    if (typeof m['content'] !== 'string' || !m['content']) {
+      return badRequest(ctx.response, 'message.content must be a non-empty string');
+    }
+    validated.push({ role: m['role'], content: m['content'] });
+  }
+
+  let client;
+  try { client = factory(); }
+  catch (err) {
+    return send(ctx.response, 501, {
+      error: 'no_provider',
+      message: (err as Error).message,
+    });
+  }
+  if (!client) {
+    return send(ctx.response, 501, {
+      error: 'no_provider',
+      message: 'No LLM provider configured. Set anthropic.apiKey in Settings or sign into Cursor.',
+    });
+  }
+
+  void (async () => {
+    try {
+      // Phase 58: hand the chat any registered tools (read_lark_doc et al.)
+      // so the coach can pull docs the user references.
+      const tools = deps.llmToolsFactory ? deps.llmToolsFactory() : [];
+      const result = await client.chat(validated, {
+        system: ROLE_TRAIN_SYSTEM_PROMPT,
+        maxTokens: 1024,
+        ...(tools.length > 0 ? { tools } : {}),
+      });
+      deps.logger?.info('role_train_chat_turn', {
+        data: {
+          provider: result.provider, model: result.model,
+          msgs: validated.length,
+          toolCalls: result.toolCalls?.map((c) => c.name) ?? [],
+        },
+      });
+      send(ctx.response, 200, {
+        message: { role: 'assistant', content: result.content },
+        provider: result.provider,
+        model: result.model,
+        ...(result.toolCalls && result.toolCalls.length > 0
+          ? { toolCalls: result.toolCalls }
+          : {}),
+      });
+    } catch (err) {
+      deps.logger?.warn('role_train_chat_failed', { data: { error: (err as Error).message } });
+      send(ctx.response, 502, { error: 'llm_failed', message: (err as Error).message });
+    }
+  })();
+}
+
+function handleRoleTrainChatCommit(ctx: RouteContext, deps: HttpApiDeps): void {
+  const factory = deps.llmChatFactory;
+  if (!factory || !deps.trainRole) {
+    return send(ctx.response, 501, {
+      error: 'not_implemented',
+      message: 'role-train factory + trainRole must both be wired to commit',
+    });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { messages, roleId } = parsed as { messages?: unknown; roleId?: unknown };
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return badRequest(ctx.response, 'messages must be a non-empty array');
+  }
+  if (roleId !== undefined && typeof roleId !== 'string') {
+    return badRequest(ctx.response, 'roleId must be a string when provided');
+  }
+  // Re-validate message shape (mirrors handleRoleTrainChat).
+  const validated: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== 'object') return badRequest(ctx.response, 'each message must be an object');
+    const m = raw as Record<string, unknown>;
+    if (m['role'] !== 'user' && m['role'] !== 'assistant') {
+      return badRequest(ctx.response, 'message.role must be "user" or "assistant"');
+    }
+    if (typeof m['content'] !== 'string') {
+      return badRequest(ctx.response, 'message.content must be a string');
+    }
+    validated.push({ role: m['role'], content: m['content'] });
+  }
+
+  let client;
+  try { client = factory(); }
+  catch (err) {
+    return send(ctx.response, 501, { error: 'no_provider', message: (err as Error).message });
+  }
+  if (!client) return send(ctx.response, 501, { error: 'no_provider' });
+
+  void (async () => {
+    try {
+      // Step 1: ask the LLM to distill into a {name, systemPrompt} JSON.
+      const distill = await client.chat(validated, {
+        system: ROLE_TRAIN_COMMIT_PROMPT,
+        maxTokens: 1500,
+      });
+      const spec = parseRoleSpec(distill.content);
+      if ('error' in spec) {
+        return send(ctx.response, 422, {
+          error: 'distill_failed', message: spec.error,
+        });
+      }
+
+      // Step 2: feed the distilled spec into the existing trainRole pipeline.
+      // The conversation transcript becomes a single document so search-time
+      // RAG can recall the source dialogue.
+      const transcript = validated
+        .map((m) => `**${m.role === 'user' ? 'User' : 'Coach'}**: ${m.content}`)
+        .join('\n\n');
+      const finalRoleId = (roleId && roleId.trim()) || `role-${slugify(spec.name)}-${Date.now().toString(36)}`;
+      const role = await deps.trainRole!({
+        roleId: finalRoleId,
+        name: spec.name,
+        documents: [
+          { filename: 'training-conversation.md', content: transcript },
+        ],
+        baseSystemPrompt: spec.systemPrompt,
+      });
+
+      deps.logger?.info('role_trained_via_chat', {
+        data: { roleId: finalRoleId, name: spec.name, msgs: validated.length, provider: distill.provider },
+      });
+      return send(ctx.response, 200, {
+        role,
+        spec: { name: spec.name, systemPrompt: spec.systemPrompt },
+        provider: distill.provider,
+        model: distill.model,
+      });
+    } catch (err) {
+      deps.logger?.warn('role_train_chat_commit_failed', { data: { error: (err as Error).message } });
+      return send(ctx.response, 500, { error: 'commit_failed', message: (err as Error).message });
+    }
+  })();
+}
+
+function parseRoleSpec(text: string): { name: string; systemPrompt: string } | { error: string } {
+  // The commit-prompt asks for raw JSON, but defensive — strip code fences if
+  // the model wraps the output anyway.
+  const trimmed = text.trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  let obj: unknown;
+  try { obj = JSON.parse(trimmed); }
+  catch { return { error: `LLM did not return valid JSON: ${trimmed.slice(0, 120)}…` }; }
+  if (!obj || typeof obj !== 'object') return { error: 'LLM JSON was not an object' };
+  const o = obj as Record<string, unknown>;
+  if (typeof o['error'] === 'string') return { error: o['error'] };
+  if (typeof o['name'] !== 'string' || !o['name'].trim()) {
+    return { error: 'LLM JSON missing name' };
+  }
+  if (typeof o['systemPrompt'] !== 'string' || !o['systemPrompt'].trim()) {
+    return { error: 'LLM JSON missing systemPrompt' };
+  }
+  return { name: o['name'].trim(), systemPrompt: o['systemPrompt'].trim() };
+}
+
+function slugify(text: string): string {
+  return text.toLowerCase()
+    .replace(/[^\w\s-]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    || 'role';
 }

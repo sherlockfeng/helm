@@ -70,6 +70,9 @@ import {
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createMcpServer } from '../mcp/server.js';
+import { createLlmChatClient } from '../llm/chat.js';
+import { createReadLarkDocTool } from '../llm/tools/lark-doc.js';
+import type { ToolDef } from '../llm/chat.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
@@ -644,6 +647,36 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         ...input,
         embedFn: makePseudoEmbedFn(),
       }),
+      // Phase 57: lazy LLM chat factory for the role-trainer endpoints.
+      // Reads liveConfig at call time so a Settings save (anthropic.apiKey
+      // toggle, etc.) takes effect on the next request without restart.
+      // Returns null when no provider is reachable so the handler can
+      // surface 501 rather than crash.
+      llmChatFactory: () => {
+        try {
+          return createLlmChatClient({ config: liveConfig });
+        } catch (err) {
+          log.warn('llm_chat_factory_unavailable', { data: { error: (err as Error).message } });
+          return null;
+        }
+      },
+      // Phase 58: tools available to the role-trainer chat. `read_lark_doc`
+      // gets registered whenever the lark-cli command can be located —
+      // typically true on the user's dev box. Reads the live config each
+      // call so a Settings change to lark.cliCommand picks up.
+      llmToolsFactory: (): readonly ToolDef[] => {
+        const tools: ToolDef[] = [];
+        try {
+          const cli = createLarkCliRunner({
+            command: liveConfig.lark.cliCommand,
+            env: liveConfig.lark.env ?? process.env,
+          });
+          tools.push(createReadLarkDocTool({ cli }));
+        } catch (err) {
+          log.info('llm_tools_lark_unavailable', { data: { error: (err as Error).message } });
+        }
+        return tools;
+      },
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );

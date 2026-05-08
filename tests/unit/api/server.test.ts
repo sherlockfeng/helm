@@ -1095,3 +1095,234 @@ describe('attack: only binds 127.0.0.1', () => {
     expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
   });
 });
+
+describe('POST /api/roles/train-chat (Phase 57)', () => {
+  beforeEach(async () => {
+    // The default api built in the outer beforeEach is fine for the 501 cases.
+    // Happy-path tests rebuild api with an injected llmChatFactory + trainRole.
+  });
+
+  it('501 when llmChatFactory is not wired', async () => {
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(501);
+  });
+
+  it('happy: forwards messages → llm; returns assistant turn', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic',
+        model: 'stub',
+        chat: async (messages) => ({
+          content: `you said ${messages.length} thing(s)`,
+          provider: 'anthropic',
+          model: 'stub',
+        }),
+      }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+        { role: 'user', content: 'tell me about Goofy' },
+      ] }),
+    });
+    expect(r.status).toBe(200);
+    const body = r.body as { message: { role: string; content: string }; provider: string };
+    expect(body.message).toEqual({ role: 'assistant', content: 'you said 3 thing(s)' });
+    expect(body.provider).toBe('anthropic');
+  });
+
+  it('attack: missing messages array → 400', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => ({ content: 'x', provider: 'anthropic' as const, model: 's' }),
+      }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: bad message role → 400', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => ({ content: 'x', provider: 'anthropic' as const, model: 's' }),
+      }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'system', content: 'oops' }] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('attack: llm throws → 502 (backend reachable but provider fault)', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => { throw new Error('rate limited'); },
+      }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(502);
+    expect((r.body as { error: string }).error).toBe('llm_failed');
+  });
+});
+
+describe('POST /api/roles/train-chat/commit (Phase 57)', () => {
+  it('happy: distills conversation → trainRole; returns spec + role', async () => {
+    await api.stop();
+    const trainCalls: Array<{ roleId: string; name: string; baseSystemPrompt?: string }> = [];
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 'stub',
+        chat: async () => ({
+          content: '{"name":"Goofy 专家","systemPrompt":"You are the Goofy expert. Cite the SDK."}',
+          provider: 'anthropic' as const, model: 'stub',
+        }),
+      }),
+      trainRole: async (input) => {
+        trainCalls.push(input);
+        return {
+          id: input.roleId,
+          name: input.name,
+          systemPrompt: input.baseSystemPrompt ?? '',
+          isBuiltin: false,
+          createdAt: new Date().toISOString(),
+        };
+      },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [
+        { role: 'assistant', content: 'what role?' },
+        { role: 'user', content: 'goofy expert' },
+        { role: 'assistant', content: 'ok ready to save?' },
+      ] }),
+    });
+    expect(r.status).toBe(200);
+    const body = r.body as {
+      role: { id: string; name: string };
+      spec: { name: string; systemPrompt: string };
+    };
+    expect(body.spec.name).toBe('Goofy 专家');
+    expect(body.spec.systemPrompt).toMatch(/Goofy expert/);
+    expect(body.role.id).toMatch(/^role-goofy/);
+    expect(trainCalls).toHaveLength(1);
+    expect(trainCalls[0]!.name).toBe('Goofy 专家');
+    // Conversation transcript persisted as a "training" doc — searchable later.
+    // (Just verify the call happened; doc shape is the trainRole's contract.)
+  });
+
+  it('attack: LLM returns non-JSON → 422 (commit failed without crashing)', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => ({ content: 'I cannot do that', provider: 'anthropic' as const, model: 's' }),
+      }),
+      trainRole: async () => ({ id: 'r' }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'go' }] }),
+    });
+    expect(r.status).toBe(422);
+    expect((r.body as { error: string }).error).toBe('distill_failed');
+  });
+
+  it('attack: LLM emits {"error": "..."} → 422 with the LLM-supplied reason', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => ({
+          content: '{"error":"conversation too thin"}',
+          provider: 'anthropic' as const, model: 's',
+        }),
+      }),
+      trainRole: async () => ({ id: 'r' }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'go' }] }),
+    });
+    expect(r.status).toBe(422);
+    expect((r.body as { message: string }).message).toContain('thin');
+  });
+
+  it('handles ```json``` code-fence wrapping (defensive: strips before parse)', async () => {
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      llmChatFactory: () => ({
+        provider: 'anthropic', model: 's',
+        chat: async () => ({
+          content: '```json\n{"name":"X","systemPrompt":"You are X."}\n```',
+          provider: 'anthropic' as const, model: 's',
+        }),
+      }),
+      trainRole: async (input) => ({ id: input.roleId, name: input.name }),
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }),
+    });
+    expect(r.status).toBe(200);
+  });
+});

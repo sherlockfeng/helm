@@ -132,6 +132,9 @@ export interface HelmConfig {
   knowledge: { providers: KnowledgeProviderConfig[] };
   docFirst: { enforce: boolean };
   cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
+  /** Phase 57: Anthropic API key for the conversational role-trainer.
+   *  Optional — falls back to Cursor when unset. */
+  anthropic?: { apiKey?: string; model: string };
 }
 
 export interface CampaignSummary {

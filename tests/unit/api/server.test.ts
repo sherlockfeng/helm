@@ -747,6 +747,100 @@ describe('/api/bindings', () => {
     });
   });
 
+  // ── Phase 63: POST /api/setup-mcp ─────────────────────────────────────
+  describe('POST /api/setup-mcp (Phase 63)', () => {
+    it('happy: forwards target, returns the SetupMcpResult shape', async () => {
+      let receivedTarget: 'claude' | 'cursor' | null = null;
+      await api.stop();
+      api = createHttpApi({
+        db, registry,
+        setupMcp: (target) => {
+          receivedTarget = target;
+          return {
+            changed: true,
+            message: `Registered helm with ${target}.`,
+            location: target === 'claude' ? 'claude mcp (user)' : '~/.cursor/mcp.json',
+          };
+        },
+      });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      const r = await fetchJson('/api/setup-mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'cursor' }),
+      });
+      expect(r.status).toBe(200);
+      const body = r.body as { target: string; changed: boolean; message: string };
+      expect(body.target).toBe('cursor');
+      expect(body.changed).toBe(true);
+      expect(body.message).toMatch(/cursor/);
+      expect(receivedTarget).toBe('cursor');
+    });
+
+    it('attack: unknown target → 400', async () => {
+      await api.stop();
+      api = createHttpApi({ db, registry, setupMcp: () => ({ changed: false, message: '', location: '' }) });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      const r = await fetchJson('/api/setup-mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'helmless' }),
+      });
+      expect(r.status).toBe(400);
+      expect((r.body as { message: string }).message).toMatch(/claude.*cursor/);
+    });
+
+    it('attack: setupMcp throwing → 500 with message (not a stack trace)', async () => {
+      await api.stop();
+      api = createHttpApi({
+        db, registry,
+        setupMcp: () => { throw new Error('refusing to overwrite corrupt JSON'); },
+      });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      const r = await fetchJson('/api/setup-mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'claude' }),
+      });
+      expect(r.status).toBe(500);
+      expect((r.body as { message: string }).message).toContain('refusing to overwrite');
+    });
+
+    it('501 when setupMcp dep is not wired (defensive — orchestrator always wires it)', async () => {
+      const r = await fetchJson('/api/setup-mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'claude' }),
+      });
+      expect(r.status).toBe(501);
+    });
+
+    it('attack: GET → 405', async () => {
+      const r = await fetchJson('/api/setup-mcp');
+      expect(r.status).toBe(405);
+    });
+
+    it('attack: malformed JSON → 400', async () => {
+      await api.stop();
+      api = createHttpApi({ db, registry, setupMcp: () => ({ changed: false, message: '', location: '' }) });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      const r = await fetchJson('/api/setup-mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{not json',
+      });
+      expect(r.status).toBe(400);
+    });
+  });
+
   it('DELETE /api/bindings/:id removes the row', async () => {
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`)

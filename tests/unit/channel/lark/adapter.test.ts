@@ -168,6 +168,104 @@ describe('LarkChannel — sendMessage / sendApprovalRequest', () => {
   });
 });
 
+describe('LarkChannel — sendAttachment (Phase 54)', () => {
+  let tmpFile: string;
+
+  beforeEach(async () => {
+    await channel.start();
+    // A real on-disk file so the existence check + lark-cli dry path both pass.
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'helm-attach-'));
+    tmpFile = join(dir, 'screenshot.png');
+    // 1-byte placeholder — we never actually shell out, the FakeCli swallows args.
+    writeFileSync(tmpFile, 'x');
+  });
+
+  it('image attachment shells out with --image <absPath>', async () => {
+    await channel.sendAttachment(makeBinding(), { filePath: tmpFile, kind: 'image' });
+    expect(cli.runs).toHaveLength(1);
+    const args = cli.runs[0]!.args;
+    expect(args).toContain('+messages-reply');
+    expect(args).toContain('--image');
+    const idx = args.indexOf('--image');
+    expect(args[idx + 1]).toBe(tmpFile);
+    expect(args).toContain('--reply-in-thread');
+  });
+
+  it('file attachment maps kind=file → --file flag', async () => {
+    await channel.sendAttachment(makeBinding(), { filePath: tmpFile, kind: 'file' });
+    expect(cli.runs).toHaveLength(1);
+    expect(cli.runs[0]!.args).toContain('--file');
+    expect(cli.runs[0]!.args).not.toContain('--image');
+  });
+
+  it('caption posts a leading text reply BEFORE the asset', async () => {
+    await channel.sendAttachment(
+      makeBinding(),
+      { filePath: tmpFile, kind: 'image', caption: 'Cycle 3 final UI' },
+    );
+    expect(cli.runs).toHaveLength(2);
+    // First call: text reply with caption.
+    const first = cli.runs[0]!.args;
+    expect(first).toContain('--markdown');
+    expect(first).toContain('Cycle 3 final UI');
+    // Second call: the actual image upload.
+    const second = cli.runs[1]!.args;
+    expect(second).toContain('--image');
+  });
+
+  it('attack: missing file throws before lark-cli is invoked', async () => {
+    await expect(channel.sendAttachment(
+      makeBinding(),
+      { filePath: '/nonexistent/missing.png', kind: 'image' },
+    )).rejects.toThrow(/cannot read/);
+    expect(cli.runs).toHaveLength(0);
+  });
+
+  it('attack: lark-cli failure surfaces with detail; falls into the kind-aware error', async () => {
+    cli.nextResult = { stdout: '', stderr: 'upload size exceeded', exitCode: 1 };
+    await expect(channel.sendAttachment(
+      makeBinding(),
+      { filePath: tmpFile, kind: 'image' },
+    )).rejects.toThrow(/--image.*upload size exceeded/);
+  });
+
+  it('attack: caption failure does NOT block the asset upload (caption is best-effort)', async () => {
+    // Make ONLY the first call (the caption text) fail; image succeeds on
+    // the second call. Easier than juggling FakeCli — observe that the
+    // image still got through.
+    let calls = 0;
+    cli.run = async (args) => {
+      cli.runs.push({ args });
+      calls += 1;
+      if (calls === 1) return { stdout: '', stderr: 'rate limited', exitCode: 1 };
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    await channel.sendAttachment(
+      makeBinding(),
+      { filePath: tmpFile, kind: 'image', caption: 'hi' },
+    );
+    expect(cli.runs).toHaveLength(2);
+    expect(cli.runs[1]!.args).toContain('--image');
+  });
+
+  it('attack: binding for a different channel throws', async () => {
+    const binding = makeBinding({ channel: 'local' });
+    await expect(channel.sendAttachment(
+      binding, { filePath: tmpFile, kind: 'image' },
+    )).rejects.toThrow(/channel "local"/);
+  });
+
+  it('attack: no thread / inReplyTo / root → throws', async () => {
+    const binding = makeBinding({ externalThread: undefined, externalRoot: undefined });
+    await expect(channel.sendAttachment(
+      binding, { filePath: tmpFile, kind: 'image' },
+    )).rejects.toThrow(/inReplyTo/);
+  });
+});
+
 describe('LarkChannel — createThread (Phase 10 minimal)', () => {
   beforeEach(async () => { await channel.start(); });
 

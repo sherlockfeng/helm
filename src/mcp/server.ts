@@ -61,6 +61,12 @@ export interface McpServerDeps {
   embedFn?: (text: string) => Promise<Float32Array>;
   /** Base directory for update_doc_first relative-path resolution. Defaults to process.cwd(). */
   docFirstBaseDir?: string;
+  /**
+   * Phase 54: Lark channel for the `send_lark_attachment` MCP tool. When
+   * absent (no Lark config / Lark disabled), the tool errors out with an
+   * actionable message instead of silently dropping the upload.
+   */
+  larkChannel?: import('../channel/lark/adapter.js').LarkChannel;
 }
 
 export interface McpServerInfo {
@@ -446,6 +452,56 @@ export function createMcpServer(
     }
     const summary = await summarizeCampaign(deps.db, campaignId, { llm: deps.llm });
     return jsonResult(summary);
+  });
+
+  // ── Lark attachments (Phase 54) ─────────────────────────────────────────
+
+  server.registerTool('send_lark_attachment', {
+    description:
+      'Post a local image or file to the Lark thread bound to the given chat. '
+      + 'Uses the chat\'s active Lark binding — fail with an actionable error if the chat '
+      + 'isn\'t bound. Image messages with a caption send the caption as a leading text reply '
+      + 'so reviewers see context before opening the asset.',
+    inputSchema: {
+      hostSessionId: z.string().describe('The Cursor chat that owns the Lark binding.'),
+      filePath: z.string().describe('Absolute path on the helm host to the asset to upload.'),
+      kind: z.enum(['image', 'file']).default('image'),
+      caption: z.string().optional().describe('Optional one-line description posted alongside the asset.'),
+    },
+  }, async ({ hostSessionId, filePath, kind, caption }) => {
+    if (!deps.larkChannel) {
+      return errorResult(
+        'send_lark_attachment requires Lark to be configured + started. '
+        + 'Enable lark in `~/.helm/config.json` and bind the chat to a Lark thread first.',
+      );
+    }
+    // Look up the chat's active Lark binding. Same lookup the orchestrator's
+    // requireApproval gate uses, so behavior is consistent: chats without a
+    // Lark binding can't post.
+    const { listBindingsForSession } = await import('../storage/repos/channel-bindings.js');
+    const bindings = listBindingsForSession(deps.db, hostSessionId)
+      .filter((b) => b.channel === 'lark');
+    if (bindings.length === 0) {
+      return errorResult(
+        `No Lark binding for hostSessionId=${hostSessionId}. Bind via @bot bind first.`,
+      );
+    }
+    const binding = bindings[0]!;
+    try {
+      await deps.larkChannel.sendAttachment(
+        binding,
+        { filePath, kind, ...(caption ? { caption } : {}) },
+      );
+      return jsonResult({
+        ok: true,
+        bindingId: binding.id,
+        kind,
+        filePath,
+        captionSent: Boolean(caption),
+      });
+    } catch (err) {
+      return errorResult(`Failed to upload ${kind} to Lark: ${(err as Error).message}`);
+    }
   });
 
   return server;

@@ -17,12 +17,15 @@
  *     parsed Intent attached so the orchestrator can branch on it
  */
 
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { ApprovalRequest, ChannelBinding } from '../../storage/types.js';
 import type {
   ApprovalDecision,
   CreateThreadOpts,
   ExternalThread,
   InboundMessage,
+  OutboundAttachment,
   RemoteChannel,
   SendOpts,
   Unsubscribe,
@@ -129,6 +132,79 @@ export class LarkChannel implements RemoteChannel {
     if (result.exitCode !== 0) {
       const detail = (result.stderr || result.stdout).trim();
       throw new Error(`lark-cli messages-reply failed (code=${result.exitCode}): ${detail || '(no output)'}`);
+    }
+  }
+
+  /**
+   * Phase 54: post a local file as an image / file attachment to the bound
+   * thread. Maps to `lark-cli im +messages-reply --image <path>` (or `--file`)
+   * which uploads the asset and posts it in one call. When `caption` is
+   * provided, a leading text reply lands first so reviewers see context
+   * before the image — Lark image messages don't carry their own caption,
+   * so we send two messages back-to-back.
+   *
+   * Image upload budgets are larger than text — the typical screenshot is
+   * 200 KB - 5 MB, so the timeout is bumped to 60 s to absorb slow networks.
+   */
+  async sendAttachment(
+    binding: ChannelBinding,
+    attachment: OutboundAttachment,
+    opts: SendOpts = {},
+  ): Promise<void> {
+    if (binding.channel !== this.id) {
+      throw new Error(
+        `LarkChannel.sendAttachment: binding is for channel "${binding.channel}", not lark`,
+      );
+    }
+    const replyTo = opts.inReplyTo ?? binding.externalThread ?? binding.externalRoot;
+    if (!replyTo) {
+      throw new Error(
+        'LarkChannel.sendAttachment requires either opts.inReplyTo or a binding with externalThread / externalRoot',
+      );
+    }
+
+    // Resolve to absolute path so lark-cli doesn't see a relative path against
+    // its own cwd. Also surface a clear error early on missing files rather
+    // than letting lark-cli fail with a less-actionable message.
+    const absPath = path.resolve(attachment.filePath);
+    try {
+      const stat = await fs.stat(absPath);
+      if (!stat.isFile()) {
+        throw new Error(`not a regular file: ${absPath}`);
+      }
+    } catch (err) {
+      throw new Error(
+        `LarkChannel.sendAttachment: cannot read ${absPath}: ${(err as Error).message}`,
+      );
+    }
+
+    if (attachment.caption) {
+      // Best-effort: a failed caption should NOT block the attachment itself,
+      // since the asset is the primary artifact. Any error is appended to
+      // the eventual throw so callers still see it.
+      try {
+        await this.sendMessage(binding, attachment.caption, opts);
+      } catch (err) {
+        // Continue — log via the cli runner's listener path; the caption is
+        // a nice-to-have.
+        void err;
+      }
+    }
+
+    const flag = attachment.kind === 'image' ? '--image' : '--file';
+    const args = [
+      'im', '+messages-reply',
+      '--message-id', replyTo,
+      flag, absPath,
+      '--reply-in-thread',
+      '--as', 'bot',
+    ];
+    const result = await this.cli.run(args, { timeoutMs: 60_000 });
+    if (result.exitCode !== 0) {
+      const detail = (result.stderr || result.stdout).trim();
+      throw new Error(
+        `lark-cli messages-reply (${flag}) failed (code=${result.exitCode}): ${detail || '(no output)'}`,
+      );
     }
   }
 

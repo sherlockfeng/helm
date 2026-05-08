@@ -2,9 +2,12 @@
  * Helm CLI entry — dispatched from `bin/helm.mjs`.
  *
  * Subcommands:
- *   helm doctor [--json]      Diagnostic dump
- *   helm install-hooks        Register helm in ~/.cursor/hooks.json
- *   helm uninstall-hooks      Remove helm entries from hooks.json
+ *   helm doctor [--json]               Diagnostic dump
+ *   helm install-hooks                 Register helm in ~/.cursor/hooks.json
+ *   helm uninstall-hooks               Remove helm entries from hooks.json
+ *   helm setup-mcp <claude|cursor>     Phase 60a: register helm's MCP server
+ *                                      with the user's CLI / IDE so they can
+ *                                      invoke `train_role` etc. from any chat.
  *
  * Launching the Electron GUI is `pnpm dev` / packaged-DMG-double-click;
  * intentionally NOT a `helm` subcommand because that would conflate the
@@ -15,6 +18,7 @@ import { Command } from 'commander';
 import { runDoctor } from './doctor.js';
 import { formatDoctorJson, formatDoctorText } from './format.js';
 import { installCursorHooks, uninstallCursorHooks } from '../host/cursor/installer.js';
+import { setupMcp, type SetupTarget } from './setup-mcp.js';
 
 export interface CliOptions {
   argv?: string[];
@@ -68,6 +72,26 @@ export async function runCli(options: CliOptions = {}): Promise<void> {
         exit(0);
       } catch (e) {
         err(`uninstall-hooks failed: ${(e as Error).message}`);
+        exit(1);
+      }
+    });
+
+  program
+    .command('setup-mcp <target>')
+    .description('Register helm\'s MCP server with the given CLI / IDE so its agent can call train_role et al. (target: claude, cursor)')
+    .option('--url <url>', 'Override helm MCP URL (defaults to http://127.0.0.1:17317/mcp/sse)')
+    .action((target: string, opts: { url?: string }) => {
+      if (target !== 'claude' && target !== 'cursor') {
+        err(`setup-mcp: unknown target "${target}". Use "claude" or "cursor".`);
+        exit(2);
+        return;
+      }
+      try {
+        const result = setupMcp(target as SetupTarget, opts.url ? { url: opts.url } : {});
+        out(result.message);
+        exit(0);
+      } catch (e) {
+        err(`setup-mcp failed: ${(e as Error).message}`);
         exit(1);
       }
     });

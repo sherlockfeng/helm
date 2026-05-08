@@ -524,6 +524,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       knowledge,
       ...(spawner ? { spawner } : {}),
       llm,
+      // Phase 54: pass the live Lark channel so `send_lark_attachment` can
+      // upload screenshots from agent → bound thread without spawning a
+      // second lark-cli process.
+      ...(larkChannel ? { larkChannel } : {}),
     });
   }
 

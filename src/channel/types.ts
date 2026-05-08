@@ -18,6 +18,26 @@ export interface SendOpts {
   kind?: 'progress' | 'reply' | 'notice';
 }
 
+/**
+ * Phase 54: outbound attachment (image / file) descriptor.
+ *
+ * The local file path is uploaded to the remote channel directly — Lark's
+ * `lark-cli im +messages-reply --image <localPath>` accepts a path and
+ * handles the upload + image_key dance internally. `caption` lets the agent
+ * pair the asset with a one-line description so reviewers know what they're
+ * looking at without opening the image. Both image and (generic) file are
+ * supported; channels that can't upload binary content surface an error
+ * rather than silently dropping the attachment.
+ */
+export interface OutboundAttachment {
+  /** Absolute path on the helm host. The channel reads + uploads it. */
+  filePath: string;
+  /** "image" mime-bucket → `--image`; "file" → `--file`. */
+  kind: 'image' | 'file';
+  /** Optional one-line description posted alongside the asset. */
+  caption?: string;
+}
+
 export interface CreateThreadOpts {
   hostSessionId: string;
   title?: string;
@@ -64,6 +84,19 @@ export interface RemoteChannel {
 
   /** Mirror an outbound chat message to the channel-side thread. */
   sendMessage(binding: ChannelBinding, text: string, opts?: SendOpts): Promise<void>;
+
+  /**
+   * Phase 54: post a binary attachment (image / file) into the bound thread.
+   * Optional — channels that can't carry binary content (LocalChannel) omit
+   * it and the caller is expected to feature-detect via `typeof channel.sendAttachment`.
+   * When supplied, the implementation MUST upload the file at `attachment.filePath`
+   * and post it; missing files / network failures throw.
+   */
+  sendAttachment?(
+    binding: ChannelBinding,
+    attachment: OutboundAttachment,
+    opts?: SendOpts,
+  ): Promise<void>;
 
   /** Mark a remote message as received (best-effort; default no-op). */
   ackMessage?(binding: ChannelBinding, externalId: string): Promise<void>;

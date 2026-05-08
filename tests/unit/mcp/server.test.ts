@@ -267,3 +267,99 @@ describe('MCP server — knowledge tools round trip', () => {
     expect(json.snippets[0]?.source).toBe('fake');
   });
 });
+
+describe('MCP server — send_lark_attachment (Phase 54)', () => {
+  it('errors with actionable message when larkChannel is not wired', async () => {
+    server = createMcpServer({ db });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 't', version: '0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = await client.callTool({
+      name: 'send_lark_attachment',
+      arguments: { hostSessionId: 's', filePath: '/x', kind: 'image' },
+    });
+    expect(result.isError).toBe(true);
+    const text = ((result.content as Array<{ text: string }>)[0]?.text) ?? '';
+    expect(text).toMatch(/Lark .* configured/);
+  });
+
+  it('errors when chat has no Lark binding (even with channel wired)', async () => {
+    const now = new Date().toISOString();
+    upsertHostSession(db, {
+      id: 'sess', host: 'cursor', cwd: '/p', status: 'active',
+      firstSeenAt: now, lastSeenAt: now,
+    });
+
+    const fakeLark = {
+      sendAttachment: async () => { /* never reached */ },
+    } as unknown as import('../../../src/channel/lark/adapter.js').LarkChannel;
+
+    server = createMcpServer({ db, larkChannel: fakeLark });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 't', version: '0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = await client.callTool({
+      name: 'send_lark_attachment',
+      arguments: { hostSessionId: 'sess', filePath: '/x', kind: 'image' },
+    });
+    expect(result.isError).toBe(true);
+    const text = ((result.content as Array<{ text: string }>)[0]?.text) ?? '';
+    expect(text).toMatch(/No Lark binding/);
+  });
+
+  it('happy: with binding + larkChannel wired, calls sendAttachment with the right shape', async () => {
+    const now = new Date().toISOString();
+    upsertHostSession(db, {
+      id: 'sess_ok', host: 'cursor', cwd: '/p', status: 'active',
+      firstSeenAt: now, lastSeenAt: now,
+    });
+    const { insertChannelBinding } = await import('../../../src/storage/repos/channel-bindings.js');
+    insertChannelBinding(db, {
+      id: 'b1', channel: 'lark', hostSessionId: 'sess_ok',
+      externalChat: 'oc', externalThread: 'tr', externalRoot: 'om',
+      waitEnabled: false, createdAt: now,
+    });
+
+    const calls: Array<{
+      binding: { id: string };
+      attachment: { filePath: string; kind: string; caption?: string };
+    }> = [];
+    const fakeLark = {
+      sendAttachment: async (
+        binding: { id: string },
+        attachment: { filePath: string; kind: string; caption?: string },
+      ) => {
+        calls.push({ binding, attachment });
+      },
+    } as unknown as import('../../../src/channel/lark/adapter.js').LarkChannel;
+
+    server = createMcpServer({ db, larkChannel: fakeLark });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    client = new Client({ name: 't', version: '0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = await client.callTool({
+      name: 'send_lark_attachment',
+      arguments: {
+        hostSessionId: 'sess_ok',
+        filePath: '/tmp/cycle-3.png',
+        kind: 'image',
+        caption: 'final UI',
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    const body = parseJsonContent(result as { content: Array<{ type: string; text?: string }> }) as {
+      ok: boolean; bindingId: string; kind: string; captionSent: boolean;
+    };
+    expect(body).toMatchObject({
+      ok: true, bindingId: 'b1', kind: 'image', captionSent: true,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.binding.id).toBe('b1');
+    expect(calls[0]!.attachment).toEqual({
+      filePath: '/tmp/cycle-3.png', kind: 'image', caption: 'final UI',
+    });
+  });
+});

@@ -251,6 +251,13 @@ export const MIGRATIONS: Migration[] = [
         SELECT id, role_id, last_seen_at FROM host_sessions WHERE role_id IS NOT NULL;
     `,
   },
+  {
+    version: 7,
+    description: 'host_sessions.display_name — Phase 55: user-set chat label, rendered in Active Chats with first_prompt as fallback',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN display_name TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

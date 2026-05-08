@@ -202,4 +202,78 @@ describe('active-chats happy', () => {
     const rows = harness.db.prepare(`SELECT count(*) AS n FROM host_sessions WHERE id = ?`).get('sess_ghost') as { n: number };
     expect(rows.n).toBe(0);
   });
+
+  // ── Phase 55: chat rename ───────────────────────────────────────────────
+
+  it('PUT /label persists displayName + emits session.started for SSE refresh', async () => {
+    const events: string[] = [];
+    harness.app.events.on((e) => { events.push(e.type); });
+
+    const r = await fetchJson('/api/active-chats/sess_a/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'Auth refactor — reviewer chat' }),
+    });
+    expect(r.status).toBe(200);
+    const chat = (r.body as { chat: { displayName?: string } }).chat;
+    expect(chat.displayName).toBe('Auth refactor — reviewer chat');
+
+    // GET reflects the new label too.
+    const list = await fetchJson('/api/active-chats');
+    const ours = ((list.body as { chats: Array<{ id: string; displayName?: string }> }).chats)
+      .find((c) => c.id === 'sess_a');
+    expect(ours?.displayName).toBe('Auth refactor — reviewer chat');
+
+    // Renderer subscribes to session.started for refresh.
+    expect(events).toContain('session.started');
+  });
+
+  it('PUT /label with empty / null clears the override', async () => {
+    await fetchJson('/api/active-chats/sess_a/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'temp' }),
+    });
+    const cleared = await fetchJson('/api/active-chats/sess_a/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: '' }),
+    });
+    expect(cleared.status).toBe(200);
+    expect((cleared.body as { chat: { displayName?: string } }).chat.displayName).toBeUndefined();
+  });
+
+  it('attack: PUT /label with non-string label rejected as 400; row unchanged', async () => {
+    await fetchJson('/api/active-chats/sess_a/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'baseline' }),
+    });
+    const r = await fetchJson('/api/active-chats/sess_a/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 42 }),
+    });
+    expect(r.status).toBe(400);
+    const list = await fetchJson('/api/active-chats');
+    const ours = ((list.body as { chats: Array<{ id: string; displayName?: string }> }).chats)
+      .find((c) => c.id === 'sess_a');
+    expect(ours?.displayName).toBe('baseline');
+  });
+
+  it('attack: PUT /label on unknown sessionId returns 404 (no row created)', async () => {
+    const r = await fetchJson('/api/active-chats/sess_ghost/label', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'whatever' }),
+    });
+    expect(r.status).toBe(404);
+    const rows = harness.db.prepare(`SELECT count(*) AS n FROM host_sessions WHERE id = ?`).get('sess_ghost') as { n: number };
+    expect(rows.n).toBe(0);
+  });
+
+  it('attack: GET on /label endpoint returns 405', async () => {
+    const r = await fetchJson('/api/active-chats/sess_a/label');
+    expect(r.status).toBe(405);
+  });
 });

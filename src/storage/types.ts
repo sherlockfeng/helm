@@ -136,6 +136,10 @@ export interface HostSession {
    * host_prompt_submit handler on the first message and never overwritten,
    * so the UI has a stable human-readable label per chat. */
   firstPrompt?: string;
+  /** Phase 55: user-set chat label. The Active Chats UI renders this when
+   * present, falling back to firstPrompt → cwd basename → id prefix.
+   * Editable inline; cleared by setting to null/empty. */
+  displayName?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

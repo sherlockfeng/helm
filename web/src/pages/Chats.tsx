@@ -7,13 +7,17 @@
  * with an inline ✕ to remove. An "+ Add role" picker beneath lets the user
  * stack more (e.g. Goofy + 容灾大盘 + Developer). The next session_start
  * concatenates every role's prompt + chunks into the injected context.
+ * Phase 55: chat title is editable inline. The user-set displayName wins
+ * over firstPrompt. Pencil icon flips the title to a textbox; Enter saves,
+ * Escape cancels, blur saves. Empty value clears the override.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
+import type { ActiveChat } from '../api/types.js';
 
 function formatRelative(iso: string): string {
   const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -34,12 +38,47 @@ function truncate(s: string, max = 80): string {
   return `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
+/**
+ * Phase 55: pick the best human-readable label for a chat.
+ *   1. user-set displayName (wins outright)
+ *   2. first user prompt captured by Phase 32
+ *   3. cwd (when no prompt yet — fresh chat)
+ *   4. id prefix (last resort)
+ */
+function chatLabel(chat: ActiveChat): string {
+  if (chat.displayName && chat.displayName.trim()) return chat.displayName;
+  if (chat.firstPrompt && chat.firstPrompt.trim()) return truncate(chat.firstPrompt);
+  if (chat.cwd) return chat.cwd;
+  return `${chat.id.slice(0, 12)}…`;
+}
+
 export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
   const { data: rolesData } = useApi(() => helmApi.roles());
   useEventStream(() => reload(), { types: ['session.started', 'session.closed'] });
   const [savingId, setSavingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  // Phase 55: which row's title is currently being edited. Only one at a
+  // time so escape-from-edit doesn't accidentally cancel another row.
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  async function saveLabel(hostSessionId: string, raw: string): Promise<void> {
+    setSavingId(hostSessionId);
+    setRowError(null);
+    try {
+      // Empty / whitespace-only → null clears the override; backend trims and
+      // caps so we don't have to.
+      const cleaned = raw.trim();
+      await helmApi.setChatLabel(hostSessionId, cleaned.length === 0 ? null : cleaned);
+      reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setRowError({ id: hostSessionId, message: msg });
+    } finally {
+      setSavingId(null);
+      setEditingId(null);
+    }
+  }
 
   async function addRole(hostSessionId: string, roleId: string): Promise<void> {
     setSavingId(hostSessionId);
@@ -114,17 +153,19 @@ export function ChatsPage() {
           <div className="row">
             <div>
               <div className="label">{chat.host}</div>
-              {/* Phase 32: first user prompt is the most human-readable label —
-                  Cursor's chat title isn't surfaced to hooks. Falls back to
-                  cwd → session id so brand-new chats (no prompt yet) still
-                  show something useful. */}
-              <div style={{ fontWeight: 600, fontSize: 14 }} title={chat.firstPrompt ?? chat.cwd ?? chat.id}>
-                {chat.firstPrompt
-                  ? truncate(chat.firstPrompt)
-                  : (chat.cwd ?? '(awaiting first message)')}
-              </div>
+              {/* Phase 55: editable title. displayName > firstPrompt > cwd > id.
+                  Click the pencil to edit; Enter saves, Escape cancels, blur saves
+                  (saves empty → clears the override). */}
+              <ChatTitle
+                chat={chat}
+                editing={editingId === chat.id}
+                saving={savingId === chat.id}
+                onStartEdit={() => setEditingId(chat.id)}
+                onCancelEdit={() => setEditingId(null)}
+                onSave={(raw) => saveLabel(chat.id, raw)}
+              />
               <div className="label" style={{ marginTop: 6 }}>
-                {chat.firstPrompt && chat.cwd ? <>{chat.cwd} • </> : null}
+                {chat.cwd ? <>{chat.cwd} • </> : null}
                 session <code title={chat.id}>{shortId(chat.id)}</code>
               </div>
             </div>
@@ -230,5 +271,93 @@ export function ChatsPage() {
         </article>
       ))}
     </>
+  );
+}
+
+/**
+ * Phase 55: editable chat title. Click-to-edit pencil icon when not editing;
+ * Enter / blur saves; Escape cancels. The textbox seeds with the current
+ * displayName (NOT the firstPrompt fallback) so the user is editing the
+ * actual override, not retyping their prompt.
+ */
+function ChatTitle({
+  chat,
+  editing,
+  saving,
+  onStartEdit,
+  onCancelEdit,
+  onSave,
+}: {
+  chat: ActiveChat;
+  editing: boolean;
+  saving: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: (raw: string) => void;
+}): ReactElement {
+  const label = chatLabel(chat);
+  const tooltip = chat.firstPrompt ?? chat.cwd ?? chat.id;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState(chat.displayName ?? '');
+
+  // When the row enters edit mode, seed the draft with the current override
+  // and select-all so the user can immediately type a replacement.
+  useEffect(() => {
+    if (editing) {
+      setDraft(chat.displayName ?? '');
+      // Defer focus to next frame so the input is in the DOM.
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
+    }
+  }, [editing, chat.displayName]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        disabled={saving}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); onSave(draft); }
+          else if (e.key === 'Escape') { e.preventDefault(); onCancelEdit(); }
+        }}
+        onBlur={() => onSave(draft)}
+        placeholder={chat.firstPrompt ? truncate(chat.firstPrompt, 40) : 'Chat title'}
+        aria-label={`Rename chat ${chat.id}`}
+        maxLength={120}
+        style={{
+          fontWeight: 600, fontSize: 14, padding: '2px 6px',
+          border: '1px solid var(--border)', borderRadius: 4,
+          width: 'min(440px, 100%)', fontFamily: 'inherit',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span
+        style={{ fontWeight: 600, fontSize: 14, color: chat.displayName ? undefined : 'var(--text-secondary)' }}
+        title={tooltip}
+      >
+        {label || '(awaiting first message)'}
+      </span>
+      <button
+        type="button"
+        onClick={onStartEdit}
+        aria-label={`Rename chat ${chat.id}`}
+        title="Rename"
+        style={{
+          all: 'unset', cursor: 'pointer', fontSize: 12,
+          opacity: 0.5, padding: '0 4px',
+        }}
+      >
+        ✎
+      </button>
+    </div>
   );
 }

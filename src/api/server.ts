@@ -28,6 +28,7 @@ import {
   getHostSession,
   listActiveSessions,
   removeHostSessionRole,
+  setHostSessionDisplayName,
   setHostSessionRole,
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
@@ -299,6 +300,15 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (chatRolesRemoveMatch) {
         if (req.method !== 'DELETE') return methodNotAllowed(res);
         return handleRemoveChatRole(ctx, deps, chatRolesRemoveMatch[1]!, chatRolesRemoveMatch[2]!);
+      }
+
+      // Phase 55: rename the user-facing chat label.
+      //   PUT /api/active-chats/:id/label   { label: string | null }
+      // Empty / null clears back to the firstPrompt-based fallback.
+      const chatLabelMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/label$/);
+      if (chatLabelMatch) {
+        if (req.method !== 'PUT') return methodNotAllowed(res);
+        return handleSetChatLabel(ctx, deps, chatLabelMatch[1]!);
       }
 
       // Phase 36: chat lifecycle UX. Two flavors:
@@ -808,6 +818,41 @@ function handleCreateBugTasks(ctx: RouteContext, deps: HttpApiDeps, cycleId: str
     if (msg.includes('not found')) return send(ctx.response, 404, { error: 'not_found', message: msg });
     return badRequest(ctx.response, msg);
   }
+}
+
+/**
+ * Phase 55: PUT /api/active-chats/:id/label — rename a chat's user-facing
+ * label. Empty / null clears the override and falls back to firstPrompt.
+ *
+ * Body: `{ label: string | null }`. The setter trims and caps at 120 chars
+ * so paste-from-anywhere doesn't break the sidebar layout. Emits
+ * `session.started` (re-using the existing event for "this row changed,
+ * renderer please re-fetch") so SSE consumers refresh without polling.
+ */
+function handleSetChatLabel(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: string): void {
+  const session = getHostSession(deps.db, hostSessionId);
+  if (!session) {
+    return send(ctx.response, 404, { error: 'not_found', message: 'unknown host session' });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { label } = parsed as { label?: unknown };
+  if (label !== null && label !== undefined && typeof label !== 'string') {
+    return badRequest(ctx.response, 'label must be a string, null, or omitted');
+  }
+  const persisted = setHostSessionDisplayName(deps.db, hostSessionId, label ?? null);
+  deps.logger?.info('chat_label_set', {
+    data: { hostSessionId, displayName: persisted ?? null },
+  });
+  const refreshed = getHostSession(deps.db, hostSessionId);
+  if (refreshed) {
+    deps.events?.emit({ type: 'session.started', session: refreshed });
+  }
+  return send(ctx.response, 200, { chat: refreshed });
 }
 
 function handleSetChatRole(ctx: RouteContext, deps: HttpApiDeps, hostSessionId: string): void {

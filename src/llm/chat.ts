@@ -22,6 +22,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Agent } from '@cursor/sdk';
 import type { HelmConfig } from '../config/schema.js';
+import type { ToolCallRecord, ToolDef } from './tools/types.js';
+
+export type { ToolDef, ToolCallRecord } from './tools/types.js';
 
 export type LlmChatRole = 'user' | 'assistant';
 
@@ -41,6 +44,15 @@ export interface LlmChatOptions {
   maxTokens?: number;
   /** Override the configured model id. Defaults to provider-appropriate value. */
   model?: string;
+  /**
+   * Phase 58: tools the LLM may call during this turn. Currently honored
+   * by AnthropicChatClient via the Messages API's tool_use loop;
+   * CursorChatClient ignores them (Cursor agents have their own tool
+   * surface — for now Anthropic is the path with Lark integration).
+   */
+  tools?: readonly ToolDef[];
+  /** Safety cap on tool-use iterations per turn. Default 6. */
+  maxToolIterations?: number;
 }
 
 export interface LlmChatResult {
@@ -50,6 +62,13 @@ export interface LlmChatResult {
   provider: 'cursor' | 'anthropic';
   /** Provider-specific model id actually used (for diagnostics + Settings echo). */
   model: string;
+  /**
+   * Phase 58: every tool the LLM invoked during this turn, in order.
+   * Empty when no tools were called. The renderer surfaces these inline
+   * so the user sees what the coach did (e.g. "📄 read_lark_doc(...)")
+   * before reading the textual reply.
+   */
+  toolCalls?: ToolCallRecord[];
 }
 
 export interface LlmChatClient {
@@ -86,19 +105,92 @@ export class AnthropicChatClient implements LlmChatClient {
 
   async chat(messages: readonly LlmChatMessage[], options: LlmChatOptions = {}): Promise<LlmChatResult> {
     const model = options.model ?? this.model;
-    const response = await this.client.messages.create({
-      model,
-      max_tokens: options.maxTokens ?? 2048,
-      ...(options.system ? { system: options.system } : {}),
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    });
-    // The Anthropic SDK returns content as an array of blocks; for our
-    // text-only flow we concatenate text blocks and ignore tool_use etc.
-    const content = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-    return { content, provider: 'anthropic', model };
+    const tools = options.tools ?? [];
+    const maxIters = Math.max(1, options.maxToolIterations ?? 6);
+    const toolCalls: ToolCallRecord[] = [];
+
+    // Anthropic Messages API content is an array of blocks. We start with
+    // the user's plain-text turns; once a tool is used we append the
+    // assistant's tool_use block + a `user`-role message containing the
+    // matching tool_result blocks, then loop until stop_reason === 'end_turn'.
+    const running: Anthropic.MessageParam[] = messages.map((m) => ({
+      role: m.role, content: m.content,
+    }));
+
+    for (let i = 0; i < maxIters; i++) {
+      const response: Anthropic.Message = await this.client.messages.create({
+        model,
+        max_tokens: options.maxTokens ?? 2048,
+        ...(options.system ? { system: options.system } : {}),
+        ...(tools.length > 0
+          ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) }
+          : {}),
+        messages: running,
+      });
+
+      if (response.stop_reason !== 'tool_use') {
+        const content = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+          .map((b) => b.text)
+          .join('');
+        return {
+          content,
+          provider: 'anthropic',
+          model,
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        };
+      }
+
+      // Persist the assistant's tool_use turn before running the tools, so
+      // a thrown tool error still leaves a coherent transcript on retry.
+      running.push({ role: 'assistant', content: response.content });
+
+      const toolUses = response.content.filter(
+        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+      );
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const use of toolUses) {
+        const def = tools.find((t) => t.name === use.name);
+        if (!def) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: use.id,
+            content: `Tool "${use.name}" is not registered. Available: ${tools.map((t) => t.name).join(', ') || '(none)'}`,
+            is_error: true,
+          });
+          toolCalls.push({ name: use.name, input: use.input, resultPreview: 'tool not registered', error: true });
+          continue;
+        }
+        try {
+          const result = await def.run(use.input);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: use.id,
+            content: result.content,
+          });
+          toolCalls.push({
+            name: use.name,
+            input: use.input,
+            resultPreview: result.content.slice(0, 200),
+          });
+        } catch (err) {
+          const msg = (err as Error).message;
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: use.id,
+            content: msg,
+            is_error: true,
+          });
+          toolCalls.push({ name: use.name, input: use.input, resultPreview: msg.slice(0, 200), error: true });
+        }
+      }
+      running.push({ role: 'user', content: toolResults });
+    }
+
+    throw new Error(
+      `AnthropicChatClient: tool-use loop exceeded ${maxIters} iterations (likely a tool/LLM ping-pong). `
+      + `Tools called so far: ${toolCalls.map((c) => c.name).join(', ')}`,
+    );
   }
 }
 

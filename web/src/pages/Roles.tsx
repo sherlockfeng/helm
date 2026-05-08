@@ -263,12 +263,42 @@ export function RolesPage() {
   );
 }
 
+/**
+ * Summarize a tool's input args for the inline chip — full JSON would be
+ * noisy. We pick the first string value (most tools take a single
+ * URL/query argument) and truncate.
+ */
+function summarizeToolInput(input: unknown): string {
+  if (input == null || typeof input !== 'object') return '';
+  for (const v of Object.values(input as Record<string, unknown>)) {
+    if (typeof v === 'string' && v.trim()) {
+      const flat = v.trim().replace(/\s+/g, ' ');
+      return flat.length > 60 ? `${flat.slice(0, 57)}…` : flat;
+    }
+  }
+  return '';
+}
+
 // ── Phase 57: conversational role trainer ─────────────────────────────────
 
-const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。';
+const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。如果你有相关的飞书文档，直接贴 URL 给我，我会帮你读。';
+
+interface ToolCallView {
+  name: string;
+  input: unknown;
+  resultPreview: string;
+  error?: boolean;
+}
+
+interface ChatMessageView {
+  role: 'user' | 'assistant';
+  content: string;
+  /** Phase 58: tools the assistant invoked before producing this content. */
+  toolCalls?: ToolCallView[];
+}
 
 function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
+  const [messages, setMessages] = useState<ChatMessageView[]>([
     { role: 'assistant', content: SEED_GREETING },
   ]);
   const [input, setInput] = useState('');
@@ -280,14 +310,24 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
   async function send(): Promise<void> {
     const text = input.trim();
     if (!text || busy) return;
-    const next = [...messages, { role: 'user' as const, content: text }];
+    const next: ChatMessageView[] = [...messages, { role: 'user', content: text }];
     setMessages(next);
     setInput('');
     setBusy(true);
     setErr(null);
     try {
-      const r = await helmApi.roleTrainChat(next);
-      setMessages([...next, r.message]);
+      // Strip tool-call decorations before sending — the backend only
+      // wants the canonical {role, content} shape.
+      const sendable = next.map(({ role, content }) => ({ role, content }));
+      const r = await helmApi.roleTrainChat(sendable);
+      setMessages([
+        ...next,
+        {
+          role: 'assistant',
+          content: r.message.content,
+          ...(r.toolCalls && r.toolCalls.length > 0 ? { toolCalls: r.toolCalls } : {}),
+        },
+      ]);
       setProvider(`${r.provider} · ${r.model}`);
     } catch (e) {
       const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
@@ -305,7 +345,8 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
     setBusy(true);
     setErr(null);
     try {
-      const r = await helmApi.roleTrainChatCommit(messages);
+      const sendable = messages.map(({ role, content }) => ({ role, content }));
+      const r = await helmApi.roleTrainChatCommit(sendable);
       setCommitted(true);
       setMessages([...messages, {
         role: 'assistant',
@@ -357,13 +398,41 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
           {messages.map((m, i) => (
             <div key={i} style={{
               alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '80%',
-              padding: '8px 12px',
-              borderRadius: 8,
-              background: m.role === 'user' ? 'var(--accent-soft, #e6f0ff)' : 'var(--bg-pre)',
-              fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+              maxWidth: '85%',
+              display: 'flex', flexDirection: 'column', gap: 4,
             }}>
-              {m.content}
+              {/* Phase 58: tool calls render BEFORE the assistant text so
+                  the user sees what the coach was doing. */}
+              {m.toolCalls && m.toolCalls.length > 0 && (
+                <div style={{
+                  display: 'flex', flexDirection: 'column', gap: 4,
+                  fontSize: 11, fontFamily: 'ui-monospace, monospace',
+                }}>
+                  {m.toolCalls.map((tc, j) => (
+                    <div
+                      key={j}
+                      title={tc.resultPreview}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        background: tc.error ? 'rgba(255,59,48,0.12)' : 'rgba(0,122,255,0.08)',
+                        color: tc.error ? 'var(--danger)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      {tc.error ? '⚠️' : '🔧'} {tc.name}({summarizeToolInput(tc.input)})
+                      {' '}— {tc.error ? 'failed' : `${tc.resultPreview.length}+ bytes returned`}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: m.role === 'user' ? 'var(--accent-soft, #e6f0ff)' : 'var(--bg-pre)',
+                fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+              }}>
+                {m.content}
+              </div>
             </div>
           ))}
           {busy && <div className="muted" style={{ fontSize: 12 }}>thinking…</div>}

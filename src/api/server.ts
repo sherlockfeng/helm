@@ -151,6 +151,13 @@ export interface HttpApiDeps {
    * Cursor); handlers surface a 501 with an actionable message.
    */
   llmChatFactory?: () => import('../llm/chat.js').LlmChatClient | null;
+  /**
+   * Phase 58: factory for the tools the role-trainer chat may call (e.g.
+   * `read_lark_doc`). Built lazily so a Settings change to lark.cliCommand
+   * picks up on the next request. Returns an empty array when no tools are
+   * available — the chat still works, just text-only.
+   */
+  llmToolsFactory?: () => readonly import('../llm/chat.js').ToolDef[];
 }
 
 export interface HttpApiOptions {
@@ -1047,6 +1054,14 @@ const ROLE_TRAIN_SYSTEM_PROMPT = [
   '  3. Once the user confirms, briefly say "Ready to save — click Save in the UI"',
   '     and stop.',
   '',
+  'Tools (Phase 58):',
+  '  - When the user pastes a Lark / Feishu doc URL or token, call',
+  '    `read_lark_doc` to fetch the content and use it to inform your',
+  '    questions and the eventual system prompt. Do not paraphrase a doc',
+  '    you have not actually read.',
+  '  - If a tool call fails, mention it briefly and continue without',
+  '    inventing the doc content.',
+  '',
   'Hard rules:',
   '  - Never invent expertise the user did not describe.',
   '  - Stay in English unless the user writes in Chinese; mirror their language.',
@@ -1122,17 +1137,28 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
 
   void (async () => {
     try {
+      // Phase 58: hand the chat any registered tools (read_lark_doc et al.)
+      // so the coach can pull docs the user references.
+      const tools = deps.llmToolsFactory ? deps.llmToolsFactory() : [];
       const result = await client.chat(validated, {
         system: ROLE_TRAIN_SYSTEM_PROMPT,
         maxTokens: 1024,
+        ...(tools.length > 0 ? { tools } : {}),
       });
       deps.logger?.info('role_train_chat_turn', {
-        data: { provider: result.provider, model: result.model, msgs: validated.length },
+        data: {
+          provider: result.provider, model: result.model,
+          msgs: validated.length,
+          toolCalls: result.toolCalls?.map((c) => c.name) ?? [],
+        },
       });
       send(ctx.response, 200, {
         message: { role: 'assistant', content: result.content },
         provider: result.provider,
         model: result.model,
+        ...(result.toolCalls && result.toolCalls.length > 0
+          ? { toolCalls: result.toolCalls }
+          : {}),
       });
     } catch (err) {
       deps.logger?.warn('role_train_chat_failed', { data: { error: (err as Error).message } });

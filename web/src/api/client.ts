@@ -202,6 +202,18 @@ export const helmApi = {
       message: { role: 'assistant'; content: string };
       provider: 'cursor' | 'anthropic';
       model: string;
+      /**
+       * Phase 58: tools the coach invoked during this turn — `read_lark_doc`
+       * etc. Rendered inline above the assistant's text so the user sees
+       * what the coach was doing before reading the reply. Absent when no
+       * tools were called.
+       */
+      toolCalls?: Array<{
+        name: string;
+        input: unknown;
+        resultPreview: string;
+        error?: boolean;
+      }>;
     }>('POST', '/api/roles/train-chat', { messages }),
   roleTrainChatCommit: (
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,

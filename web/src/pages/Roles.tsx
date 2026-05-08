@@ -233,6 +233,9 @@ export function RolesPage() {
         </span>
       </div>
 
+      <TrainViaCliPanel />
+
+
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>}
 
@@ -497,6 +500,105 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 60a — "Train via your CLI" panel. Helm exposes a `train_role` MCP
+ * tool at http://127.0.0.1:17317/mcp/sse. Once the user registers helm in
+ * their CLI's MCP config, they can finish any conversation in that CLI by
+ * saying "save this as a helm role" — the CLI agent calls `train_role` and
+ * the role lands here. This panel surfaces the one-time setup commands so
+ * the user doesn't have to memorize URLs or hand-edit JSON.
+ */
+function TrainViaCliPanel() {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  function copy(snippet: string, key: string): void {
+    void navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied((prev) => (prev === key ? null : prev)), 1500);
+    });
+  }
+
+  const HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
+  const claudeCmd = `claude mcp add --scope user --transport sse helm ${HELM_MCP_URL}`;
+  const helmCmd = 'helm setup-mcp claude   # or: helm setup-mcp cursor';
+  const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 role';
+
+  return (
+    <details
+      style={{
+        marginBottom: 16,
+        padding: '12px 14px',
+        borderRadius: 8,
+        background: 'var(--bg-pre)',
+        border: '1px solid var(--border)',
+      }}
+    >
+      <summary style={{ cursor: 'pointer', fontWeight: 500 }}>
+        Or train a role from your existing CLI / IDE chat (Claude Code, Cursor)
+      </summary>
+      <p className="muted" style={{ marginTop: 10 }}>
+        Helm exposes a <code>train_role</code> tool over MCP at{' '}
+        <code>{HELM_MCP_URL}</code>. After registering helm with your CLI, end
+        any conversation by saying e.g.{' '}
+        <em>&quot;{examplePrompt}&quot;</em> — the agent calls{' '}
+        <code>train_role</code> and the role appears below automatically.
+      </p>
+
+      <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>
+        One-time setup (helm CLI):
+      </p>
+      <CodeRow value={helmCmd} onCopy={() => copy(helmCmd, 'helm')} copied={copied === 'helm'} />
+
+      <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>
+        Or, equivalently for Claude Code:
+      </p>
+      <CodeRow value={claudeCmd} onCopy={() => copy(claudeCmd, 'claude')} copied={copied === 'claude'} />
+
+      <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+        Cursor users: <code>helm setup-mcp cursor</code> writes
+        {' '}<code>~/.cursor/mcp.json</code>; you may already have helm there.
+        Restart Cursor / Claude Code after the first setup so it picks the new
+        MCP server up.
+      </p>
+    </details>
+  );
+}
+
+function CodeRow({
+  value, onCopy, copied,
+}: {
+  value: string;
+  onCopy: () => void;
+  copied: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+      <code
+        style={{
+          flex: 1,
+          padding: '6px 10px',
+          background: 'var(--bg)',
+          border: '1px solid var(--border)',
+          borderRadius: 4,
+          fontSize: 12,
+          overflowX: 'auto',
+          whiteSpace: 'pre',
+        }}
+      >
+        {value}
+      </code>
+      <button
+        type="button"
+        onClick={onCopy}
+        aria-label={copied ? 'Copied' : 'Copy command'}
+        style={{ minWidth: 72 }}
+      >
+        {copied ? '✓ Copied' : 'Copy'}
+      </button>
     </div>
   );
 }

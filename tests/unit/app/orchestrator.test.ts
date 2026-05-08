@@ -507,6 +507,199 @@ describe('createHelmApp — shutdown wakes pendings', () => {
   });
 });
 
+describe('createHelmApp — Lark bind-ack (Phase 61)', () => {
+  it('on binding.created: posts an ack to the Lark thread + enqueues a Cursor confirm-request', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const sentToLark: Array<{ bindingId: string; text: string; kind?: string }> = [];
+    const fakeLark = {
+      id: 'lark',
+      isStarted: () => true,
+      start: async () => undefined,
+      stop: async () => undefined,
+      sendMessage: async (
+        binding: { id: string },
+        text: string,
+        opts?: { kind?: string },
+      ) => {
+        sentToLark.push({ bindingId: binding.id, text, kind: opts?.kind });
+      },
+      sendApprovalRequest: async () => undefined,
+      onInboundMessage: () => () => undefined,
+      onApprovalDecision: () => () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const app = createHelmApp({
+      db, loggers, bridgeSocketPath: socketPath,
+      lark: { channel: fakeLark },
+    });
+    await app.start();
+    try {
+      const now = new Date().toISOString();
+      upsertHostSession(db, {
+        id: 'sess-bind', host: 'cursor', cwd: '/Users/me/projects/foo',
+        status: 'active', firstSeenAt: now, lastSeenAt: now,
+      });
+      // Seed pending_binds — the renderer flow consumes a code via HTTP.
+      db.prepare(`
+        INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, label, expires_at)
+        VALUES ('ABC123', 'lark', 'oc_chat', 'om_thread', 'om_root', 'tce-thread', ?)
+      `).run(new Date(Date.now() + 5 * 60 * 1000).toISOString());
+
+      // Drive consume via the HTTP API the way the renderer's "Bind" button
+      // does — exercises the same orchestrator wiring, not the function in
+      // isolation.
+      const consume = await fetch(
+        `http://127.0.0.1:${app.httpPort()}/api/bindings/consume`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: 'ABC123', hostSessionId: 'sess-bind' }),
+        },
+      );
+      expect(consume.status).toBe(200);
+      const consumed = await consume.json() as { binding: { id: string } };
+      const bindingId = consumed.binding.id;
+
+      // 1. Lark got the ack message — async via the events.on listener;
+      //    waitFor accommodates the microtask delay.
+      await waitFor(() => sentToLark.length >= 1, 1000);
+      expect(sentToLark).toHaveLength(1);
+      const ack = sentToLark[0]!;
+      expect(ack.bindingId).toBe(bindingId);
+      expect(ack.text).toContain('已绑定');
+      expect(ack.text).toContain('/Users/me/projects/foo'); // cwd surfaced
+      expect(ack.text).toContain('tce-thread'); // label surfaced
+      expect(ack.kind).toBe('notice');
+
+      // 2. channel_message_queue has the Cursor-side confirm prompt.
+      const queue = db.prepare(
+        `SELECT binding_id, text FROM channel_message_queue WHERE binding_id = ?`,
+      ).all(bindingId) as Array<{ binding_id: string; text: string }>;
+      expect(queue).toHaveLength(1);
+      expect(queue[0]!.text).toContain('Helm 绑定确认');
+      expect(queue[0]!.text).toContain('/Users/me/projects/foo');
+      // The instruction explicitly tells the agent NOT to do real work —
+      // catches a regression where the wording drifts and the agent ends up
+      // running `git status` or similar on receipt.
+      expect(queue[0]!.text).toMatch(/不要做任何工具调用|不要.*推理|连通性测试/);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('attack: Lark sendMessage failing does NOT block the Cursor enqueue', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const fakeLark = {
+      id: 'lark',
+      isStarted: () => true,
+      start: async () => undefined,
+      stop: async () => undefined,
+      sendMessage: async () => { throw new Error('lark side down'); },
+      sendApprovalRequest: async () => undefined,
+      onInboundMessage: () => () => undefined,
+      onApprovalDecision: () => () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const app = createHelmApp({
+      db, loggers, bridgeSocketPath: socketPath,
+      lark: { channel: fakeLark },
+    });
+    await app.start();
+    try {
+      const now = new Date().toISOString();
+      upsertHostSession(db, {
+        id: 'sess-fail', host: 'cursor', cwd: '/p',
+        status: 'active', firstSeenAt: now, lastSeenAt: now,
+      });
+      db.prepare(`
+        INSERT INTO pending_binds (code, channel, external_chat, external_thread, expires_at)
+        VALUES ('FAIL01', 'lark', 'oc', 'om', ?)
+      `).run(new Date(Date.now() + 60_000).toISOString());
+
+      const r = await fetch(
+        `http://127.0.0.1:${app.httpPort()}/api/bindings/consume`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: 'FAIL01', hostSessionId: 'sess-fail' }),
+        },
+      );
+      expect(r.status).toBe(200);
+      const { binding } = await r.json() as { binding: { id: string } };
+
+      // Even though sendMessage threw, the queue insert must have happened —
+      // best-effort means each side runs independently.
+      await waitFor(() => {
+        const n = (db.prepare(
+          `SELECT count(*) AS n FROM channel_message_queue WHERE binding_id = ?`,
+        ).get(binding.id) as { n: number }).n;
+        return n >= 1;
+      }, 1000);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('non-lark bindings do NOT trigger the ack listener (covers future channel kinds)', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const sentToLark: Array<{ text: string }> = [];
+    const fakeLark = {
+      id: 'lark',
+      isStarted: () => true,
+      start: async () => undefined,
+      stop: async () => undefined,
+      sendMessage: async (_b: { id: string }, text: string) => { sentToLark.push({ text }); },
+      sendApprovalRequest: async () => undefined,
+      onInboundMessage: () => () => undefined,
+      onApprovalDecision: () => () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const app = createHelmApp({
+      db, loggers, bridgeSocketPath: socketPath,
+      lark: { channel: fakeLark },
+    });
+    await app.start();
+    try {
+      const now = new Date().toISOString();
+      upsertHostSession(db, {
+        id: 'sess-other', host: 'cursor', cwd: '/p',
+        status: 'active', firstSeenAt: now, lastSeenAt: now,
+      });
+      // Direct insert of a non-lark binding — emit the event ourselves.
+      const fakeBinding = {
+        id: 'bnd_other',
+        channel: 'github',
+        hostSessionId: 'sess-other',
+        externalChat: 'gh',
+        externalThread: 'pr_1',
+        externalRoot: 'comment_1',
+        waitEnabled: false,
+        createdAt: now,
+      };
+      db.prepare(`
+        INSERT INTO channel_bindings (id, channel, host_session_id, external_chat, external_thread, external_root, wait_enabled, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(fakeBinding.id, fakeBinding.channel, fakeBinding.hostSessionId,
+        fakeBinding.externalChat, fakeBinding.externalThread, fakeBinding.externalRoot, fakeBinding.createdAt);
+      app.events.emit({ type: 'binding.created', binding: fakeBinding });
+
+      // Give the listener a moment.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sentToLark).toHaveLength(0);
+      // No queue entry either — the listener short-circuits on non-lark.
+      const queue = db.prepare(
+        `SELECT count(*) AS n FROM channel_message_queue WHERE binding_id = ?`,
+      ).get(fakeBinding.id) as { n: number };
+      expect(queue.n).toBe(0);
+    } finally {
+      await app.stop();
+    }
+  });
+});
+
 async function waitFor(predicate: () => boolean, timeoutMs = 1000, stepMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

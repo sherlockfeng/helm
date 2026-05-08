@@ -212,6 +212,7 @@ function RoleCard({
 export function RolesPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.roles());
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   return (
     <>
@@ -221,6 +222,16 @@ export function RolesPage() {
         with project-specific docs. <code>query_knowledge</code> and the
         sessionStart context provider read from the same chunks.
       </p>
+
+      <div style={{ marginBottom: 16 }}>
+        <button className="primary" onClick={() => setChatOpen(true)}>
+          + Train a new role via chat
+        </button>
+        <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
+          Coach an LLM through a conversation — it asks clarifying questions,
+          then distills your answers into a role.
+        </span>
+      </div>
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>}
@@ -241,6 +252,158 @@ export function RolesPage() {
           onTrained={() => reload()}
         />
       ))}
+
+      {chatOpen && (
+        <RoleTrainChatModal
+          onClose={() => setChatOpen(false)}
+          onSaved={() => { setChatOpen(false); reload(); }}
+        />
+      )}
     </>
+  );
+}
+
+// ── Phase 57: conversational role trainer ─────────────────────────────────
+
+const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。';
+
+function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
+    { role: 'assistant', content: SEED_GREETING },
+  ]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [committed, setCommitted] = useState(false);
+
+  async function send(): Promise<void> {
+    const text = input.trim();
+    if (!text || busy) return;
+    const next = [...messages, { role: 'user' as const, content: text }];
+    setMessages(next);
+    setInput('');
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await helmApi.roleTrainChat(next);
+      setMessages([...next, r.message]);
+      setProvider(`${r.provider} · ${r.model}`);
+    } catch (e) {
+      const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
+      setErr(msg);
+      // Roll back the optimistic user message so the user can retry from the input.
+      setMessages(messages);
+      setInput(text);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commit(): Promise<void> {
+    if (busy || messages.length < 3) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await helmApi.roleTrainChatCommit(messages);
+      setCommitted(true);
+      setMessages([...messages, {
+        role: 'assistant',
+        content: `✓ Saved as **${r.spec.name}**. You can close this dialog now — the role will appear in the list.`,
+      }]);
+      // Briefly delay so the success message is readable, then close.
+      setTimeout(() => onSaved(), 1500);
+    } catch (e) {
+      const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
+      setErr(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Train a new role via chat"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="helm-card"
+        style={{ width: 'min(720px, 90vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="row" style={{ marginBottom: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Train a new role via chat</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {provider ? `Using ${provider}` : 'Configure anthropic.apiKey or sign into Cursor in Settings.'}
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        <div
+          style={{
+            flex: 1, minHeight: 200, overflowY: 'auto', display: 'flex',
+            flexDirection: 'column', gap: 10, padding: '8px 4px',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+          }}
+        >
+          {messages.map((m, i) => (
+            <div key={i} style={{
+              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '80%',
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: m.role === 'user' ? 'var(--accent-soft, #e6f0ff)' : 'var(--bg-pre)',
+              fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+            }}>
+              {m.content}
+            </div>
+          ))}
+          {busy && <div className="muted" style={{ fontSize: 12 }}>thinking…</div>}
+        </div>
+
+        {err && (
+          <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{err}</p>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <textarea
+            aria-label="Your message"
+            value={input}
+            disabled={busy || committed}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); }
+            }}
+            placeholder="Reply… (⌘/Ctrl+Enter to send)"
+            rows={3}
+            style={{
+              flex: 1, padding: 8, fontFamily: 'inherit', fontSize: 13,
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', resize: 'vertical',
+            }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button className="primary" disabled={busy || committed || !input.trim()} onClick={() => void send()}>
+              Send
+            </button>
+            <button
+              className="primary"
+              disabled={busy || committed || messages.length < 3}
+              onClick={() => void commit()}
+              title="Distill the conversation into a role and save"
+            >
+              Save role
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

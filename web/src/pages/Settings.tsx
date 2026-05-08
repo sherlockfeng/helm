@@ -239,6 +239,39 @@ export function SettingsPage() {
         </p>
       </article>
 
+      <h3>Anthropic (role-trainer chat)</h3>
+      <article className="helm-card">
+        <label className="helm-form-row">
+          <div className="muted">API key</div>
+          <input
+            type="password"
+            value={draft.anthropic?.apiKey ?? ''}
+            placeholder="(leave blank to fall back to Cursor)"
+            onChange={(e) => update((c) => {
+              c.anthropic = { ...(c.anthropic ?? { model: 'claude-sonnet-4-5' }) };
+              c.anthropic.apiKey = e.target.value || undefined;
+            })}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Model</div>
+          <input
+            type="text"
+            value={draft.anthropic?.model ?? 'claude-sonnet-4-5'}
+            placeholder="claude-sonnet-4-5"
+            onChange={(e) => update((c) => {
+              c.anthropic = { ...(c.anthropic ?? {}), model: e.target.value || 'claude-sonnet-4-5' };
+            })}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+          Phase 57: powers the <strong>+ Train a new role via chat</strong>{' '}
+          button on the Roles page. When set, the chat uses Anthropic's
+          Messages API directly. When unset, helm falls back to Cursor (which
+          works with zero config in local mode).
+        </p>
+      </article>
+
       <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

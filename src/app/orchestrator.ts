@@ -70,6 +70,7 @@ import {
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createMcpServer } from '../mcp/server.js';
+import { createLlmChatClient } from '../llm/chat.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
@@ -644,6 +645,19 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         ...input,
         embedFn: makePseudoEmbedFn(),
       }),
+      // Phase 57: lazy LLM chat factory for the role-trainer endpoints.
+      // Reads liveConfig at call time so a Settings save (anthropic.apiKey
+      // toggle, etc.) takes effect on the next request without restart.
+      // Returns null when no provider is reachable so the handler can
+      // surface 501 rather than crash.
+      llmChatFactory: () => {
+        try {
+          return createLlmChatClient({ config: liveConfig });
+        } catch (err) {
+          log.warn('llm_chat_factory_unavailable', { data: { error: (err as Error).message } });
+          return null;
+        }
+      },
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );

@@ -189,6 +189,15 @@ export const helmApi = {
     request<{ code: string; expiresAt: string; instruction: string }>(
       'POST', '/api/bindings/initiate', label ? { label } : {},
     ),
+  // Phase 63: register helm's MCP server with Claude Code or Cursor
+  // directly from the Roles page button (no `helm` CLI on PATH needed).
+  setupMcp: (target: 'claude' | 'cursor') =>
+    request<{
+      target: 'claude' | 'cursor';
+      changed: boolean;
+      message: string;
+      location: string;
+    }>('POST', '/api/setup-mcp', { target }),
 
   // ── Roles (B3) ──
   roles: () => request<{ roles: RoleSummary[] }>('GET', '/api/roles'),

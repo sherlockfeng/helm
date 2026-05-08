@@ -450,19 +450,30 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
  * the user doesn't have to memorize URLs or hand-edit JSON.
  */
 function TrainViaCliPanel() {
-  const [copied, setCopied] = useState<string | null>(null);
-
-  function copy(snippet: string, key: string): void {
-    void navigator.clipboard.writeText(snippet).then(() => {
-      setCopied(key);
-      setTimeout(() => setCopied((prev) => (prev === key ? null : prev)), 1500);
-    });
-  }
-
   const HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
-  const claudeCmd = `claude mcp add --scope user --transport sse helm ${HELM_MCP_URL}`;
-  const helmCmd = 'helm setup-mcp claude   # or: helm setup-mcp cursor';
   const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 role';
+  // Phase 63: state per target so the user can see "Set up Claude Code" and
+  // "Set up Cursor" results independently.
+  const [busy, setBusy] = useState<'claude' | 'cursor' | null>(null);
+  const [results, setResults] = useState<Partial<Record<'claude' | 'cursor', {
+    ok: boolean; message: string;
+  }>>>({});
+
+  async function setup(target: 'claude' | 'cursor'): Promise<void> {
+    setBusy(target);
+    try {
+      const r = await helmApi.setupMcp(target);
+      setResults((prev) => ({
+        ...prev,
+        [target]: { ok: true, message: r.message },
+      }));
+    } catch (err) {
+      const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
+      setResults((prev) => ({ ...prev, [target]: { ok: false, message: msg } }));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <details
@@ -486,56 +497,55 @@ function TrainViaCliPanel() {
       </p>
 
       <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>
-        One-time setup (helm CLI):
+        One-time setup (click the target you use):
       </p>
-      <CodeRow value={helmCmd} onCopy={() => copy(helmCmd, 'helm')} copied={copied === 'helm'} />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy !== null}
+          aria-busy={busy === 'claude'}
+          onClick={() => { void setup('claude'); }}
+        >
+          {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code'}
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          aria-busy={busy === 'cursor'}
+          onClick={() => { void setup('cursor'); }}
+        >
+          {busy === 'cursor' ? 'Setting up…' : 'Set up Cursor'}
+        </button>
+      </div>
 
-      <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>
-        Or, equivalently for Claude Code:
-      </p>
-      <CodeRow value={claudeCmd} onCopy={() => copy(claudeCmd, 'claude')} copied={copied === 'claude'} />
+      {(['claude', 'cursor'] as const).map((target) => {
+        const r = results[target];
+        if (!r) return null;
+        return (
+          <p
+            key={target}
+            style={{
+              marginTop: 10, fontSize: 12,
+              color: r.ok ? 'var(--success)' : 'var(--danger)',
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            <strong>{target}</strong>: {r.message}
+          </p>
+        );
+      })}
 
       <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
-        Cursor users: <code>helm setup-mcp cursor</code> writes
-        {' '}<code>~/.cursor/mcp.json</code>; you may already have helm there.
-        Restart Cursor / Claude Code after the first setup so it picks the new
-        MCP server up.
+        Claude Code uses <code>claude mcp add --scope user</code>; Cursor edits{' '}
+        <code>~/.cursor/mcp.json</code>. Both are idempotent — running again is
+        a no-op when already registered. <strong>Restart Claude Code / Cursor
+        after the first setup</strong> so it picks the new MCP server up.
       </p>
     </details>
   );
 }
 
-function CodeRow({
-  value, onCopy, copied,
-}: {
-  value: string;
-  onCopy: () => void;
-  copied: boolean;
-}) {
-  return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-      <code
-        style={{
-          flex: 1,
-          padding: '6px 10px',
-          background: 'var(--bg)',
-          border: '1px solid var(--border)',
-          borderRadius: 4,
-          fontSize: 12,
-          overflowX: 'auto',
-          whiteSpace: 'pre',
-        }}
-      >
-        {value}
-      </code>
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label={copied ? 'Copied' : 'Copy command'}
-        style={{ minWidth: 72 }}
-      >
-        {copied ? '✓ Copied' : 'Copy'}
-      </button>
-    </div>
-  );
-}
+// Phase 63 dropped CodeRow — the panel now uses a button-driven flow that
+// hits POST /api/setup-mcp directly, so the user doesn't have to copy any
+// shell commands.

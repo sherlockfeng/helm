@@ -120,6 +120,17 @@ export interface HttpApiDeps {
     instruction: string;
   };
   /**
+   * Phase 63: register helm's MCP server with the user's CLI / IDE
+   * directly from the renderer (no `helm` binary on PATH required).
+   * Wraps `setupMcp()` from `src/cli/setup-mcp.ts`. Always wired —
+   * tests stub it.
+   */
+  setupMcp?: (target: 'claude' | 'cursor') => {
+    changed: boolean;
+    message: string;
+    location: string;
+  };
+  /**
    * Workflow engine for cycle/task mutations. When undefined, the
    * /api/cycles/:id/complete + /api/cycles/:id/bug-tasks endpoints
    * return 501. The orchestrator wires this so a config docFirst.enforce
@@ -563,6 +574,34 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!existed) return send(res, 404, { error: 'unknown_or_expired_code' });
         deps.logger?.info('pending_bind_cancelled', { data: { code } });
         return send(res, 200, { ok: true, code });
+      }
+
+      // Phase 63: register helm's MCP server with the user's CLI/IDE from
+      // the renderer's "Set up Claude Code / Cursor" buttons. Replaces the
+      // PATH-dependent `helm setup-mcp <target>` shell command — same
+      // underlying `setupMcp()` logic, just exposed as HTTP.
+      if (url.pathname === '/api/setup-mcp') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.setupMcp) {
+          return send(res, 501, { error: 'not_implemented' });
+        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(ctx.body); }
+        catch { return badRequest(res, 'invalid JSON'); }
+        if (!parsed || typeof parsed !== 'object') {
+          return badRequest(res, 'body must be a JSON object');
+        }
+        const target = (parsed as Record<string, unknown>)['target'];
+        if (target !== 'claude' && target !== 'cursor') {
+          return badRequest(res, 'target must be "claude" or "cursor"');
+        }
+        try {
+          const result = deps.setupMcp(target);
+          deps.logger?.info('setup_mcp', { data: { target, ...result } });
+          return send(res, 200, { target, ...result });
+        } catch (err) {
+          return send(res, 500, { error: 'setup_failed', message: (err as Error).message });
+        }
       }
 
       // Phase 62: from the renderer's "Mirror to Lark" button, mint a

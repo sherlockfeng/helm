@@ -56,6 +56,7 @@ import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
+import { setupMcp as runSetupMcp } from '../cli/setup-mcp.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
   closeStaleHostSessions,
@@ -722,6 +723,18 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
             createPendingLarkBind(deps.db, opts ?? {}),
         }
         : {}),
+      // Phase 63: register helm's MCP server with the user's CLI/IDE
+      // straight from the renderer button — same `setupMcp()` the helm
+      // CLI exposes, but accessible without `helm` being on PATH. URL
+      // resolves at call time so a custom `config.server.port` flows
+      // through to the registration.
+      setupMcp: (target) => {
+        const port = httpApi.port();
+        const url = port
+          ? `http://127.0.0.1:${port}/mcp/sse`
+          : 'http://127.0.0.1:17317/mcp/sse';
+        return runSetupMcp(target, { url });
+      },
       workflowEngine,
       // Phase 24: Cursor SDK summarize. Local mode reuses the user's Cursor
       // app auth — no helm-side key required. The factory is always wired;

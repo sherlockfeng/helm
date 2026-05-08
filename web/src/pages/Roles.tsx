@@ -281,7 +281,7 @@ function summarizeToolInput(input: unknown): string {
 
 // ── Phase 57: conversational role trainer ─────────────────────────────────
 
-const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。如果你有相关的飞书文档，直接贴 URL 给我，我会帮你读。';
+const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。\n\n如果有相关的飞书文档，直接贴 URL 给我（我会用 read_lark_doc 读）。如果填了上面的 Project path，我也能直接读你项目里的代码。';
 
 interface ToolCallView {
   name: string;
@@ -306,6 +306,9 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [err, setErr] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
   const [committed, setCommitted] = useState(false);
+  // Phase 59: project path the Cursor agent gets file access to. Empty
+  // string = no file access (Anthropic backend ignores this anyway).
+  const [projectPath, setProjectPath] = useState('');
 
   async function send(): Promise<void> {
     const text = input.trim();
@@ -319,7 +322,10 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
       // Strip tool-call decorations before sending — the backend only
       // wants the canonical {role, content} shape.
       const sendable = next.map(({ role, content }) => ({ role, content }));
-      const r = await helmApi.roleTrainChat(sendable);
+      const r = await helmApi.roleTrainChat(
+        sendable,
+        projectPath.trim() ? { projectPath: projectPath.trim() } : {},
+      );
       setMessages([
         ...next,
         {
@@ -387,6 +393,24 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </div>
           <button onClick={onClose} aria-label="Close">✕</button>
         </div>
+
+        {/* Phase 59: optional project path. Cursor backend uses this as the
+            agent's `local: { cwd }` so its built-in read/grep/shell tools see
+            the user's actual code. Anthropic backend ignores it. */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span className="muted" style={{ fontSize: 12, minWidth: 90 }}>Project path</span>
+          <input
+            type="text"
+            value={projectPath}
+            disabled={busy || committed}
+            onChange={(e) => setProjectPath(e.target.value)}
+            placeholder="(optional) /Users/me/projects/foo — gives the Cursor agent file access"
+            style={{
+              flex: 1, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit',
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+            }}
+          />
+        </label>
 
         <div
           style={{

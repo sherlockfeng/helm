@@ -67,6 +67,13 @@ export interface McpServerDeps {
    * actionable message instead of silently dropping the upload.
    */
   larkChannel?: import('../channel/lark/adapter.js').LarkChannel;
+  /**
+   * Phase 59: lark-cli runner for the `read_lark_doc` MCP tool. Lets any
+   * Cursor agent connected to helm's MCP SSE pull a Lark/Feishu doc into
+   * its context — same backing tool the Phase 58 role-trainer uses, just
+   * exposed through the MCP surface so non-trainer chats benefit too.
+   */
+  larkCli?: import('../channel/lark/cli-runner.js').LarkCliRunner;
 }
 
 export interface McpServerInfo {
@@ -501,6 +508,38 @@ export function createMcpServer(
       });
     } catch (err) {
       return errorResult(`Failed to upload ${kind} to Lark: ${(err as Error).message}`);
+    }
+  });
+
+  // ── Lark doc reader (Phase 59) ──────────────────────────────────────────
+
+  server.registerTool('read_lark_doc', {
+    description:
+      'Read the content of a Lark / Feishu document. Accepts a full URL '
+      + '(wiki or docx) or a bare doc token. Returns markdown — long docs '
+      + 'are truncated at 16KB. Use this when the user references a Lark '
+      + 'doc and you need its content to inform your reply.',
+    inputSchema: {
+      url_or_token: z.string().describe(
+        'Full URL like https://your-org.feishu.cn/wiki/xxxx or '
+        + 'https://your-org.feishu.cn/docx/xxxx, or a bare token.',
+      ),
+    },
+  }, async ({ url_or_token }) => {
+    if (!deps.larkCli) {
+      return errorResult(
+        'read_lark_doc requires lark-cli to be configured. Set lark.cliCommand in helm Settings.',
+      );
+    }
+    try {
+      // Reuse the Phase 58 implementation — same shell args, same truncation
+      // semantics. Single source of truth for Lark doc fetching.
+      const { createReadLarkDocTool } = await import('../llm/tools/lark-doc.js');
+      const tool = createReadLarkDocTool({ cli: deps.larkCli });
+      const result = await tool.run({ url_or_token });
+      return textResult(result.content);
+    } catch (err) {
+      return errorResult(`read_lark_doc failed: ${(err as Error).message}`);
     }
   });
 

@@ -61,6 +61,7 @@ import {
   closeStaleHostSessions,
   getHostSession,
   setHostSessionFirstPrompt,
+  setLastInjectedRoleIds,
   upsertHostSession,
 } from '../storage/repos/host-sessions.js';
 import {
@@ -335,9 +336,16 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       },
     );
 
+    // Phase 56: record the role-id set we just injected so the
+    // host_prompt_submit handler doesn't re-inject the same content on the
+    // very first prompt. Always record (even on empty result) — that gives
+    // us a clean "synced empty state" baseline.
+    const currentRoleIds = persisted?.roleIds ?? [];
+    setLastInjectedRoleIds(deps.db, req.host_session_id, currentRoleIds);
+
     log.session(req.host_session_id).info('session_start', {
       event: 'session_start',
-      data: { cwd: req.cwd, providers: result.diagnostics },
+      data: { cwd: req.cwd, providers: result.diagnostics, injectedRoleIds: currentRoleIds },
     });
     return result.context ? { additional_context: result.context } : {};
   });
@@ -375,6 +383,74 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         data: { promptLen: trimmed.length, cwd: req.cwd },
       });
     }
+
+    // Phase 56: re-inject role context when the chat's bound roles changed
+    // since helm last injected. Use case: user is mid-chat, realizes they
+    // need Goofy 专家, binds it via the Active Chats UI. Cursor's
+    // `sessionStart` already fired so `additional_context` won't reach this
+    // chat again; the only response field we have here is `user_message`,
+    // so we prefix the role markdown into the user's prompt with a clearly-
+    // marked helm block. The agent treats the block as system context (the
+    // marker is explicit), and subsequent prompts skip injection until the
+    // binding changes again.
+    //
+    // "never injected" (column null) vs "synced empty state" (column = [])
+    // are treated as DIFFERENT — the first prompt-submit always writes a
+    // baseline so subsequent comparisons have a stable anchor.
+    const session = getHostSession(deps.db, req.host_session_id);
+    if (session && session.cwd) {
+      const currentRoleIds = [...(session.roleIds ?? [])].sort();
+      const sameSet = session.lastInjectedRoleIds !== undefined
+        && session.lastInjectedRoleIds.length === currentRoleIds.length
+        && [...session.lastInjectedRoleIds].sort().every((id, i) => id === currentRoleIds[i]);
+      const lastInjected = [...(session.lastInjectedRoleIds ?? [])].sort();
+
+      if (!sameSet) {
+        // Always record the new baseline — even when current is empty (user
+        // unbound everything) so the next prompt-submit doesn't re-trigger.
+        setLastInjectedRoleIds(deps.db, req.host_session_id, currentRoleIds);
+
+        if (currentRoleIds.length > 0) {
+          const result = await aggregateSessionContext(
+            knowledge,
+            { hostSessionId: req.host_session_id, cwd: session.cwd },
+            {
+              canHandleTotalMs: DEFAULT_TIMEOUTS.knowledgeCanHandleTotalMs,
+              getContextTimeoutMs: DEFAULT_TIMEOUTS.knowledgeGetContextMs,
+              maxBytes: SESSION_CONTEXT_MAX_BYTES,
+              onWarning: (msg, ctx) => deps.loggers.module('knowledge.aggregator').warn(msg, { data: ctx }),
+            },
+          );
+
+          if (result.context) {
+            const block = [
+              '<helm:role-context>',
+              `<!-- helm injected ${new Date().toISOString()} — bound roles changed mid-chat. -->`,
+              '<!-- The following is system context for the agent, not user input. -->',
+              result.context,
+              '</helm:role-context>',
+            ].join('\n');
+            const rewritten = `${block}\n\n${req.prompt ?? ''}`;
+            log.session(req.host_session_id).info('prompt_submit_role_inject', {
+              event: 'prompt_submit_role_inject',
+              data: {
+                prevRoleIds: lastInjected,
+                nextRoleIds: currentRoleIds,
+                contextLen: result.context.length,
+                providers: result.diagnostics,
+              },
+            });
+            return { continue: true, user_message: rewritten };
+          }
+        } else {
+          log.session(req.host_session_id).info('prompt_submit_role_unbound', {
+            event: 'prompt_submit_role_unbound',
+            data: { prevRoleIds: lastInjected },
+          });
+        }
+      }
+    }
+
     return { continue: true };
   });
 

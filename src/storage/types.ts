@@ -140,6 +140,13 @@ export interface HostSession {
    * present, falling back to firstPrompt → cwd basename → id prefix.
    * Editable inline; cleared by setting to null/empty. */
   displayName?: string;
+  /** Phase 56: snapshot of the role-id set we last injected into this chat
+   * (sorted, JSON-encoded). Compared on every host_prompt_submit against
+   * the chat's current bound roleIds — when they differ, the orchestrator
+   * re-injects the role context as a `user_message` prefix so a role
+   * bound mid-chat actually takes effect. Empty / null = nothing injected
+   * yet (i.e. the next prompt-submit will inject if any roles are bound). */
+  lastInjectedRoleIds?: readonly string[];
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

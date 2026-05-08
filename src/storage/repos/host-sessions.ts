@@ -13,6 +13,7 @@ function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string
     roleIds,
     firstPrompt: row['first_prompt'] != null ? String(row['first_prompt']) : undefined,
     displayName: row['display_name'] != null ? String(row['display_name']) : undefined,
+    lastInjectedRoleIds: parseInjectedRoleIds(row['last_injected_role_ids']),
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
@@ -23,6 +24,18 @@ function fetchRoleIds(db: Database.Database, sessionId: string): string[] {
   return (db.prepare(
     `SELECT role_id FROM host_session_roles WHERE host_session_id = ? ORDER BY created_at ASC`,
   ).all(sessionId) as { role_id: string }[]).map((r) => r.role_id);
+}
+
+/** Phase 56: defensively decode the JSON snapshot. Bad data = treat as null. */
+function parseInjectedRoleIds(raw: unknown): readonly string[] | undefined {
+  if (raw == null) return undefined;
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+      return parsed as string[];
+    }
+  } catch { /* fall through */ }
+  return undefined;
 }
 
 export function upsertHostSession(db: Database.Database, s: HostSession): void {
@@ -252,4 +265,26 @@ export function closeStaleHostSessions(
 export function deleteHostSession(db: Database.Database, id: string): boolean {
   const result = db.prepare(`DELETE FROM host_sessions WHERE id = ?`).run(id);
   return result.changes > 0;
+}
+
+/**
+ * Phase 56: record the role-id set we just injected into a chat. Stored
+ * as a JSON-encoded sorted array so the orchestrator can compare with
+ * `JSON.stringify(currentRoleIds.sort())` for an O(1) "did the binding
+ * change?" check on every prompt-submit.
+ *
+ * Empty array is meaningful (`"[]"` = "we synced the empty state, don't
+ * re-inject when there are still no roles bound"). Pass null to clear,
+ * which forces the next prompt-submit to re-inject if any roles ARE bound.
+ */
+export function setLastInjectedRoleIds(
+  db: Database.Database,
+  id: string,
+  roleIds: readonly string[] | null,
+): void {
+  const encoded = roleIds == null
+    ? null
+    : JSON.stringify([...roleIds].sort());
+  db.prepare(`UPDATE host_sessions SET last_injected_role_ids = ? WHERE id = ?`)
+    .run(encoded, id);
 }

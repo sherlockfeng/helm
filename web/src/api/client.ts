@@ -193,48 +193,24 @@ export const helmApi = {
       'POST', `/api/roles/${encodeURIComponent(roleId)}/train`, input,
     ),
 
-  // Phase 57: conversational role training. `roleTrainChat` runs a single
-  // turn — the renderer keeps the message history client-side and replays
-  // it on each call. `roleTrainChatCommit` distills the conversation into
-  // a {name, systemPrompt} role spec via the same LLM and saves the role.
+  // Phase 60b: conversational role training. Each turn POSTs the full
+  // transcript; helm spawns `claude -p` with helm's MCP injected so the
+  // agent can call `train_role` itself when the user is ready. The old
+  // `/commit` endpoint is gone — the agent owns the save step.
   roleTrainChat: (
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,
     options: { projectPath?: string } = {},
   ) =>
     request<{
       message: { role: 'assistant'; content: string };
-      provider: 'cursor' | 'anthropic';
-      model: string;
-      /**
-       * Phase 58: tools the coach invoked during this turn — `read_lark_doc`
-       * etc. Rendered inline above the assistant's text so the user sees
-       * what the coach was doing before reading the reply. Absent when no
-       * tools were called.
-       */
-      toolCalls?: Array<{
-        name: string;
-        input: unknown;
-        resultPreview: string;
-        error?: boolean;
-      }>;
+      sessionId: string;
+      /** claude's stderr — surfaced in the modal's debug area on warnings. */
+      stderr?: string;
     }>('POST', '/api/roles/train-chat', {
       messages,
-      // Phase 59: when set, the Cursor agent gets file access to this path.
-      // Anthropic backend ignores it.
+      // projectPath becomes the spawned subprocess's cwd, so claude's
+      // built-in `read` / `grep` / `glob` see the user's actual codebase.
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
-    }),
-  roleTrainChatCommit: (
-    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-    options: { roleId?: string } = {},
-  ) =>
-    request<{
-      role: Role;
-      spec: { name: string; systemPrompt: string };
-      provider: 'cursor' | 'anthropic';
-      model: string;
-    }>('POST', '/api/roles/train-chat/commit', {
-      messages,
-      ...(options.roleId ? { roleId: options.roleId } : {}),
     }),
 
   // ── Requirements (B3) ──

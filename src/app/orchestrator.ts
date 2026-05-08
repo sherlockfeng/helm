@@ -70,9 +70,7 @@ import {
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createMcpServer } from '../mcp/server.js';
-import { createLlmChatClient } from '../llm/chat.js';
-import { createReadLarkDocTool } from '../llm/tools/lark-doc.js';
-import type { ToolDef } from '../llm/chat.js';
+import { ClaudeCodeAgent, detectClaudeCli } from '../cli-agent/claude.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
@@ -665,54 +663,40 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         ...input,
         embedFn: makePseudoEmbedFn(),
       }),
-      // Phase 57: lazy LLM chat factory for the role-trainer endpoints.
-      // Reads liveConfig at call time so a Settings save (anthropic.apiKey
-      // toggle, etc.) takes effect on the next request without restart.
-      // Returns null when no provider is reachable so the handler can
-      // surface 501 rather than crash.
-      llmChatFactory: (opts) => {
-        try {
-          // Phase 59: when a project path is supplied AND the Cursor backend
-          // is selected, the agent gets file access to that path. Helm's
-          // own MCP HTTP/SSE URL is wired so the agent can also use
-          // `read_lark_doc` (and any other helm MCP tool) alongside its
-          // built-in shell / read / grep / edit.
-          const httpPort = httpApi.port();
-          const helmMcpUrl = httpPort
-            ? `http://127.0.0.1:${httpPort}/mcp/sse`
-            : undefined;
-          return createLlmChatClient({
-            config: liveConfig,
-            ...(opts?.cwd ? { cwd: opts.cwd } : {}),
-            ...(helmMcpUrl ? { helmMcpUrl } : {}),
-          });
-        } catch (err) {
-          log.warn('llm_chat_factory_unavailable', { data: { error: (err as Error).message } });
-          return null;
-        }
-      },
-      // Phase 58: tools available to the role-trainer chat. `read_lark_doc`
-      // gets registered whenever the lark-cli command can be located —
-      // typically true on the user's dev box. Reads the live config each
-      // call so a Settings change to lark.cliCommand picks up.
-      llmToolsFactory: (): readonly ToolDef[] => {
-        const tools: ToolDef[] = [];
-        try {
-          const cli = createLarkCliRunner({
-            command: liveConfig.lark.cliCommand,
-            env: liveConfig.lark.env ?? process.env,
-          });
-          tools.push(createReadLarkDocTool({ cli }));
-        } catch (err) {
-          log.info('llm_tools_lark_unavailable', { data: { error: (err as Error).message } });
-        }
-        return tools;
+      // Phase 60b: role-trainer chat factory. Each turn spawns a fresh
+      // `claude -p` with helm's MCP injected via --mcp-config. The agent
+      // owns the conversation; helm holds zero API keys (claude's own
+      // auth runs the model). The factory returns null when claude isn't
+      // on PATH so the endpoint can 501 with an actionable message.
+      cliAgentFactory: (opts) => {
+        if (!claudeAvailable) return null;
+        const httpPort = httpApi.port();
+        const helmMcpUrl = httpPort
+          ? `http://127.0.0.1:${httpPort}/mcp/sse`
+          : undefined;
+        return new ClaudeCodeAgent({
+          ...(opts?.cwd ? { cwd: opts.cwd } : {}),
+          ...(helmMcpUrl ? { helmMcpUrl } : {}),
+        });
       },
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
 
   let started = false;
+
+  // Phase 60b: probe `claude` CLI availability once at boot. The factory
+  // above checks this before spawning so a missing CLI surfaces as a clean
+  // 501 rather than a stack trace from the sub-shell. Probe is async; we
+  // optimistically assume claude IS on PATH until the probe resolves —
+  // worst case the first turn surfaces an exec error.
+  let claudeAvailable = true;
+  void detectClaudeCli().then((info) => {
+    claudeAvailable = info != null;
+    log.info('cli_agent_probe', {
+      data: { claude: info ?? null },
+    });
+  });
 
   return {
     knowledge, approval: registry, policy, channel, larkChannel, bridge, httpApi, events, workflowEngine,

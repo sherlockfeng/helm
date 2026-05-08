@@ -266,38 +266,19 @@ export function RolesPage() {
   );
 }
 
-/**
- * Summarize a tool's input args for the inline chip — full JSON would be
- * noisy. We pick the first string value (most tools take a single
- * URL/query argument) and truncate.
- */
-function summarizeToolInput(input: unknown): string {
-  if (input == null || typeof input !== 'object') return '';
-  for (const v of Object.values(input as Record<string, unknown>)) {
-    if (typeof v === 'string' && v.trim()) {
-      const flat = v.trim().replace(/\s+/g, ' ');
-      return flat.length > 60 ? `${flat.slice(0, 57)}…` : flat;
-    }
-  }
-  return '';
-}
+// ── Phase 60b: conversational role trainer (claude CLI subprocess) ─────────
 
-// ── Phase 57: conversational role trainer ─────────────────────────────────
-
-const SEED_GREETING = '你好！我会帮你定义一个新的 helm role。先告诉我：你想要训练什么样的专家？比如领域、用途、关心的代码库或业务场景都可以。\n\n如果有相关的飞书文档，直接贴 URL 给我（我会用 read_lark_doc 读）。如果填了上面的 Project path，我也能直接读你项目里的代码。';
-
-interface ToolCallView {
-  name: string;
-  input: unknown;
-  resultPreview: string;
-  error?: boolean;
-}
+const SEED_GREETING = [
+  '你好！我会帮你定义一个新的 helm role。',
+  '',
+  '我跑在你机器上的 Claude Code CLI 里 — 默认带文件读取、grep、shell、web fetch；helm 还接了 `train_role`、`read_lark_doc` 等 MCP 工具。',
+  '',
+  '先告诉我：你想训练什么样的专家？领域、关心的项目、想沉淀的文档/代码都可以一起说。当你确认方案后，直接说"保存这个为 XXX role"，我就调 train_role 存下来。',
+].join('\n');
 
 interface ChatMessageView {
   role: 'user' | 'assistant';
   content: string;
-  /** Phase 58: tools the assistant invoked before producing this content. */
-  toolCalls?: ToolCallView[];
 }
 
 function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -307,11 +288,16 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [provider, setProvider] = useState<string | null>(null);
-  const [committed, setCommitted] = useState(false);
-  // Phase 59: project path the Cursor agent gets file access to. Empty
-  // string = no file access (Anthropic backend ignores this anyway).
+  const [stderrTail, setStderrTail] = useState<string | null>(null);
+  // Phase 60b: project path becomes the spawned `claude` subprocess's cwd —
+  // claude's built-in read/grep/glob/shell tools then operate on the user's
+  // actual codebase. Optional; empty = no file access.
   const [projectPath, setProjectPath] = useState('');
+
+  // Phase 60b: TODO — listen for a `role.created` SSE event and auto-refresh
+  // the Roles list when the agent calls `train_role`. Until that event is
+  // emitted, the user clicks ✕ to close and the parent `onSaved` reloads.
+  void onSaved;
 
   async function send(): Promise<void> {
     const text = input.trim();
@@ -322,50 +308,23 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
     setBusy(true);
     setErr(null);
     try {
-      // Strip tool-call decorations before sending — the backend only
-      // wants the canonical {role, content} shape.
-      const sendable = next.map(({ role, content }) => ({ role, content }));
       const r = await helmApi.roleTrainChat(
-        sendable,
+        next,
         projectPath.trim() ? { projectPath: projectPath.trim() } : {},
       );
       setMessages([
         ...next,
-        {
-          role: 'assistant',
-          content: r.message.content,
-          ...(r.toolCalls && r.toolCalls.length > 0 ? { toolCalls: r.toolCalls } : {}),
-        },
+        { role: 'assistant', content: r.message.content },
       ]);
-      setProvider(`${r.provider} · ${r.model}`);
+      // Surface non-trivial stderr (claude warns on MCP connection issues etc).
+      const tail = r.stderr?.trim() ?? '';
+      setStderrTail(tail.length > 0 ? tail.slice(-400) : null);
     } catch (e) {
       const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
       setErr(msg);
       // Roll back the optimistic user message so the user can retry from the input.
       setMessages(messages);
       setInput(text);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function commit(): Promise<void> {
-    if (busy || messages.length < 3) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const sendable = messages.map(({ role, content }) => ({ role, content }));
-      const r = await helmApi.roleTrainChatCommit(sendable);
-      setCommitted(true);
-      setMessages([...messages, {
-        role: 'assistant',
-        content: `✓ Saved as **${r.spec.name}**. You can close this dialog now — the role will appear in the list.`,
-      }]);
-      // Briefly delay so the success message is readable, then close.
-      setTimeout(() => onSaved(), 1500);
-    } catch (e) {
-      const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
-      setErr(msg);
     } finally {
       setBusy(false);
     }
@@ -391,23 +350,25 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
           <div>
             <div style={{ fontWeight: 600, fontSize: 14 }}>Train a new role via chat</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              {provider ? `Using ${provider}` : 'Configure anthropic.apiKey or sign into Cursor in Settings.'}
+              Powered by your local <code>claude</code> CLI (Phase 60b). When you&apos;re ready, say
+              {' '}<em>&quot;保存这个为 XXX role&quot;</em> — the agent calls helm&apos;s
+              {' '}<code>train_role</code> MCP tool and the role appears in the list.
             </div>
           </div>
           <button onClick={onClose} aria-label="Close">✕</button>
         </div>
 
-        {/* Phase 59: optional project path. Cursor backend uses this as the
-            agent's `local: { cwd }` so its built-in read/grep/shell tools see
-            the user's actual code. Anthropic backend ignores it. */}
+        {/* Phase 60b: optional project path. Becomes the spawned claude
+            subprocess's cwd, so claude's read/grep/glob/shell tools operate
+            on the user's actual code. */}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <span className="muted" style={{ fontSize: 12, minWidth: 90 }}>Project path</span>
           <input
             type="text"
             value={projectPath}
-            disabled={busy || committed}
+            disabled={busy}
             onChange={(e) => setProjectPath(e.target.value)}
-            placeholder="(optional) /Users/me/projects/foo — gives the Cursor agent file access"
+            placeholder="(optional) /Users/me/projects/foo — gives the agent file access"
             style={{
               flex: 1, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit',
               border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
@@ -426,32 +387,7 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
             <div key={i} style={{
               alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
               maxWidth: '85%',
-              display: 'flex', flexDirection: 'column', gap: 4,
             }}>
-              {/* Phase 58: tool calls render BEFORE the assistant text so
-                  the user sees what the coach was doing. */}
-              {m.toolCalls && m.toolCalls.length > 0 && (
-                <div style={{
-                  display: 'flex', flexDirection: 'column', gap: 4,
-                  fontSize: 11, fontFamily: 'ui-monospace, monospace',
-                }}>
-                  {m.toolCalls.map((tc, j) => (
-                    <div
-                      key={j}
-                      title={tc.resultPreview}
-                      style={{
-                        padding: '4px 8px',
-                        borderRadius: 6,
-                        background: tc.error ? 'rgba(255,59,48,0.12)' : 'rgba(0,122,255,0.08)',
-                        color: tc.error ? 'var(--danger)' : 'var(--text-secondary)',
-                      }}
-                    >
-                      {tc.error ? '⚠️' : '🔧'} {tc.name}({summarizeToolInput(tc.input)})
-                      {' '}— {tc.error ? 'failed' : `${tc.resultPreview.length}+ bytes returned`}
-                    </div>
-                  ))}
-                </div>
-              )}
               <div style={{
                 padding: '8px 12px',
                 borderRadius: 8,
@@ -462,18 +398,29 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
               </div>
             </div>
           ))}
-          {busy && <div className="muted" style={{ fontSize: 12 }}>thinking…</div>}
+          {busy && <div className="muted" style={{ fontSize: 12 }}>claude is thinking…</div>}
         </div>
 
         {err && (
           <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{err}</p>
+        )}
+        {stderrTail && (
+          <details style={{ marginTop: 8 }}>
+            <summary className="muted" style={{ fontSize: 11, cursor: 'pointer' }}>
+              claude stderr ({stderrTail.length} bytes)
+            </summary>
+            <pre style={{
+              fontSize: 11, padding: 6, background: 'var(--bg-pre)',
+              borderRadius: 4, maxHeight: 120, overflow: 'auto',
+            }}>{stderrTail}</pre>
+          </details>
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <textarea
             aria-label="Your message"
             value={input}
-            disabled={busy || committed}
+            disabled={busy}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); }
@@ -485,19 +432,9 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
               border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', resize: 'vertical',
             }}
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button className="primary" disabled={busy || committed || !input.trim()} onClick={() => void send()}>
-              Send
-            </button>
-            <button
-              className="primary"
-              disabled={busy || committed || messages.length < 3}
-              onClick={() => void commit()}
-              title="Distill the conversation into a role and save"
-            >
-              Save role
-            </button>
-          </div>
+          <button className="primary" disabled={busy || !input.trim()} onClick={() => void send()}>
+            Send
+          </button>
         </div>
       </div>
     </div>

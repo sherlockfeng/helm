@@ -132,9 +132,8 @@ export interface HelmConfig {
   knowledge: { providers: KnowledgeProviderConfig[] };
   docFirst: { enforce: boolean };
   cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
-  /** Phase 57: Anthropic API key for the conversational role-trainer.
-   *  Optional — falls back to Cursor when unset. */
-  anthropic?: { apiKey?: string; model: string };
+  // Phase 60b removed `anthropic` — role-trainer now shells out to claude CLI
+  // and uses its own auth (`claude login`).
 }
 
 export interface CampaignSummary {

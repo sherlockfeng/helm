@@ -11,6 +11,7 @@ import {
   setHostSessionFirstPrompt,
   setHostSessionRole,
   setHostSessionRoles,
+  setLastInjectedRoleIds,
   updateHostSession,
   upsertHostSession,
 } from '../../../src/storage/repos/host-sessions.js';
@@ -347,6 +348,44 @@ describe('host sessions', () => {
     it('attack: setting on a non-existent session is a no-op (UPDATE matches zero rows)', () => {
       expect(() => setHostSessionDisplayName(db, 'ghost', 'x')).not.toThrow();
       expect(getHostSession(db, 'ghost')).toBeUndefined();
+    });
+  });
+
+  describe('Phase 56 lastInjectedRoleIds', () => {
+    it('persists as a sorted JSON array; getHostSession decodes back into a readonly array', () => {
+      upsertHostSession(db, makeSession());
+      setLastInjectedRoleIds(db, 's1', ['z', 'a', 'm']);
+      expect(getHostSession(db, 's1')?.lastInjectedRoleIds).toEqual(['a', 'm', 'z']);
+    });
+
+    it('empty array is meaningful (== "synced empty state, do not re-inject")', () => {
+      upsertHostSession(db, makeSession());
+      setLastInjectedRoleIds(db, 's1', []);
+      expect(getHostSession(db, 's1')?.lastInjectedRoleIds).toEqual([]);
+    });
+
+    it('null clears the column → next prompt-submit will re-inject if any roles bound', () => {
+      upsertHostSession(db, makeSession());
+      setLastInjectedRoleIds(db, 's1', ['a']);
+      setLastInjectedRoleIds(db, 's1', null);
+      expect(getHostSession(db, 's1')?.lastInjectedRoleIds).toBeUndefined();
+    });
+
+    it('upsert on session_start preserves the column (not in the ON CONFLICT update list)', () => {
+      upsertHostSession(db, makeSession({ cwd: '/proj' }));
+      setLastInjectedRoleIds(db, 's1', ['a', 'b']);
+      const later = new Date(Date.now() + 1000).toISOString();
+      upsertHostSession(db, makeSession({ cwd: '/proj', lastSeenAt: later }));
+      expect(getHostSession(db, 's1')?.lastInjectedRoleIds).toEqual(['a', 'b']);
+    });
+
+    it('attack: corrupted JSON in the column decodes as undefined (not a crash)', () => {
+      upsertHostSession(db, makeSession());
+      // Forge a bad value past the helper.
+      db.prepare(`UPDATE host_sessions SET last_injected_role_ids = ? WHERE id = ?`)
+        .run('{not valid json', 's1');
+      expect(() => getHostSession(db, 's1')).not.toThrow();
+      expect(getHostSession(db, 's1')?.lastInjectedRoleIds).toBeUndefined();
     });
   });
 });

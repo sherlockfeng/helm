@@ -258,6 +258,13 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE host_sessions ADD COLUMN display_name TEXT;
     `,
   },
+  {
+    version: 8,
+    description: 'host_sessions.last_injected_role_ids — Phase 56: track which roleIds were last injected so beforeSubmitPrompt can re-inject when the binding changes mid-chat',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN last_injected_role_ids TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

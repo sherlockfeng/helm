@@ -72,16 +72,9 @@ const CursorConfigSchema = z.object({
   mode: z.enum(['local', 'cloud']).default('local'),
 }).strict();
 
-/**
- * Phase 57: Anthropic Messages API config for the conversational role
- * trainer. Optional — when both Anthropic and Cursor are present, Anthropic
- * wins (explicit user choice). When `apiKey` is unset, the role trainer
- * falls back to Cursor (which works with zero config in local mode).
- */
-const AnthropicConfigSchema = z.object({
-  apiKey: z.string().optional(),
-  model: z.string().default('claude-sonnet-4-5'),
-}).strict();
+// Phase 60b removed AnthropicConfigSchema. The role-trainer chat now
+// shells out to `claude` (Claude Code CLI) and uses claude's own auth
+// (`claude login`). Helm holds zero LLM API keys for that surface.
 
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
@@ -90,7 +83,6 @@ export const HelmConfigSchema = z.object({
   knowledge: KnowledgeConfigSchema.default({}),
   docFirst: DocFirstConfigSchema.default({}),
   cursor: CursorConfigSchema.default({}),
-  anthropic: AnthropicConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

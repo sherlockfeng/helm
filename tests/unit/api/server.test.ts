@@ -1096,13 +1096,46 @@ describe('attack: only binds 127.0.0.1', () => {
   });
 });
 
-describe('POST /api/roles/train-chat (Phase 57)', () => {
-  beforeEach(async () => {
-    // The default api built in the outer beforeEach is fine for the 501 cases.
-    // Happy-path tests rebuild api with an injected llmChatFactory + trainRole.
-  });
+describe('POST /api/roles/train-chat (Phase 60b)', () => {
 
-  it('501 when llmChatFactory is not wired', async () => {
+  // Build a fake ClaudeCodeAgent factory we can drive without spawning
+  // a real `claude` subprocess. The agent under test only uses
+  // `sendConversation` + `dispose` from the public surface.
+  function makeFakeAgentFactory(behavior: {
+    text?: string;
+    stderr?: string;
+    throws?: Error;
+    onCall?: (
+      messages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
+      opts?: { systemPrompt?: string },
+    ) => void;
+  } = {}) {
+    const disposed: number[] = [];
+    let agentCount = 0;
+    const factory = (opts?: { cwd?: string }) => {
+      const id = ++agentCount;
+      void opts;
+      return {
+        sessionId: `fake-${id}`,
+        async sendConversation(
+          messages: ReadonlyArray<{ role: 'user' | 'assistant'; content: string }>,
+          options: { systemPrompt?: string } = {},
+        ) {
+          behavior.onCall?.(messages, options);
+          if (behavior.throws) throw behavior.throws;
+          return {
+            text: behavior.text ?? `you said ${messages.length} thing(s)`,
+            stderr: behavior.stderr ?? '',
+            sessionId: `fake-${id}`,
+          };
+        },
+        dispose() { disposed.push(id); },
+      } as unknown as import('../../../src/cli-agent/claude.js').ClaudeCodeAgent;
+    };
+    return { factory, getDisposed: () => disposed };
+  }
+
+  it('501 when cliAgentFactory is not wired', async () => {
     const r = await fetchJson('/api/roles/train-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1111,20 +1144,24 @@ describe('POST /api/roles/train-chat (Phase 57)', () => {
     expect(r.status).toBe(501);
   });
 
-  it('happy: forwards messages → llm; returns assistant turn', async () => {
+  it('501 when factory returns null (claude CLI not on PATH)', async () => {
     await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic',
-        model: 'stub',
-        chat: async (messages) => ({
-          content: `you said ${messages.length} thing(s)`,
-          provider: 'anthropic',
-          model: 'stub',
-        }),
-      }),
+    api = createHttpApi({ db, registry, cliAgentFactory: () => null });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
     });
+    expect(r.status).toBe(501);
+    expect((r.body as { message: string }).message).toMatch(/Claude Code CLI not detected/i);
+  });
+
+  it('happy: forwards messages → cli agent; returns assistant turn + sessionId', async () => {
+    const fake = makeFakeAgentFactory();
+    await api.stop();
+    api = createHttpApi({ db, registry, cliAgentFactory: fake.factory });
     await api.start();
     baseUrl = `http://127.0.0.1:${api.port()}`;
 
@@ -1138,19 +1175,44 @@ describe('POST /api/roles/train-chat (Phase 57)', () => {
       ] }),
     });
     expect(r.status).toBe(200);
-    const body = r.body as { message: { role: string; content: string }; provider: string };
+    const body = r.body as {
+      message: { role: string; content: string };
+      sessionId: string;
+    };
     expect(body.message).toEqual({ role: 'assistant', content: 'you said 3 thing(s)' });
-    expect(body.provider).toBe('anthropic');
+    expect(body.sessionId).toMatch(/^fake-/);
   });
 
-  it('attack: missing messages array → 400', async () => {
+  it('passes projectPath through to the factory as cwd', async () => {
+    let receivedCwd: string | undefined;
     await api.stop();
     api = createHttpApi({
       db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => ({ content: 'x', provider: 'anthropic' as const, model: 's' }),
+      cliAgentFactory: (opts) => {
+        receivedCwd = opts?.cwd;
+        return makeFakeAgentFactory().factory(opts);
+      },
+    });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'hi' }],
+        projectPath: '/Users/me/work/foo',
       }),
+    });
+    expect(receivedCwd).toBe('/Users/me/work/foo');
+  });
+
+  it('attack: missing messages array → 400 (no factory call wasted)', async () => {
+    let calls = 0;
+    await api.stop();
+    api = createHttpApi({
+      db, registry,
+      cliAgentFactory: () => { calls += 1; return makeFakeAgentFactory().factory(); },
     });
     await api.start();
     baseUrl = `http://127.0.0.1:${api.port()}`;
@@ -1161,17 +1223,13 @@ describe('POST /api/roles/train-chat (Phase 57)', () => {
       body: JSON.stringify({}),
     });
     expect(r.status).toBe(400);
+    expect(calls).toBe(0);
   });
 
   it('attack: bad message role → 400', async () => {
+    const fake = makeFakeAgentFactory();
     await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => ({ content: 'x', provider: 'anthropic' as const, model: 's' }),
-      }),
-    });
+    api = createHttpApi({ db, registry, cliAgentFactory: fake.factory });
     await api.start();
     baseUrl = `http://127.0.0.1:${api.port()}`;
 
@@ -1183,15 +1241,10 @@ describe('POST /api/roles/train-chat (Phase 57)', () => {
     expect(r.status).toBe(400);
   });
 
-  it('attack: llm throws → 502 (backend reachable but provider fault)', async () => {
+  it('attack: agent throws → 502 (cli failure)', async () => {
+    const fake = makeFakeAgentFactory({ throws: new Error('claude crashed') });
     await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => { throw new Error('rate limited'); },
-      }),
-    });
+    api = createHttpApi({ db, registry, cliAgentFactory: fake.factory });
     await api.start();
     baseUrl = `http://127.0.0.1:${api.port()}`;
 
@@ -1201,128 +1254,43 @@ describe('POST /api/roles/train-chat (Phase 57)', () => {
       body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
     });
     expect(r.status).toBe(502);
-    expect((r.body as { error: string }).error).toBe('llm_failed');
+    expect((r.body as { error: string }).error).toBe('cli_failed');
+  });
+
+  it('non-empty stderr surfaces in the response (debug aid)', async () => {
+    const fake = makeFakeAgentFactory({ stderr: 'mcp: helm connected\n' });
+    await api.stop();
+    api = createHttpApi({ db, registry, cliAgentFactory: fake.factory });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    const r = await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { stderr?: string }).stderr).toContain('mcp: helm connected');
+  });
+
+  it('disposes the agent after each turn (no tmpdir leak)', async () => {
+    const fake = makeFakeAgentFactory();
+    await api.stop();
+    api = createHttpApi({ db, registry, cliAgentFactory: fake.factory });
+    await api.start();
+    baseUrl = `http://127.0.0.1:${api.port()}`;
+
+    await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'one' }] }),
+    });
+    await fetchJson('/api/roles/train-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'two' }] }),
+    });
+    expect(fake.getDisposed()).toEqual([1, 2]);
   });
 });
 
-describe('POST /api/roles/train-chat/commit (Phase 57)', () => {
-  it('happy: distills conversation → trainRole; returns spec + role', async () => {
-    await api.stop();
-    const trainCalls: Array<{ roleId: string; name: string; baseSystemPrompt?: string }> = [];
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 'stub',
-        chat: async () => ({
-          content: '{"name":"Goofy 专家","systemPrompt":"You are the Goofy expert. Cite the SDK."}',
-          provider: 'anthropic' as const, model: 'stub',
-        }),
-      }),
-      trainRole: async (input) => {
-        trainCalls.push(input);
-        return {
-          id: input.roleId,
-          name: input.name,
-          systemPrompt: input.baseSystemPrompt ?? '',
-          isBuiltin: false,
-          createdAt: new Date().toISOString(),
-        };
-      },
-    });
-    await api.start();
-    baseUrl = `http://127.0.0.1:${api.port()}`;
-
-    const r = await fetchJson('/api/roles/train-chat/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [
-        { role: 'assistant', content: 'what role?' },
-        { role: 'user', content: 'goofy expert' },
-        { role: 'assistant', content: 'ok ready to save?' },
-      ] }),
-    });
-    expect(r.status).toBe(200);
-    const body = r.body as {
-      role: { id: string; name: string };
-      spec: { name: string; systemPrompt: string };
-    };
-    expect(body.spec.name).toBe('Goofy 专家');
-    expect(body.spec.systemPrompt).toMatch(/Goofy expert/);
-    expect(body.role.id).toMatch(/^role-goofy/);
-    expect(trainCalls).toHaveLength(1);
-    expect(trainCalls[0]!.name).toBe('Goofy 专家');
-    // Conversation transcript persisted as a "training" doc — searchable later.
-    // (Just verify the call happened; doc shape is the trainRole's contract.)
-  });
-
-  it('attack: LLM returns non-JSON → 422 (commit failed without crashing)', async () => {
-    await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => ({ content: 'I cannot do that', provider: 'anthropic' as const, model: 's' }),
-      }),
-      trainRole: async () => ({ id: 'r' }),
-    });
-    await api.start();
-    baseUrl = `http://127.0.0.1:${api.port()}`;
-
-    const r = await fetchJson('/api/roles/train-chat/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'go' }] }),
-    });
-    expect(r.status).toBe(422);
-    expect((r.body as { error: string }).error).toBe('distill_failed');
-  });
-
-  it('attack: LLM emits {"error": "..."} → 422 with the LLM-supplied reason', async () => {
-    await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => ({
-          content: '{"error":"conversation too thin"}',
-          provider: 'anthropic' as const, model: 's',
-        }),
-      }),
-      trainRole: async () => ({ id: 'r' }),
-    });
-    await api.start();
-    baseUrl = `http://127.0.0.1:${api.port()}`;
-
-    const r = await fetchJson('/api/roles/train-chat/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'go' }] }),
-    });
-    expect(r.status).toBe(422);
-    expect((r.body as { message: string }).message).toContain('thin');
-  });
-
-  it('handles ```json``` code-fence wrapping (defensive: strips before parse)', async () => {
-    await api.stop();
-    api = createHttpApi({
-      db, registry,
-      llmChatFactory: () => ({
-        provider: 'anthropic', model: 's',
-        chat: async () => ({
-          content: '```json\n{"name":"X","systemPrompt":"You are X."}\n```',
-          provider: 'anthropic' as const, model: 's',
-        }),
-      }),
-      trainRole: async (input) => ({ id: input.roleId, name: input.name }),
-    });
-    await api.start();
-    baseUrl = `http://127.0.0.1:${api.port()}`;
-
-    const r = await fetchJson('/api/roles/train-chat/commit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] }),
-    });
-    expect(r.status).toBe(200);
-  });
-});

@@ -154,16 +154,21 @@ export interface HttpApiDeps {
    * the Cursor agent's file-access root to a user-supplied project path
    * (so the agent's built-in `read`/`grep` tools see the right code).
    */
-  llmChatFactory?: (
-    opts?: { cwd?: string },
-  ) => import('../llm/chat.js').LlmChatClient | null;
   /**
-   * Phase 58: factory for the tools the role-trainer chat may call (e.g.
-   * `read_lark_doc`). Built lazily so a Settings change to lark.cliCommand
-   * picks up on the next request. Returns an empty array when no tools are
-   * available — the chat still works, just text-only.
+   * Phase 60b: factory for a per-modal Claude Code subprocess agent. The
+   * role-trainer chat now spawns `claude -p` for each turn so the agent
+   * uses Claude Code's full native capabilities (reading code, web fetch,
+   * shell) plus helm's MCP tools (`train_role`, `read_lark_doc`, ...). Helm
+   * holds zero API keys for this path — claude's own auth runs the model.
+   *
+   * Returns null when the `claude` binary isn't on PATH; the
+   * `/api/roles/train-chat` endpoint then 501s with an actionable message
+   * pointing the user at `helm setup-mcp claude` (or to install Claude
+   * Code).
    */
-  llmToolsFactory?: () => readonly import('../llm/chat.js').ToolDef[];
+  cliAgentFactory?: (
+    opts?: { cwd?: string },
+  ) => import('../cli-agent/claude.js').ClaudeCodeAgent | null;
 }
 
 export interface HttpApiOptions {
@@ -439,15 +444,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (req.method !== 'POST') return methodNotAllowed(res);
         return handleTrainRole(ctx, deps, roleTrainMatch[1]!);
       }
-      // Phase 57: conversational role-training endpoints. Multi-turn chat
-      // first; commit distills the conversation into a role spec and saves.
+      // Phase 60b: conversational role-training endpoint. Per-turn POST;
+      // the agent calls helm's `train_role` MCP tool itself when the user
+      // confirms — no separate /commit step.
       if (url.pathname === '/api/roles/train-chat') {
         if (req.method !== 'POST') return methodNotAllowed(res);
         return handleRoleTrainChat(ctx, deps);
-      }
-      if (url.pathname === '/api/roles/train-chat/commit') {
-        if (req.method !== 'POST') return methodNotAllowed(res);
-        return handleRoleTrainChatCommit(ctx, deps);
       }
       const roleMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
       if (roleMatch) {
@@ -1039,68 +1041,37 @@ function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): 
 }
 
 /**
- * Phase 57: instructions the LLM follows when role-coaching the user. Kept
- * inline so the user can read it in the source rather than guessing what
- * the LLM is up to. The coach asks clarifying questions, summarizes when
- * confident, and refuses to invent — it only distills what the user has
- * actually told it.
+ * Phase 60b: appended to claude's default system prompt when role-coaching.
+ * Kept short — claude already knows how to behave as an agent. We just add
+ * the helm-specific job description and the closing-tool hint.
  */
 const ROLE_TRAIN_SYSTEM_PROMPT = [
-  'You are a role-coach helping the user define a new AI agent role for the helm system.',
+  'You are role-coaching the user to define a new helm role (an AI persona with its own',
+  'system prompt + knowledge chunks). Ask clarifying questions, summarize what you',
+  'understand, and stop when the user confirms the draft.',
   '',
-  'Your job, in order:',
-  '  1. Ask clarifying questions, ONE OR TWO AT A TIME, to figure out:',
-  '     - The role\'s name (e.g. "Goofy 专家", "容灾大盘 reviewer")',
-  '     - Domain expertise (what topics, products, codebases)',
-  '     - Voice / style (terse code-reviewer, patient teacher, ...)',
-  '     - Concrete tasks the role should handle well',
-  '     - Edge cases / failure modes the role should NOT do',
-  '  2. When you have enough to draft a useful system prompt, summarize what',
-  '     you understand about the role and ask the user to confirm or correct.',
-  '  3. Once the user confirms, briefly say "Ready to save — click Save in the UI"',
-  '     and stop.',
-  '',
-  'Tools available to you:',
-  '  - `read_lark_doc(url_or_token)` — fetch a Lark / Feishu doc. When the',
-  '    user pastes a URL, call this rather than paraphrasing. Works on',
-  '    both backends (Cursor agent gets it via helm\'s MCP server).',
-  '  - On the Cursor backend, you also have native `read`, `grep`, `glob`,',
-  '    `shell`, and `edit` tools scoped to the user\'s project path (when',
-  '    they supplied one). Use them to look at code the role should know.',
-  '  - If a tool call fails, mention it briefly and continue without',
-  '    inventing content.',
+  'When the user is ready, call the `train_role` MCP tool to save the role:',
+  '  train_role({ roleId: "<slug>", name: "<display name>",',
+  '               baseSystemPrompt: "<self-contained prompt in 2nd person>",',
+  '               documents: [{ filename, content }] })',
+  'Use the conversation transcript itself as one document so the user can audit later.',
   '',
   'Hard rules:',
   '  - Never invent expertise the user did not describe.',
-  '  - Stay in English unless the user writes in Chinese; mirror their language.',
-  '  - Keep each turn short (under 200 words). The user is in a chat box, not reading docs.',
-].join('\n');
-
-/**
- * Phase 57 commit: distills the chat history into a structured role spec.
- * Uses a strict JSON-only system prompt so we can parse the response without
- * regex hacks. The LLM emits exactly:
- *   { "name": string, "systemPrompt": string }
- */
-const ROLE_TRAIN_COMMIT_PROMPT = [
-  'You are converting a coaching conversation into a finalized role spec.',
-  'Read the entire conversation above and emit ONLY a JSON object with two fields:',
-  '  - "name": the role\'s human-readable name (the value the user agreed on).',
-  '  - "systemPrompt": a self-contained system prompt that captures the role\'s',
-  '    expertise, style, and task focus. Written in second person ("You are ...").',
-  '    300-700 characters is plenty.',
-  '',
-  'Output ONLY the JSON object — no markdown, no commentary, no fences.',
-  'If the conversation is too thin to produce a coherent role, emit:',
-  '  {"error": "<short reason>"}',
+  '  - Mirror the user\'s language (Chinese ↔ Chinese, English ↔ English).',
+  '  - Keep each turn short — the user is in a chat box, not reading docs.',
+  '  - When the user pastes a Lark doc URL, call `read_lark_doc` rather than',
+  '    paraphrasing from memory.',
 ].join('\n');
 
 function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
-  const factory = deps.llmChatFactory;
+  const factory = deps.cliAgentFactory;
   if (!factory) {
     return send(ctx.response, 501, {
       error: 'not_implemented',
-      message: 'role-train chat factory not wired',
+      message:
+        'role-train chat backend is not wired. Install Claude Code '
+        + '(https://code.claude.com) and run `helm setup-mcp claude` once.',
     });
   }
   let parsed: unknown;
@@ -1131,11 +1102,11 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
     validated.push({ role: m['role'], content: m['content'] });
   }
 
-  let client;
+  let agent;
   try {
-    // Phase 59: forward projectPath as cwd so a Cursor backend agent can
-    // read code from the user's actual project.
-    client = factory(projectPath ? { cwd: projectPath } : undefined);
+    // projectPath becomes the spawned subprocess's cwd, so claude's
+    // built-in `read` / `grep` / `glob` see the user's actual codebase.
+    agent = factory(projectPath ? { cwd: projectPath } : undefined);
   }
   catch (err) {
     return send(ctx.response, 501, {
@@ -1143,161 +1114,50 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
       message: (err as Error).message,
     });
   }
-  if (!client) {
+  if (!agent) {
     return send(ctx.response, 501, {
       error: 'no_provider',
-      message: 'No LLM provider configured. Set anthropic.apiKey in Settings or sign into Cursor.',
+      message:
+        'Claude Code CLI not detected. Install it from https://code.claude.com '
+        + 'and `claude login` once, then retry.',
     });
   }
 
   void (async () => {
     try {
-      // Phase 58: hand the chat any registered tools (read_lark_doc et al.)
-      // so the coach can pull docs the user references.
-      const tools = deps.llmToolsFactory ? deps.llmToolsFactory() : [];
-      const result = await client.chat(validated, {
-        system: ROLE_TRAIN_SYSTEM_PROMPT,
-        maxTokens: 1024,
-        ...(tools.length > 0 ? { tools } : {}),
+      const result = await agent.sendConversation(validated, {
+        systemPrompt: ROLE_TRAIN_SYSTEM_PROMPT,
       });
       deps.logger?.info('role_train_chat_turn', {
         data: {
-          provider: result.provider, model: result.model,
+          sessionId: result.sessionId,
           msgs: validated.length,
-          toolCalls: result.toolCalls?.map((c) => c.name) ?? [],
+          stderrLen: result.stderr.length,
         },
       });
       send(ctx.response, 200, {
-        message: { role: 'assistant', content: result.content },
-        provider: result.provider,
-        model: result.model,
-        ...(result.toolCalls && result.toolCalls.length > 0
-          ? { toolCalls: result.toolCalls }
-          : {}),
+        message: { role: 'assistant', content: result.text },
+        sessionId: result.sessionId,
+        // Surface stderr separately so the renderer's debug panel can show
+        // claude's MCP-connection notes etc. without polluting the message.
+        ...(result.stderr ? { stderr: result.stderr } : {}),
       });
     } catch (err) {
       deps.logger?.warn('role_train_chat_failed', { data: { error: (err as Error).message } });
-      send(ctx.response, 502, { error: 'llm_failed', message: (err as Error).message });
+      send(ctx.response, 502, { error: 'cli_failed', message: (err as Error).message });
+    } finally {
+      // Stateless contract: we re-create the agent on every turn (cheap —
+      // just a tmp-dir + JSON write), so dispose immediately to clean up
+      // the tmp MCP-config dir.
+      agent?.dispose();
     }
   })();
 }
 
-function handleRoleTrainChatCommit(ctx: RouteContext, deps: HttpApiDeps): void {
-  const factory = deps.llmChatFactory;
-  if (!factory || !deps.trainRole) {
-    return send(ctx.response, 501, {
-      error: 'not_implemented',
-      message: 'role-train factory + trainRole must both be wired to commit',
-    });
-  }
-  let parsed: unknown;
-  try { parsed = JSON.parse(ctx.body); }
-  catch { return badRequest(ctx.response, 'invalid JSON'); }
-  if (!parsed || typeof parsed !== 'object') {
-    return badRequest(ctx.response, 'body must be a JSON object');
-  }
-  const { messages, roleId } = parsed as { messages?: unknown; roleId?: unknown };
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return badRequest(ctx.response, 'messages must be a non-empty array');
-  }
-  if (roleId !== undefined && typeof roleId !== 'string') {
-    return badRequest(ctx.response, 'roleId must be a string when provided');
-  }
-  // Re-validate message shape (mirrors handleRoleTrainChat).
-  const validated: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-  for (const raw of messages) {
-    if (!raw || typeof raw !== 'object') return badRequest(ctx.response, 'each message must be an object');
-    const m = raw as Record<string, unknown>;
-    if (m['role'] !== 'user' && m['role'] !== 'assistant') {
-      return badRequest(ctx.response, 'message.role must be "user" or "assistant"');
-    }
-    if (typeof m['content'] !== 'string') {
-      return badRequest(ctx.response, 'message.content must be a string');
-    }
-    validated.push({ role: m['role'], content: m['content'] });
-  }
-
-  let client;
-  try { client = factory(); }
-  catch (err) {
-    return send(ctx.response, 501, { error: 'no_provider', message: (err as Error).message });
-  }
-  if (!client) return send(ctx.response, 501, { error: 'no_provider' });
-
-  void (async () => {
-    try {
-      // Step 1: ask the LLM to distill into a {name, systemPrompt} JSON.
-      const distill = await client.chat(validated, {
-        system: ROLE_TRAIN_COMMIT_PROMPT,
-        maxTokens: 1500,
-      });
-      const spec = parseRoleSpec(distill.content);
-      if ('error' in spec) {
-        return send(ctx.response, 422, {
-          error: 'distill_failed', message: spec.error,
-        });
-      }
-
-      // Step 2: feed the distilled spec into the existing trainRole pipeline.
-      // The conversation transcript becomes a single document so search-time
-      // RAG can recall the source dialogue.
-      const transcript = validated
-        .map((m) => `**${m.role === 'user' ? 'User' : 'Coach'}**: ${m.content}`)
-        .join('\n\n');
-      const finalRoleId = (roleId && roleId.trim()) || `role-${slugify(spec.name)}-${Date.now().toString(36)}`;
-      const role = await deps.trainRole!({
-        roleId: finalRoleId,
-        name: spec.name,
-        documents: [
-          { filename: 'training-conversation.md', content: transcript },
-        ],
-        baseSystemPrompt: spec.systemPrompt,
-      });
-
-      deps.logger?.info('role_trained_via_chat', {
-        data: { roleId: finalRoleId, name: spec.name, msgs: validated.length, provider: distill.provider },
-      });
-      return send(ctx.response, 200, {
-        role,
-        spec: { name: spec.name, systemPrompt: spec.systemPrompt },
-        provider: distill.provider,
-        model: distill.model,
-      });
-    } catch (err) {
-      deps.logger?.warn('role_train_chat_commit_failed', { data: { error: (err as Error).message } });
-      return send(ctx.response, 500, { error: 'commit_failed', message: (err as Error).message });
-    }
-  })();
-}
-
-function parseRoleSpec(text: string): { name: string; systemPrompt: string } | { error: string } {
-  // The commit-prompt asks for raw JSON, but defensive — strip code fences if
-  // the model wraps the output anyway.
-  const trimmed = text.trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  let obj: unknown;
-  try { obj = JSON.parse(trimmed); }
-  catch { return { error: `LLM did not return valid JSON: ${trimmed.slice(0, 120)}…` }; }
-  if (!obj || typeof obj !== 'object') return { error: 'LLM JSON was not an object' };
-  const o = obj as Record<string, unknown>;
-  if (typeof o['error'] === 'string') return { error: o['error'] };
-  if (typeof o['name'] !== 'string' || !o['name'].trim()) {
-    return { error: 'LLM JSON missing name' };
-  }
-  if (typeof o['systemPrompt'] !== 'string' || !o['systemPrompt'].trim()) {
-    return { error: 'LLM JSON missing systemPrompt' };
-  }
-  return { name: o['name'].trim(), systemPrompt: o['systemPrompt'].trim() };
-}
-
-function slugify(text: string): string {
-  return text.toLowerCase()
-    .replace(/[^\w\s-]+/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40)
-    || 'role';
-}
+// Phase 60b: removed handleRoleTrainChatCommit, parseRoleSpec, slugify.
+// The Phase 57 flow asked the LLM to emit a JSON role spec which helm then
+// pipelined into trainRole(). With claude as the agent backend, that
+// distillation is unnecessary — the agent itself calls the `train_role`
+// MCP tool when the user is ready, and helm's MCP server runs the same
+// trainRole pipeline directly. One fewer round-trip + one fewer brittle
+// JSON-parse step.

@@ -532,12 +532,27 @@ export function createMcpServer(
       );
     }
     try {
-      // Reuse the Phase 58 implementation — same shell args, same truncation
-      // semantics. Single source of truth for Lark doc fetching.
-      const { createReadLarkDocTool } = await import('../llm/tools/lark-doc.js');
-      const tool = createReadLarkDocTool({ cli: deps.larkCli });
-      const result = await tool.run({ url_or_token });
-      return textResult(result.content);
+      // Phase 60b: inlined here (used to live in src/llm/tools/lark-doc.ts).
+      // Same shell args + truncation semantics as before, just no longer
+      // wrapped in the deleted ToolDef abstraction.
+      const args = [
+        'docs', '+fetch',
+        '--api-version', 'v2',
+        '--doc', url_or_token,
+        '--doc-format', 'markdown',
+      ];
+      const result = await deps.larkCli.run(args, { timeoutMs: 30_000 });
+      if (result.exitCode !== 0) {
+        const detail = (result.stderr || result.stdout).trim();
+        return errorResult(
+          `lark-cli docs +fetch failed (code=${result.exitCode}): ${detail || '(no output)'}`,
+        );
+      }
+      const MAX = 16 * 1024;
+      const body = result.stdout.length > MAX
+        ? result.stdout.slice(0, MAX) + `\n\n…[truncated, doc was ${result.stdout.length} bytes]`
+        : result.stdout;
+      return textResult(body);
     } catch (err) {
       return errorResult(`read_lark_doc failed: ${(err as Error).message}`);
     }

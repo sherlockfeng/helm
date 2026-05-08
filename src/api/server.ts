@@ -109,6 +109,17 @@ export interface HttpApiDeps {
   /** Consume a pending_binds row and create a channel_bindings row. */
   consumePendingBind?: (code: string, hostSessionId: string) => { id: string } | null;
   /**
+   * Phase 62: create a fresh pending_binds row from the renderer's
+   * "Mirror to Lark" button. The caller (orchestrator) wires this to
+   * `createPendingLarkBind`. Returns the same shape the user-facing
+   * modal needs: a copyable code + instruction string.
+   */
+  initiateLarkBind?: (opts: { label?: string }) => {
+    code: string;
+    expiresAt: string;
+    instruction: string;
+  };
+  /**
    * Workflow engine for cycle/task mutations. When undefined, the
    * /api/cycles/:id/complete + /api/cycles/:id/bug-tasks endpoints
    * return 501. The orchestrator wires this so a config docFirst.enforce
@@ -552,6 +563,31 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!existed) return send(res, 404, { error: 'unknown_or_expired_code' });
         deps.logger?.info('pending_bind_cancelled', { data: { code } });
         return send(res, 200, { ok: true, code });
+      }
+
+      // Phase 62: from the renderer's "Mirror to Lark" button, mint a
+      // pending_binds code without waiting for an `@bot bind chat` message
+      // in Lark. The user copies the code into a Lark thread (`@bot bind X`)
+      // → the listener consumes it → Phase 61 ack fires.
+      if (url.pathname === '/api/bindings/initiate') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.initiateLarkBind) {
+          return send(res, 501, { error: 'not_implemented', message: 'Lark not configured' });
+        }
+        let parsed: unknown = {};
+        if (ctx.body) {
+          try { parsed = JSON.parse(ctx.body); }
+          catch { return badRequest(res, 'invalid JSON'); }
+        }
+        const obj = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {};
+        const label = typeof obj['label'] === 'string' && obj['label'].trim()
+          ? obj['label'].trim().slice(0, 60)
+          : undefined;
+        const result = deps.initiateLarkBind(label ? { label } : {});
+        deps.logger?.info('lark_bind_initiated', {
+          data: { code: result.code, label, expiresAt: result.expiresAt },
+        });
+        return send(res, 200, result);
       }
 
       if (url.pathname === '/api/bindings/consume') {

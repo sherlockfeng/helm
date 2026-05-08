@@ -55,7 +55,7 @@ import { WorkflowEngine } from '../workflow/engine.js';
 import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
-import { consumePendingBind } from './lark-wiring.js';
+import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
   closeStaleHostSessions,
@@ -711,6 +711,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         const created = consumePendingBind(deps.db, events, code, hostSessionId);
         return created ? { id: created.id } : null;
       },
+      // Phase 62: only expose the "Mirror to Lark" path when Lark is
+      // actually wired — otherwise the renderer's button gets a 501 and
+      // can show "Lark not configured" instead of failing in a weirder way
+      // later (e.g. the user types the code in Lark, lark-wiring isn't
+      // even subscribed → consumption never happens).
+      ...(larkChannel
+        ? {
+          initiateLarkBind: (opts) =>
+            createPendingLarkBind(deps.db, opts ?? {}),
+        }
+        : {}),
       workflowEngine,
       // Phase 24: Cursor SDK summarize. Local mode reuses the user's Cursor
       // app auth — no helm-side key required. The factory is always wired;

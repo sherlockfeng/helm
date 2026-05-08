@@ -17,7 +17,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
-import type { ActiveChat } from '../api/types.js';
+import type { ActiveChat, ChannelBinding } from '../api/types.js';
 
 function formatRelative(iso: string): string {
   const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -55,9 +55,16 @@ function chatLabel(chat: ActiveChat): string {
 export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
   const { data: rolesData } = useApi(() => helmApi.roles());
-  useEventStream(() => reload(), { types: ['session.started', 'session.closed'] });
+  // Phase 62: pull bindings so we can show Lark status per chat. Refreshes
+  // on the same SSE events the Bindings page listens for.
+  const { data: bindingsData, reload: reloadBindings } = useApi(() => helmApi.bindings());
+  useEventStream(() => { reload(); reloadBindings(); }, {
+    types: ['session.started', 'session.closed', 'binding.created', 'binding.removed'],
+  });
   const [savingId, setSavingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  // Phase 62: which chat (if any) currently has the Mirror-to-Lark modal open.
+  const [bindModalFor, setBindModalFor] = useState<string | null>(null);
   // Phase 55: which row's title is currently being edited. Only one at a
   // time so escape-from-edit doesn't accidentally cancel another row.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -246,6 +253,16 @@ export function ChatsPage() {
             </p>
           )}
 
+          {/* Phase 62: Lark binding status + initiate button. Bindings live in
+              channel_bindings; we filter client-side rather than adding the
+              join to /api/active-chats's response shape. */}
+          <ChatLarkSection
+            chat={chat}
+            bindings={(bindingsData?.bindings ?? [])
+              .filter((b) => b.hostSessionId === chat.id && b.channel === 'lark')}
+            onMirror={() => setBindModalFor(chat.id)}
+          />
+
           {/* Phase 36: chat lifecycle controls. Close is soft (history kept);
               Delete cascades to channel_bindings + queued messages. Both
               prompt for confirmation via window.confirm. */}
@@ -270,6 +287,22 @@ export function ChatsPage() {
           </div>
         </article>
       ))}
+
+      {bindModalFor && (
+        <MirrorToLarkModal
+          hostSessionId={bindModalFor}
+          chatLabel={(() => {
+            const c = data?.chats.find((x) => x.id === bindModalFor);
+            return c ? chatLabel(c) : bindModalFor;
+          })()}
+          onClose={() => setBindModalFor(null)}
+          onBound={() => {
+            setBindModalFor(null);
+            reload();
+            reloadBindings();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -358,6 +391,253 @@ function ChatTitle({
       >
         ✎
       </button>
+    </div>
+  );
+}
+
+/**
+ * Phase 62: per-chat Lark binding section. Three states:
+ *   - bound:   show a chip "Lark · oc_...#om_... (label)" with an Unbind button
+ *   - unbound: show "Lark: not bound" + a "Mirror to Lark" button
+ *   - multiple: rare but possible — render each chip
+ *
+ * Hidden when no Lark bindings exist AND helm doesn't have Lark wired,
+ * because there's nothing actionable. We detect that lazily — when the
+ * Initiate endpoint 501s, the modal surfaces the friendly error.
+ */
+function ChatLarkSection({
+  chat,
+  bindings,
+  onMirror,
+}: {
+  chat: ActiveChat;
+  bindings: ChannelBinding[];
+  onMirror: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="muted" style={{ marginBottom: 6, fontSize: 12 }}>Lark</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        {bindings.length === 0 && (
+          <span className="muted" style={{ fontSize: 12 }}>not bound</span>
+        )}
+        {bindings.map((b) => {
+          const labelChip = b.label ? `${b.label} · ` : '';
+          const threadFrag = b.externalThread ? `…/${b.externalThread.slice(-6)}` : '';
+          return (
+            <span
+              key={b.id}
+              title={`bindingId: ${b.id}\nexternalChat: ${b.externalChat ?? '(none)'}\nexternalThread: ${b.externalThread ?? '(none)'}`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '2px 8px', borderRadius: 12,
+                background: 'rgba(52,199,89,0.12)',
+                color: 'var(--text)',
+                fontSize: 12, fontWeight: 500,
+              }}
+            >
+              ✓ {labelChip}{b.externalChat?.slice(0, 12) ?? ''}{threadFrag}
+            </span>
+          );
+        })}
+        <button
+          type="button"
+          onClick={onMirror}
+          style={{ fontSize: 12 }}
+          aria-label={`Mirror chat ${chat.id} to a Lark thread`}
+        >
+          + Mirror to Lark
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 62: modal that mints a pending bind code + waits for Lark-side
+ * consumption. Flow:
+ *   1. open → call /api/bindings/initiate → display code + instruction
+ *   2. user copies the line, pastes into a Lark thread
+ *   3. lark-wiring listener consumes → emits binding.created
+ *   4. SSE listener here matches by hostSessionId → calls onBound (modal closes)
+ *
+ * Implementation note: we DON'T close on every binding.created — only when
+ * the new binding's hostSessionId matches ours. Otherwise opening this
+ * modal during a sibling's bind would hide it prematurely.
+ */
+function MirrorToLarkModal({
+  hostSessionId,
+  chatLabel,
+  onClose,
+  onBound,
+}: {
+  hostSessionId: string;
+  chatLabel: string;
+  onClose: () => void;
+  onBound: () => void;
+}) {
+  const [code, setCode] = useState<string | null>(null);
+  const [instruction, setInstruction] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [labelDraft, setLabelDraft] = useState('');
+  const [step, setStep] = useState<'compose' | 'waiting'>('compose');
+
+  async function initiate(): Promise<void> {
+    setErr(null);
+    try {
+      const r = await helmApi.initiateLarkBind(labelDraft.trim() || undefined);
+      setCode(r.code);
+      setInstruction(r.instruction);
+      setExpiresAt(r.expiresAt);
+      setStep('waiting');
+    } catch (e) {
+      const msg = e instanceof ApiError
+        ? (e.status === 501
+          ? 'Lark is not configured in this Helm. Open Settings → Lark to enable it.'
+          : `${e.status}: ${e.message}`)
+        : (e as Error).message;
+      setErr(msg);
+    }
+  }
+
+  // Listen for the consumed bind. The renderer's general SSE feed
+  // already fires binding.created across the app; we filter here.
+  useEventStream((e) => {
+    if (e.type !== 'binding.created') return;
+    if (e.binding.channel !== 'lark') return;
+    if (e.binding.hostSessionId !== hostSessionId) return;
+    onBound();
+  }, { types: ['binding.created'] });
+
+  // Cancel the unused code on dismiss so it doesn't sit until TTL.
+  function cancel(): void {
+    if (code) {
+      void helmApi.cancelPendingBind(code).catch(() => {/* best-effort */});
+    }
+    onClose();
+  }
+
+  function copyToClipboard(value: string): void {
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  const expiryHint = expiresAt
+    ? `Expires ${new Date(expiresAt).toLocaleTimeString()}.`
+    : '';
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Mirror chat to Lark"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
+      }}
+      onClick={cancel}
+    >
+      <div
+        className="helm-card"
+        style={{ width: 'min(560px, 90vw)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="row" style={{ marginBottom: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Mirror to Lark</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Pair Cursor chat <strong>{chatLabel}</strong> with a Lark thread
+            </div>
+          </div>
+          <button onClick={cancel} aria-label="Close">✕</button>
+        </div>
+
+        {step === 'compose' && (
+          <>
+            <p className="muted" style={{ fontSize: 12 }}>
+              Helm will mint a one-time code. Paste it into the Lark thread you want to
+              mirror as <code>@bot bind &lt;code&gt;</code>. Once Lark side consumes it,
+              the binding lands here automatically.
+            </p>
+            <label style={{ display: 'block', marginTop: 12 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                Optional label (shows in Bindings + on the bind-ack message)
+              </div>
+              <input
+                type="text"
+                value={labelDraft}
+                onChange={(e) => setLabelDraft(e.target.value.slice(0, 60))}
+                placeholder="tce-deploy-thread"
+                style={{
+                  width: '100%', padding: '6px 10px', fontSize: 13,
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                }}
+              />
+            </label>
+            {err && (
+              <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }}>{err}</p>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button className="primary" onClick={() => void initiate()}>
+                Generate code
+              </button>
+              <button onClick={cancel}>Cancel</button>
+            </div>
+          </>
+        )}
+
+        {step === 'waiting' && code && instruction && (
+          <>
+            <p style={{ fontSize: 13, marginTop: 0 }}>
+              Paste this in the target Lark thread:
+            </p>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 8 }}>
+              <code
+                style={{
+                  flex: 1, padding: '8px 12px',
+                  background: 'var(--bg-pre)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 13, whiteSpace: 'pre',
+                }}
+              >
+                @bot bind {code}
+              </code>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(`@bot bind ${code}`)}
+                style={{ minWidth: 80 }}
+              >
+                {copied ? '✓ Copied' : 'Copy'}
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{instruction}</p>
+            {expiryHint && (
+              <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>{expiryHint}</p>
+            )}
+
+            <div
+              style={{
+                marginTop: 16, padding: 10,
+                background: 'rgba(0,122,255,0.08)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 12, lineHeight: 1.5,
+              }}
+            >
+              ⏳ Waiting for Lark to consume the code… The modal will close
+              automatically once the bind lands. You can leave this open.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={cancel}>Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

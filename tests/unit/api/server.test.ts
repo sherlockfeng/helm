@@ -650,6 +650,103 @@ describe('/api/bindings', () => {
     expect(r.status).toBe(400);
   });
 
+  // ── Phase 62: POST /api/bindings/initiate ─────────────────────────────
+  describe('POST /api/bindings/initiate (Phase 62)', () => {
+    it('501 when initiateLarkBind is not wired (Lark not configured)', async () => {
+      const r = await fetchJson('/api/bindings/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(r.status).toBe(501);
+      expect((r.body as { message: string }).message).toMatch(/Lark not configured/i);
+    });
+
+    it('happy: returns code + instruction + expiresAt; forwards label', async () => {
+      let receivedLabel: string | undefined;
+      await api.stop();
+      api = createHttpApi({
+        db, registry,
+        initiateLarkBind: (opts) => {
+          receivedLabel = opts.label;
+          return {
+            code: 'XYZ987',
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            instruction: 'Send "@bot bind XYZ987" in Lark…',
+          };
+        },
+      });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      const r = await fetchJson('/api/bindings/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: 'tce-thread' }),
+      });
+      expect(r.status).toBe(200);
+      const body = r.body as { code: string; expiresAt: string; instruction: string };
+      expect(body.code).toBe('XYZ987');
+      expect(body.instruction).toContain('XYZ987');
+      expect(receivedLabel).toBe('tce-thread');
+    });
+
+    it('label is trimmed + capped at 60 chars; whitespace-only is dropped', async () => {
+      let receivedLabel: string | undefined;
+      await api.stop();
+      api = createHttpApi({
+        db, registry,
+        initiateLarkBind: (opts) => {
+          receivedLabel = opts.label;
+          return {
+            code: 'ABC', expiresAt: new Date().toISOString(),
+            instruction: '',
+          };
+        },
+      });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      // whitespace-only → undefined
+      await fetchJson('/api/bindings/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: '   ' }),
+      });
+      expect(receivedLabel).toBeUndefined();
+
+      // overlong → truncated at 60
+      const longLabel = 'x'.repeat(120);
+      await fetchJson('/api/bindings/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: longLabel }),
+      });
+      expect(receivedLabel?.length).toBe(60);
+    });
+
+    it('attack: GET → 405', async () => {
+      const r = await fetchJson('/api/bindings/initiate');
+      expect(r.status).toBe(405);
+    });
+
+    it('empty body is OK (label is optional)', async () => {
+      await api.stop();
+      api = createHttpApi({
+        db, registry,
+        initiateLarkBind: () => ({
+          code: 'ABC', expiresAt: new Date().toISOString(), instruction: '',
+        }),
+      });
+      await api.start();
+      baseUrl = `http://127.0.0.1:${api.port()}`;
+
+      // No body at all
+      const r = await fetchJson('/api/bindings/initiate', { method: 'POST' });
+      expect(r.status).toBe(200);
+    });
+  });
+
   it('DELETE /api/bindings/:id removes the row', async () => {
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`)

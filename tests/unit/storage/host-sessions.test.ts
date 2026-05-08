@@ -7,6 +7,7 @@ import {
   listActiveSessions,
   listHostSessionRoles,
   removeHostSessionRole,
+  setHostSessionDisplayName,
   setHostSessionFirstPrompt,
   setHostSessionRole,
   setHostSessionRoles,
@@ -298,6 +299,54 @@ describe('host sessions', () => {
     it('attack: adding an unknown role id throws (FK enforcement)', () => {
       upsertHostSession(db, makeSession());
       expect(() => addHostSessionRole(db, 's1', 'ghost')).toThrow();
+    });
+  });
+
+  describe('Phase 55 displayName', () => {
+    it('setHostSessionDisplayName persists + getHostSession reads it back', () => {
+      upsertHostSession(db, makeSession());
+      setHostSessionDisplayName(db, 's1', 'Auth refactor — reviewer chat');
+      const got = getHostSession(db, 's1');
+      expect(got?.displayName).toBe('Auth refactor — reviewer chat');
+    });
+
+    it('passing null clears the override (back to firstPrompt fallback)', () => {
+      upsertHostSession(db, makeSession());
+      setHostSessionDisplayName(db, 's1', 'something');
+      expect(getHostSession(db, 's1')?.displayName).toBe('something');
+      setHostSessionDisplayName(db, 's1', null);
+      expect(getHostSession(db, 's1')?.displayName).toBeUndefined();
+    });
+
+    it('whitespace-only label clears (treats it as "no override")', () => {
+      upsertHostSession(db, makeSession());
+      setHostSessionDisplayName(db, 's1', 'kept');
+      setHostSessionDisplayName(db, 's1', '   ');
+      expect(getHostSession(db, 's1')?.displayName).toBeUndefined();
+    });
+
+    it('multi-line input collapses to single line; long input truncates at 120', () => {
+      upsertHostSession(db, makeSession());
+      const long = 'x'.repeat(200);
+      const persisted = setHostSessionDisplayName(db, 's1', long);
+      expect(persisted?.length).toBe(120);
+
+      setHostSessionDisplayName(db, 's1', 'line1\nline2\nline3');
+      expect(getHostSession(db, 's1')?.displayName).toBe('line1 line2 line3');
+    });
+
+    it('upsert on session_start preserves displayName (not in the ON CONFLICT update list)', () => {
+      upsertHostSession(db, makeSession({ cwd: '/proj' }));
+      setHostSessionDisplayName(db, 's1', 'pinned');
+      // Simulate the next session_start hook firing.
+      const later = new Date(Date.now() + 1000).toISOString();
+      upsertHostSession(db, makeSession({ cwd: '/proj', lastSeenAt: later }));
+      expect(getHostSession(db, 's1')?.displayName).toBe('pinned');
+    });
+
+    it('attack: setting on a non-existent session is a no-op (UPDATE matches zero rows)', () => {
+      expect(() => setHostSessionDisplayName(db, 'ghost', 'x')).not.toThrow();
+      expect(getHostSession(db, 'ghost')).toBeUndefined();
     });
   });
 });

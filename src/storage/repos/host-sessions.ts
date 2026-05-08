@@ -12,6 +12,7 @@ function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string
     roleId: row['role_id'] != null ? String(row['role_id']) : undefined,
     roleIds,
     firstPrompt: row['first_prompt'] != null ? String(row['first_prompt']) : undefined,
+    displayName: row['display_name'] != null ? String(row['display_name']) : undefined,
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
@@ -193,6 +194,29 @@ export function setHostSessionFirstPrompt(
   db.prepare(
     `UPDATE host_sessions SET first_prompt = ? WHERE id = ? AND first_prompt IS NULL`,
   ).run(prompt, id);
+}
+
+/**
+ * Phase 55: set / clear the user-facing chat label. Pass null/empty to
+ * clear back to the firstPrompt-based fallback. Trims surrounding
+ * whitespace; rejects multi-line input (the label is meant to be a single
+ * inline string).
+ *
+ * Returns the persisted value (or undefined when cleared) so the API
+ * handler can echo it back without a second SELECT.
+ */
+export function setHostSessionDisplayName(
+  db: Database.Database,
+  id: string,
+  raw: string | null,
+): string | undefined {
+  const trimmed = raw == null ? '' : raw.replace(/[\r\n]+/g, ' ').trim();
+  // Soft cap: long labels make the sidebar break. Hard limit at 120 chars
+  // — well past any reasonable label, short enough to keep the row layout
+  // tidy. Truncate rather than reject so paste-from-anywhere works.
+  const value = trimmed.length === 0 ? null : trimmed.slice(0, 120);
+  db.prepare(`UPDATE host_sessions SET display_name = ? WHERE id = ?`).run(value, id);
+  return value ?? undefined;
 }
 
 /**

@@ -22,6 +22,8 @@ export interface ActiveChat {
   roleIds: string[];
   /** Phase 32: opening user prompt — used as the chat's human-readable label. */
   firstPrompt?: string;
+  /** Phase 55: user-set chat label. Wins over firstPrompt when present. */
+  displayName?: string;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

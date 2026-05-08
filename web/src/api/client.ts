@@ -93,6 +93,15 @@ export const helmApi = {
     );
   },
 
+  // Phase 55: rename / clear the user-facing chat label. Pass null or empty
+  // string to clear back to the firstPrompt-based fallback.
+  setChatLabel: (hostSessionId: string, label: string | null) =>
+    request<{ chat: ActiveChat }>(
+      'PUT',
+      `/api/active-chats/${encodeURIComponent(hostSessionId)}/label`,
+      { label },
+    ),
+
   approvals: () => request<{ approvals: PendingApproval[] }>('GET', '/api/approvals'),
 
   decideApproval: (

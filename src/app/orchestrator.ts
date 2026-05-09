@@ -720,6 +720,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       ...(larkChannel
         ? {
           initiateLarkBind: (opts) =>
+            // Phase 64: opts now includes hostSessionId; createPendingLarkBind
+            // stores it on the pending row so the Lark-side consume handler
+            // can stitch the binding without a renderer round-trip.
             createPendingLarkBind(deps.db, opts ?? {}),
         }
         : {}),

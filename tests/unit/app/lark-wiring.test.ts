@@ -189,6 +189,124 @@ describe('attachLarkChannel — bind handshake', () => {
   });
 });
 
+describe('attachLarkChannel — Phase 64 consume (`@bot bind <CODE>`)', () => {
+  it('happy: consumes a helm-minted code → channel_bindings row + binding.created event', async () => {
+    attach();
+
+    // Seed a pending row pre-bound to a chat (this is what
+    // createPendingLarkBind would have written when the user clicked
+    // "Mirror to Lark" in helm UI).
+    db.prepare(`
+      INSERT INTO pending_binds (code, channel, host_session_id, label, expires_at)
+      VALUES ('ABC123', 'lark', 's1', 'tce-thread', ?)
+    `).run(new Date(Date.now() + 60_000).toISOString());
+
+    // The user pastes the snippet in a fresh Lark thread (om_target_thread).
+    listener.emit({
+      kind: 'message',
+      messageId: 'om_consume_msg',
+      chatId: 'oc_target_chat',
+      threadId: 'om_target_thread',
+      text: '@bot bind ABC123',
+      mentioned: true,
+      receivedAt: new Date().toISOString(),
+      raw: {},
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    // pending_binds row gone (consumed).
+    expect(getPendingBind(db, 'ABC123')).toBeUndefined();
+
+    // channel_bindings row exists with the thread coordinates from the
+    // inbound message + the hostSessionId from the pending row + label.
+    const created = emitted.find((e) => e.type === 'binding.created');
+    expect(created).toBeDefined();
+    const bindingId = (created as Extract<AppEvent, { type: 'binding.created' }>).binding.id;
+    const binding = getChannelBinding(db, bindingId);
+    expect(binding).toMatchObject({
+      channel: 'lark',
+      hostSessionId: 's1',
+      externalChat: 'oc_target_chat',
+      externalThread: 'om_target_thread',
+      label: 'tce-thread',
+    });
+  });
+
+  it('attack: unknown code (valid hex but not in DB) → friendly reply, no binding created', async () => {
+    attach();
+    listener.emit({
+      kind: 'message',
+      messageId: 'om_consume_msg',
+      chatId: 'oc_x', threadId: 'om_x',
+      // Valid 6-hex shape but no row in pending_binds → "unknown or expired"
+      text: '@bot bind DEADBE',
+      mentioned: true,
+      receivedAt: new Date().toISOString(), raw: {},
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    const created = emitted.filter((e) => e.type === 'binding.created');
+    expect(created).toHaveLength(0);
+
+    const reply = cli.runs.find((r) => {
+      const md = r.args[r.args.indexOf('--markdown') + 1];
+      return typeof md === 'string' && md.includes('DEADBE');
+    });
+    expect(reply).toBeDefined();
+    const md = reply!.args[reply!.args.indexOf('--markdown') + 1] ?? '';
+    expect(md).toMatch(/unknown or expired/i);
+  });
+
+  it('attack: invalid-shape code (non-hex chars) → parser drops it; no reply, no binding', async () => {
+    attach();
+    listener.emit({
+      kind: 'message',
+      messageId: 'om_consume_msg',
+      chatId: 'oc_x', threadId: 'om_x',
+      text: '@bot bind ZZZZZZ',  // Z is not [0-9A-F] → parser returns unknown
+      mentioned: true,
+      receivedAt: new Date().toISOString(), raw: {},
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    // No reply at all — parser short-circuited before handleInbound saw a
+    // consume intent. Documenting the actual behavior: arbitrary chatter
+    // with the word "bind" doesn't trigger ANY response.
+    expect(cli.runs).toHaveLength(0);
+    expect(emitted.filter((e) => e.type === 'binding.created')).toHaveLength(0);
+  });
+
+  it('legacy: code without hostSessionId (Lark-first flow) → instructive reply, no auto-consume', async () => {
+    attach();
+
+    // Seed a pending without hostSessionId — mirrors the `@bot bind chat`
+    // path where the user is supposed to consume via the renderer.
+    db.prepare(`
+      INSERT INTO pending_binds (code, channel, expires_at)
+      VALUES ('FACE01', 'lark', ?)
+    `).run(new Date(Date.now() + 60_000).toISOString());
+
+    listener.emit({
+      kind: 'message',
+      messageId: 'om_legacy', chatId: 'oc_x', threadId: 'om_x',
+      text: '@bot bind FACE01', mentioned: true,
+      receivedAt: new Date().toISOString(), raw: {},
+    });
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Pending row stays — it's still consumable via the renderer flow.
+    expect(getPendingBind(db, 'FACE01')).toBeDefined();
+
+    const reply = cli.runs.find((r) => {
+      const md = r.args[r.args.indexOf('--markdown') + 1];
+      return typeof md === 'string' && md.includes('FACE01');
+    });
+    expect(reply).toBeDefined();
+    const md = reply!.args[reply!.args.indexOf('--markdown') + 1] ?? '';
+    expect(md).toMatch(/needs to be consumed in the Helm desktop app/i);
+  });
+});
+
 describe('attachLarkChannel — unbind / disable_wait', () => {
   it('@bot unbind drops bindings for this thread + emits binding.removed', async () => {
     attach();

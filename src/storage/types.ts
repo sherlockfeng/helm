@@ -186,6 +186,11 @@ export interface PendingBind {
   /** Phase 36: user-supplied annotation from the bind command, carried
    * forward to channel_bindings.label on consume. */
   label?: string;
+  /** Phase 64: which Cursor chat owns this code. Set when the user clicks
+   * "Mirror to Lark" in helm UI; absent when the code originated from
+   * `@bot bind chat` in Lark (legacy flow — caller must supply chat at
+   * consume time). */
+  hostSessionId?: string;
   expiresAt: string;
 }
 

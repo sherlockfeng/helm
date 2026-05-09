@@ -213,6 +213,60 @@ async function handleInbound(
     return;
   }
 
+  // Phase 64: consume a code minted by helm's "Mirror to Lark" button.
+  // The pending row already has hostSessionId (set when the user clicked
+  // Mirror); this Lark-side handler fills in the thread coordinates and
+  // calls consumePendingBind so the channel_bindings row finally lands.
+  if (intent.kind === 'consume') {
+    const pending = db.prepare(
+      `SELECT * FROM pending_binds WHERE code = ? AND expires_at > ?`,
+    ).get(intent.code, new Date().toISOString()) as Record<string, unknown> | undefined;
+
+    if (!pending) {
+      void replyToLark(channel, meta.larkChatId, meta.larkMessageId,
+        `Code \`${intent.code}\` is unknown or expired. Click "Mirror to Lark" in the Helm desktop app to mint a fresh one.`);
+      return;
+    }
+
+    const hostSessionId = pending['host_session_id'] != null
+      ? String(pending['host_session_id'])
+      : undefined;
+    if (!hostSessionId) {
+      // Legacy `bind chat` flow → the code was minted from Lark side and
+      // the user is supposed to consume via the renderer's pending list.
+      // Surface a hint instead of silently failing.
+      void replyToLark(channel, meta.larkChatId, meta.larkMessageId,
+        `Code \`${intent.code}\` was generated from Lark side and needs to be consumed in the Helm desktop app's Pending Binds list (it doesn't know which Cursor chat to attach yet).`);
+      return;
+    }
+
+    // Stitch the thread coordinates from this inbound message onto the
+    // pending row so consumePendingBind reads them when it inserts the
+    // channel_bindings row.
+    db.prepare(
+      `UPDATE pending_binds SET external_chat = ?, external_thread = ?, external_root = ? WHERE code = ?`,
+    ).run(
+      meta.larkChatId,
+      meta.larkThreadId ?? null,
+      meta.larkMessageId,
+      intent.code,
+    );
+
+    const created = consumePendingBind(db, events, intent.code, hostSessionId);
+    if (!created) {
+      void replyToLark(channel, meta.larkChatId, meta.larkMessageId,
+        `Failed to consume code \`${intent.code}\` (may have just expired). Try again from the Helm desktop app.`);
+      return;
+    }
+    log.info('lark_pending_bind_consumed', {
+      data: { code: intent.code, bindingId: created.id, hostSessionId },
+    });
+    // The Phase 61 ack listener (in orchestrator) is already subscribed to
+    // `binding.created` and will post the success notice + enqueue the
+    // Cursor confirmation request — no reply needed here.
+    return;
+  }
+
   if (intent.kind === 'unbind') {
     const bindings = db.prepare(
       `SELECT id FROM channel_bindings WHERE channel = 'lark' AND external_chat = ? AND (external_thread = ? OR (external_thread IS NULL AND ? IS NULL))`,
@@ -356,12 +410,13 @@ export function consumePendingBind(
  * `bindToRemoteChannel` (Phase 6) but keeps things in `lark-wiring` so
  * the same TTL + code-generator are the single source of truth.
  *
- * No `hostSessionId` here — by design. The user attaches the Cursor chat
- * later via `consumePendingBind` (or the lark-wiring inbound handler).
+ * Phase 64: `hostSessionId` is now stored on the pending row so the
+ * Lark-side `@bot bind <code>` consume handler knows which Cursor chat
+ * to attach without a renderer round-trip.
  */
 export function createPendingLarkBind(
   db: Database.Database,
-  opts: { label?: string } = {},
+  opts: { label?: string; hostSessionId?: string } = {},
 ): { code: string; expiresAt: string; instruction: string } {
   const code = newBindingCode();
   const expiresAt = new Date(Date.now() + PENDING_BIND_TTL_MS).toISOString();
@@ -369,6 +424,7 @@ export function createPendingLarkBind(
     code,
     channel: 'lark',
     ...(opts.label ? { label: opts.label } : {}),
+    ...(opts.hostSessionId ? { hostSessionId: opts.hostSessionId } : {}),
     expiresAt,
   });
   const instruction = `Send "@bot bind ${code}" in the Lark thread you want to mirror. Code expires in 10 minutes.`;

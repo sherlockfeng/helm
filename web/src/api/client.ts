@@ -185,9 +185,15 @@ export const helmApi = {
   // code without requiring the user to first send `@bot bind chat` in Lark.
   // Returns 501 when Lark isn't wired (renderer should hide the button or
   // surface "Configure Lark in Settings").
-  initiateLarkBind: (label?: string) =>
+  // Phase 64: pass hostSessionId so the Lark-side `@bot bind <code>`
+  // consume handler knows which Cursor chat to attach without the user
+  // needing to revisit the helm Pending Binds list.
+  initiateLarkBind: (opts: { label?: string; hostSessionId?: string } = {}) =>
     request<{ code: string; expiresAt: string; instruction: string }>(
-      'POST', '/api/bindings/initiate', label ? { label } : {},
+      'POST', '/api/bindings/initiate', {
+        ...(opts.label ? { label: opts.label } : {}),
+        ...(opts.hostSessionId ? { hostSessionId: opts.hostSessionId } : {}),
+      },
     ),
   // Phase 63: register helm's MCP server with Claude Code or Cursor
   // directly from the Roles page button (no `helm` CLI on PATH needed).

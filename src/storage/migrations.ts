@@ -265,6 +265,13 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE host_sessions ADD COLUMN last_injected_role_ids TEXT;
     `,
   },
+  {
+    version: 9,
+    description: 'pending_binds.host_session_id — Phase 64: helm-first bind flow records which chat owns the pending code so the Lark-side `@bot bind <code>` consume handler can stitch the binding without a renderer round-trip',
+    up: `
+      ALTER TABLE pending_binds ADD COLUMN host_session_id TEXT REFERENCES host_sessions(id) ON DELETE CASCADE;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

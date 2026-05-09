@@ -135,18 +135,20 @@ function rowToPendingBind(row: Record<string, unknown>): PendingBind {
     externalThread: row['external_thread'] != null ? String(row['external_thread']) : undefined,
     externalRoot: row['external_root'] != null ? String(row['external_root']) : undefined,
     label: row['label'] != null ? String(row['label']) : undefined,
+    hostSessionId: row['host_session_id'] != null ? String(row['host_session_id']) : undefined,
     expiresAt: String(row['expires_at']),
   };
 }
 
 export function insertPendingBind(db: Database.Database, p: PendingBind): void {
   db.prepare(`
-    INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, label, expires_at)
-    VALUES (@code, @channel, @external_chat, @external_thread, @external_root, @label, @expires_at)
+    INSERT INTO pending_binds (code, channel, external_chat, external_thread, external_root, label, host_session_id, expires_at)
+    VALUES (@code, @channel, @external_chat, @external_thread, @external_root, @label, @host_session_id, @expires_at)
   `).run({
     code: p.code, channel: p.channel, external_chat: p.externalChat ?? null,
     external_thread: p.externalThread ?? null, external_root: p.externalRoot ?? null,
     label: p.label ?? null,
+    host_session_id: p.hostSessionId ?? null,
     expires_at: p.expiresAt,
   });
 }

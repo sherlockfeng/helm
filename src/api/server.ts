@@ -114,7 +114,7 @@ export interface HttpApiDeps {
    * `createPendingLarkBind`. Returns the same shape the user-facing
    * modal needs: a copyable code + instruction string.
    */
-  initiateLarkBind?: (opts: { label?: string }) => {
+  initiateLarkBind?: (opts: { label?: string; hostSessionId?: string }) => {
     code: string;
     expiresAt: string;
     instruction: string;
@@ -622,9 +622,15 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         const label = typeof obj['label'] === 'string' && obj['label'].trim()
           ? obj['label'].trim().slice(0, 60)
           : undefined;
-        const result = deps.initiateLarkBind(label ? { label } : {});
+        const hostSessionId = typeof obj['hostSessionId'] === 'string' && obj['hostSessionId'].trim()
+          ? obj['hostSessionId'].trim()
+          : undefined;
+        const result = deps.initiateLarkBind({
+          ...(label ? { label } : {}),
+          ...(hostSessionId ? { hostSessionId } : {}),
+        });
         deps.logger?.info('lark_bind_initiated', {
-          data: { code: result.code, label, expiresAt: result.expiresAt },
+          data: { code: result.code, label, hostSessionId, expiresAt: result.expiresAt },
         });
         return send(res, 200, result);
       }

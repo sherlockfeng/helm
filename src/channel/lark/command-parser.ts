@@ -23,6 +23,10 @@
 export type CommandIntent =
   | { kind: 'approval'; decision: 'allow' | 'deny'; remember: boolean; targetId?: string; scope?: string }
   | { kind: 'bind'; label?: string }
+  /** Phase 64: `@bot bind <CODE>` — consume a code minted by helm's
+   *  "Mirror to Lark" button. Distinct from `bind chat` which generates
+   *  a code; this one consumes one. */
+  | { kind: 'consume'; code: string }
   | { kind: 'unbind' }
   | { kind: 'disable_wait' }
   | { kind: 'help' }
@@ -37,6 +41,11 @@ export interface ParseInput {
 
 const APPROVAL_RE = /(?:^|\s)\/(?:cursor[:\s]+)?(allow|deny)(!)?(?:\s+(.+?))?\s*$/i;
 const BIND_CHAT_RE = /\b(bind\s+chat)\b|绑定对话/i;
+// Phase 64: `bind <CODE>` consume command. The code is exactly 6 hex chars
+// (uppercase) — matches `randomBytes(3).toString('hex').toUpperCase()` from
+// `lark-wiring.newBindingCode()`. Word boundary on each side so casual
+// chatter like "rebinding ABC123 stuff" doesn't accidentally match.
+const BIND_CODE_RE = /\bbind\s+([0-9A-F]{6})\b/i;
 const UNBIND_RE = /\b(?:un\s*bind|unbind)(?:\s+(?:chat|thread))?\b|解除绑定|解绑/i;
 const DISABLE_WAIT_RE = /\b(stop|disable|pause)\s+wait(?:ing)?\b|(?:停止|关闭)\s*等待/i;
 const HELP_RE = /(?:^|\s)(?:\/help|help|帮助)\s*$/i;
@@ -123,10 +132,17 @@ export function parseCommand(input: ParseInput): CommandIntent {
   }
 
   // Lifecycle commands gate on @bot mention so a casual message containing
-  // "bind" doesn't clobber the binding. Order matters: `un bind chat` must
-  // match `unbind`, not `bind chat`, so check unbind first.
+  // "bind" doesn't clobber the binding. Order matters:
+  //   - `un bind chat` must match `unbind`, not `bind chat`     → unbind first
+  //   - Phase 64: `bind <CODE>` (6 hex) must match `consume`,
+  //     not generic `bind chat`                                  → consume next
+  //   - `bind chat` is the catch-all generator                   → last
   const mentioned = Boolean(input.mentioned);
   if (mentioned && UNBIND_RE.test(trimmed)) return { kind: 'unbind' };
+  const bindCodeMatch = mentioned && BIND_CODE_RE.exec(trimmed);
+  if (bindCodeMatch) {
+    return { kind: 'consume', code: bindCodeMatch[1]!.toUpperCase() };
+  }
   if (mentioned && BIND_CHAT_RE.test(trimmed)) {
     const label = extractBindLabel(trimmed);
     return label ? { kind: 'bind', label } : { kind: 'bind' };

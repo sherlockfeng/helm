@@ -139,6 +139,55 @@ describe('parseCommand — lifecycle (require @bot mention)', () => {
   });
 });
 
+describe('parseCommand — Phase 64 consume (`bind <CODE>`)', () => {
+  it('"@bot bind ABC123" → consume with uppercased code', () => {
+    expect(parseCommand({ text: '@bot bind ABC123', mentioned: true }))
+      .toEqual({ kind: 'consume', code: 'ABC123' });
+  });
+
+  it('lowercase code is normalized to uppercase (server stores upper)', () => {
+    expect(parseCommand({ text: '@bot bind abc123', mentioned: true }))
+      .toEqual({ kind: 'consume', code: 'ABC123' });
+  });
+
+  it('extra text around the keyword still matches (real user messages have noise)', () => {
+    // Mirrors the real screenshot: "@chat with cursor disastery recover bind E410CA"
+    expect(parseCommand({
+      text: '@chat with cursor disastery recover bind E410CA',
+      mentioned: true,
+    })).toEqual({ kind: 'consume', code: 'E410CA' });
+  });
+
+  it('without @bot mention → unknown (lifecycle commands gate on mention)', () => {
+    expect(parseCommand({ text: 'bind ABC123', mentioned: false }))
+      .toEqual({ kind: 'unknown' });
+  });
+
+  it('attack: 5-char hex is too short → not a consume', () => {
+    expect(parseCommand({ text: '@bot bind ABCDE', mentioned: true }))
+      .toEqual({ kind: 'unknown' });
+  });
+
+  it('attack: non-hex letters in code → not a consume (rejects "@bot bind GHIJKL")', () => {
+    expect(parseCommand({ text: '@bot bind GHIJKL', mentioned: true }))
+      .toEqual({ kind: 'unknown' });
+  });
+
+  it('"unbind" is NOT mistaken for "bind <code>" (un* prefix matches first)', () => {
+    expect(parseCommand({ text: '@bot unbind', mentioned: true }))
+      .toEqual({ kind: 'unbind' });
+    expect(parseCommand({ text: '@bot unbind ABC123', mentioned: true }))
+      .toEqual({ kind: 'unbind' });
+  });
+
+  it('"bind chat" still works after the consume parser was added', () => {
+    expect(parseCommand({ text: '@bot bind chat', mentioned: true }))
+      .toEqual({ kind: 'bind' });
+    expect(parseCommand({ text: '@bot bind chat tce-thread', mentioned: true }))
+      .toMatchObject({ kind: 'bind', label: 'tce-thread' });
+  });
+});
+
 describe('parseCommand — help', () => {
   it('"/help" works without mention', () => {
     expect(parseCommand({ text: '/help' })).toEqual({ kind: 'help' });

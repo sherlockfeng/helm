@@ -487,7 +487,12 @@ function MirrorToLarkModal({
   async function initiate(): Promise<void> {
     setErr(null);
     try {
-      const r = await helmApi.initiateLarkBind(labelDraft.trim() || undefined);
+      const r = await helmApi.initiateLarkBind({
+        ...(labelDraft.trim() ? { label: labelDraft.trim() } : {}),
+        // Phase 64: pin the code to this chat so Lark's consume handler
+        // stitches the binding directly — no renderer round-trip needed.
+        hostSessionId,
+      });
       setCode(r.code);
       setInstruction(r.instruction);
       setExpiresAt(r.expiresAt);

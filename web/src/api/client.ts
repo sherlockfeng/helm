@@ -252,6 +252,103 @@ export const helmApi = {
     request<{ bundleDir: string; manifest: { generatedAt: string; warnings: string[] } }>(
       'POST', '/api/diagnostics',
     ),
+
+  // ── Harness toolchain (Phase 67) ──
+  harnessTasks: (projectPath?: string) =>
+    request<{ tasks: HarnessTaskView[] }>(
+      'GET',
+      projectPath ? `/api/harness/tasks?projectPath=${encodeURIComponent(projectPath)}` : '/api/harness/tasks',
+    ),
+  harnessCreateTask: (input: {
+    taskId: string; title: string; projectPath: string;
+    hostSessionId?: string;
+    intent?: { background?: string; objective?: string; scopeIn?: string[]; scopeOut?: string[] };
+  }) =>
+    request<{ task: HarnessTaskView; relatedFound: { taskId: string; oneLiner: string; archivePath: string }[] }>(
+      'POST', '/api/harness/tasks', input,
+    ),
+  harnessGetTask: (taskId: string) =>
+    request<HarnessTaskView>('GET', `/api/harness/tasks/${encodeURIComponent(taskId)}`),
+  harnessAdvance: (taskId: string, body: { toStage: 'implement' | 'archived'; implementBaseCommit?: string; message?: string }) =>
+    request<HarnessTaskView>('POST', `/api/harness/tasks/${encodeURIComponent(taskId)}/advance`, body),
+  harnessRunReview: (taskId: string) =>
+    request<HarnessReviewView>('POST', `/api/harness/tasks/${encodeURIComponent(taskId)}/review`),
+  harnessListReviews: (taskId: string) =>
+    request<{ reviews: HarnessReviewView[] }>(
+      'GET', `/api/harness/tasks/${encodeURIComponent(taskId)}/review`,
+    ),
+  harnessGetReview: (reviewId: string) =>
+    request<HarnessReviewView>('GET', `/api/harness/reviews/${encodeURIComponent(reviewId)}`),
+  harnessPushReview: (taskId: string, reviewId: string) =>
+    request<{ bindingId: string; messageId: number; delivered: boolean }>(
+      'POST',
+      `/api/harness/tasks/${encodeURIComponent(taskId)}/push-review/${encodeURIComponent(reviewId)}`,
+    ),
+  harnessArchive: (taskId: string, body: {
+    oneLiner: string;
+    entities?: string[]; filesTouched?: string[]; modules?: string[];
+    patterns?: string[]; downstream?: string[]; rulesApplied?: string[];
+  }) =>
+    request<{ task: HarnessTaskView; card: HarnessArchiveCardView }>(
+      'POST', `/api/harness/tasks/${encodeURIComponent(taskId)}/archive`, body,
+    ),
+  harnessReindex: (taskId: string, projectPath: string) =>
+    request<HarnessTaskView>(
+      'POST', `/api/harness/tasks/${encodeURIComponent(taskId)}/reindex`, { projectPath },
+    ),
+  harnessArchiveCards: (opts: { projectPath?: string; tokens?: string[] } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.projectPath) params.set('projectPath', opts.projectPath);
+    for (const t of opts.tokens ?? []) params.append('q', t);
+    const qs = params.toString();
+    return request<{ cards: HarnessArchiveCardView[] }>(
+      'GET',
+      qs ? `/api/harness/archive?${qs}` : '/api/harness/archive',
+    );
+  },
 };
+
+export interface HarnessTaskView {
+  id: string;
+  title: string;
+  currentStage: 'new_feature' | 'implement' | 'archived';
+  projectPath: string;
+  hostSessionId?: string;
+  intent?: { background: string; objective: string; scopeIn: string[]; scopeOut: string[] };
+  structure?: { entities: string[]; relations: string[]; plannedFiles: string[] };
+  decisions: string[];
+  risks: string[];
+  relatedTasks: { taskId: string; oneLiner: string; archivePath: string }[];
+  stageLog: { at: string; stage: string; message: string }[];
+  implementBaseCommit?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HarnessReviewView {
+  id: string;
+  taskId: string;
+  status: 'pending' | 'completed' | 'failed';
+  reportText?: string;
+  baseCommit?: string;
+  headCommit?: string;
+  error?: string;
+  spawnedAt: string;
+  completedAt?: string;
+}
+
+export interface HarnessArchiveCardView {
+  taskId: string;
+  entities: string[];
+  filesTouched: string[];
+  modules: string[];
+  patterns: string[];
+  downstream: string[];
+  rulesApplied: string[];
+  oneLiner: string;
+  fullDocPointer: string;
+  projectPath: string;
+  archivedAt: string;
+}
 
 export type HelmApi = typeof helmApi;

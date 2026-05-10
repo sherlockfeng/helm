@@ -272,6 +272,59 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE pending_binds ADD COLUMN host_session_id TEXT REFERENCES host_sessions(id) ON DELETE CASCADE;
     `,
   },
+  {
+    version: 10,
+    description: 'Harness toolchain MVP — three tables backing the on-disk .harness/ workflow scaffold: harness_tasks (task.md mirror + DB-side state), harness_archive_cards (structured index over .harness/archive cards for exact-match retrieval), harness_reviews (one row per claude -p review subprocess invocation, holding the report text + base/head SHAs).',
+    up: `
+      CREATE TABLE IF NOT EXISTS harness_tasks (
+        id                    TEXT PRIMARY KEY,
+        title                 TEXT NOT NULL,
+        current_stage         TEXT NOT NULL DEFAULT 'new_feature',
+        project_path          TEXT NOT NULL,
+        host_session_id       TEXT REFERENCES host_sessions(id) ON DELETE SET NULL,
+        intent_json           TEXT,
+        structure_json        TEXT,
+        decisions_json        TEXT,
+        risks_json            TEXT,
+        related_tasks_json    TEXT,
+        stage_log_json        TEXT NOT NULL DEFAULT '[]',
+        implement_base_commit TEXT,
+        created_at            TEXT NOT NULL,
+        updated_at            TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_harness_tasks_project ON harness_tasks(project_path);
+      CREATE INDEX IF NOT EXISTS idx_harness_tasks_stage   ON harness_tasks(current_stage);
+
+      CREATE TABLE IF NOT EXISTS harness_archive_cards (
+        task_id            TEXT PRIMARY KEY REFERENCES harness_tasks(id) ON DELETE CASCADE,
+        entities_json      TEXT NOT NULL DEFAULT '[]',
+        files_touched_json TEXT NOT NULL DEFAULT '[]',
+        modules_json       TEXT NOT NULL DEFAULT '[]',
+        patterns_json      TEXT NOT NULL DEFAULT '[]',
+        downstream_json    TEXT NOT NULL DEFAULT '[]',
+        rules_applied_json TEXT NOT NULL DEFAULT '[]',
+        one_liner          TEXT NOT NULL DEFAULT '',
+        full_doc_pointer   TEXT NOT NULL,
+        project_path       TEXT NOT NULL,
+        archived_at        TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_harness_archive_project ON harness_archive_cards(project_path);
+      CREATE INDEX IF NOT EXISTS idx_harness_archive_at      ON harness_archive_cards(archived_at);
+
+      CREATE TABLE IF NOT EXISTS harness_reviews (
+        id            TEXT PRIMARY KEY,
+        task_id       TEXT NOT NULL REFERENCES harness_tasks(id) ON DELETE CASCADE,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        report_text   TEXT,
+        base_commit   TEXT,
+        head_commit   TEXT,
+        error         TEXT,
+        spawned_at    TEXT NOT NULL,
+        completed_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_harness_reviews_task ON harness_reviews(task_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

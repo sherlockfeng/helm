@@ -132,6 +132,9 @@ export interface HelmConfig {
   knowledge: { providers: KnowledgeProviderConfig[] };
   docFirst: { enforce: boolean };
   cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
+  // Phase 67: global Harness conventions, injected into every reviewer
+  // subprocess. Optional in the type so older saved configs still parse.
+  harness?: { conventions: string };
   // Phase 60b removed `anthropic` — role-trainer now shells out to claude CLI
   // and uses its own auth (`claude login`).
 }

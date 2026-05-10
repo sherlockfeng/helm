@@ -76,6 +76,13 @@ const CursorConfigSchema = z.object({
 // shells out to `claude` (Claude Code CLI) and uses claude's own auth
 // (`claude login`). Helm holds zero LLM API keys for that surface.
 
+// Phase 67: Harness toolchain config. Holds the global "Project Conventions"
+// text the reviewer subprocess injects on every review run. MVP only has
+// global conventions (no per-project override).
+const HarnessConfigSchema = z.object({
+  conventions: z.string().default(''),
+}).strict();
+
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   approval: ApprovalConfigSchema.default({}),
@@ -83,6 +90,7 @@ export const HelmConfigSchema = z.object({
   knowledge: KnowledgeConfigSchema.default({}),
   docFirst: DocFirstConfigSchema.default({}),
   cursor: CursorConfigSchema.default({}),
+  harness: HarnessConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

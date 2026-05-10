@@ -314,7 +314,11 @@ function updateGreeting(roleName: string, roleId: string): string {
     '',
     '我会用 helm 的 `update_role` MCP 工具 — 它**只 append、不覆盖**：原有的 chunks 不会被擦掉。也可以同时改 system prompt（如果你想纠正某些表述）。',
     '',
-    '告诉我你想加什么：新文档、规范、对话沉淀、命令清单都行。读 Lark 文档贴 URL 就行；读代码告诉我项目路径。我准备好后会先复述要 append 的内容请你确认，然后调工具保存。',
+    '**冲突检测**：调 `update_role` 时，helm 会先把新内容和已有 chunks 跑一遍语义比对。如果有重叠（cosine ≥ 0.85），工具会返回 `status: "conflicts"`，**不会写入**。我会把每个冲突念给你听，你逐条选：',
+    '- *"两条都留"*：我用 `force: true` 重新调一次 → 新旧并存；',
+    '- *"用新的替换旧的"*：我先调 `delete_role_chunk` 删旧 chunk，再用 `force: true` 调 `update_role`。',
+    '',
+    '没有冲突时直接写入。告诉我你想加什么：新文档、规范、对话沉淀、命令清单都行。读 Lark 文档贴 URL 就行；读代码告诉我项目路径。',
   ].join('\n');
 }
 

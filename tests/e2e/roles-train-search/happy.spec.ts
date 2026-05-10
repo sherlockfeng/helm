@@ -213,6 +213,11 @@ describe('roles-train-search happy', () => {
       expect(before.length).toBeGreaterThan(0);
 
       // Update: append a runbook. Old chunk count should grow, not reset.
+      // Phase 66: pass `force: true` so this test exercises pure append
+      // semantics — conflict detection is covered by conflict.spec.ts. The
+      // pseudo-embedder is a char-bin bag and can flag two unrelated short
+      // English texts as similar enough to surface a false-positive
+      // conflict; we don't want that noise here.
       const r = await mcpClient.callTool({
         name: 'update_role',
         arguments: {
@@ -221,10 +226,12 @@ describe('roles-train-search happy', () => {
             filename: 'rollback-runbook.md',
             content: 'Rollback procedure: 1. tce rollback <service>. 2. Verify health check...',
           }],
+          force: true,
         },
       });
       expect(r.isError).not.toBe(true);
-      const body = parseJsonContent(r) as { chunksAdded: number; totalChunks: number };
+      const body = parseJsonContent(r) as { status: string; chunksAdded: number; totalChunks: number };
+      expect(body.status).toBe('applied');
       expect(body.chunksAdded).toBeGreaterThan(0);
       expect(body.totalChunks).toBe(before.length + body.chunksAdded);
 

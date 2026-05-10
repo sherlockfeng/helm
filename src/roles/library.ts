@@ -91,6 +91,92 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
   return refreshed;
 }
 
+/**
+ * Phase 65: incremental update for an existing role. Differs from
+ * `trainRole` (Phase 7) which is a full replace:
+ *
+ *   - **`appendDocuments`** chunks new content and INSERTs alongside the
+ *     existing knowledge — old chunks are kept. Use this for "I learned
+ *     three new things about TCE today, append them" without wiping the
+ *     50 chunks already in the role.
+ *   - **`name` / `baseSystemPrompt`** UPDATE the corresponding role
+ *     fields. Either may be omitted to keep the existing value.
+ *   - At least one of {appendDocuments, baseSystemPrompt, name} must be
+ *     provided — empty input throws so the caller can't silently no-op.
+ *
+ * Returns the refreshed Role row + the count of chunks newly added (so
+ * the UI can say "added 7 chunks").
+ */
+export interface UpdateRoleInput {
+  roleId: string;
+  /** New display name. Omit to keep existing. */
+  name?: string;
+  /** New system prompt. Omit to keep existing. */
+  baseSystemPrompt?: string;
+  /** Documents to chunk + APPEND. Existing chunks stay. */
+  appendDocuments?: Array<{ filename: string; content: string }>;
+  embedFn: (text: string) => Promise<Float32Array>;
+}
+
+export interface UpdateRoleResult {
+  role: Role;
+  /** Number of new chunks inserted (sum across all appendDocuments). */
+  chunksAdded: number;
+}
+
+export async function updateRole(
+  db: Database.Database,
+  input: UpdateRoleInput,
+): Promise<UpdateRoleResult> {
+  const existing = getRoleRow(db, input.roleId);
+  if (!existing) {
+    throw new Error(`updateRole: role not found: ${input.roleId}. Use train_role to create new roles.`);
+  }
+
+  const docs = input.appendDocuments ?? [];
+  if (input.name === undefined && input.baseSystemPrompt === undefined && docs.length === 0) {
+    throw new Error('updateRole: nothing to update — pass at least one of name / baseSystemPrompt / appendDocuments');
+  }
+
+  const now = new Date().toISOString();
+
+  // Field-level update — only touch what the caller specified, so a name-
+  // only update doesn't accidentally null the system prompt.
+  if (input.name !== undefined || input.baseSystemPrompt !== undefined) {
+    upsertRole(db, {
+      id: existing.id,
+      name: input.name ?? existing.name,
+      systemPrompt: input.baseSystemPrompt ?? existing.systemPrompt,
+      isBuiltin: existing.isBuiltin,
+      createdAt: existing.createdAt,
+    });
+  }
+
+  // Append chunks — DO NOT call deleteChunksForRole. That's the entire
+  // point: existing knowledge survives.
+  let chunksAdded = 0;
+  for (const doc of docs) {
+    const chunks = chunkDocument(doc.content, doc.filename);
+    for (const chunk of chunks) {
+      const embedding = await input.embedFn(chunk.text);
+      const row: KnowledgeChunk = {
+        id: randomUUID(),
+        roleId: existing.id,
+        sourceFile: doc.filename,
+        chunkText: chunk.text,
+        embedding,
+        createdAt: now,
+      };
+      insertChunk(db, row);
+      chunksAdded += 1;
+    }
+  }
+
+  const refreshed = getRoleRow(db, existing.id);
+  if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);
+  return { role: refreshed, chunksAdded };
+}
+
 export interface KnowledgeSearchResult {
   chunkText: string;
   sourceFile?: string;

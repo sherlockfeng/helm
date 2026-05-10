@@ -33,6 +33,7 @@ import {
   searchKnowledge,
   seedBuiltinRoles,
   trainRole,
+  updateRole,
 } from '../roles/library.js';
 import {
   confirmCapture,
@@ -299,7 +300,11 @@ export function createMcpServer(
   }, async ({ roleId }) => jsonResult(getRole(deps.db, roleId)));
 
   server.registerTool('train_role', {
-    description: 'Create or retrain a custom agent role by indexing documents into a knowledge base.',
+    description:
+      'Create OR full-replace a custom agent role with the given documents. '
+      + 'WARNING: if the role already exists, ALL existing knowledge chunks are deleted '
+      + 'and replaced with these. For incremental updates (append knowledge / refine the '
+      + 'system prompt without wiping), use `update_role` instead.',
     inputSchema: {
       roleId: z.string(),
       name: z.string(),
@@ -312,6 +317,42 @@ export function createMcpServer(
       roleId: role.id, name: role.name,
       chunksIndexed: getChunksForRole(deps.db, role.id).length,
     });
+  });
+
+  server.registerTool('update_role', {
+    description:
+      'Incrementally update an existing helm role WITHOUT wiping its existing knowledge. '
+      + 'Use this when the user says e.g. "add this new TCE rollback runbook to the TCE 专家 role" '
+      + 'or "fix the system prompt to mention X". `appendDocuments` chunks new docs and INSERTs '
+      + 'alongside existing chunks; `baseSystemPrompt` / `name` overwrite those single fields. '
+      + 'Pass at least one of {appendDocuments, baseSystemPrompt, name}. Errors when roleId '
+      + 'is unknown — for new roles, use `train_role`.',
+    inputSchema: {
+      roleId: z.string(),
+      name: z.string().optional(),
+      baseSystemPrompt: z.string().optional(),
+      appendDocuments: z
+        .array(z.object({ filename: z.string(), content: z.string() }))
+        .optional(),
+    },
+  }, async ({ roleId, name, baseSystemPrompt, appendDocuments }) => {
+    try {
+      const result = await updateRole(deps.db, {
+        roleId,
+        ...(name !== undefined ? { name } : {}),
+        ...(baseSystemPrompt !== undefined ? { baseSystemPrompt } : {}),
+        ...(appendDocuments !== undefined ? { appendDocuments } : {}),
+        embedFn,
+      });
+      return jsonResult({
+        roleId: result.role.id,
+        name: result.role.name,
+        chunksAdded: result.chunksAdded,
+        totalChunks: getChunksForRole(deps.db, result.role.id).length,
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
   });
 
   server.registerTool('search_knowledge', {

@@ -177,11 +177,14 @@ function RoleCard({
   role,
   expanded,
   onToggle,
+  onUpdateViaChat,
   onTrained,
 }: {
   role: RoleSummary;
   expanded: boolean;
   onToggle: () => void;
+  /** Phase 65: open the train modal in update-mode for this role. */
+  onUpdateViaChat: () => void;
   onTrained: () => void;
 }) {
   return (
@@ -201,6 +204,19 @@ function RoleCard({
             <span className="dot" />
             {role.chunkCount} chunk{role.chunkCount === 1 ? '' : 's'}
           </span>
+          {/* Phase 65: per-role "Update via chat" — opens the train modal
+              in update mode, telling the agent to call update_role (not
+              train_role) so existing chunks survive. Hidden on built-ins
+              because their prompts/chunks are seeded from src — overwriting
+              would make them drift from code. */}
+          {!role.isBuiltin && (
+            <button
+              onClick={onUpdateViaChat}
+              title="Append knowledge or refine the system prompt — existing chunks stay."
+            >
+              Update via chat
+            </button>
+          )}
           <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
         </div>
       </div>
@@ -212,7 +228,16 @@ function RoleCard({
 export function RolesPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.roles());
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  // Phase 65: chat modal can run in two modes:
+  //   - { mode: 'create' }                 → new role (default behavior)
+  //   - { mode: 'update', roleId, name }   → append knowledge to existing
+  // The two modes share the modal UI but seed different greetings + steer
+  // the agent toward different MCP tools (train_role vs update_role).
+  const [chatTarget, setChatTarget] = useState<
+    | null
+    | { mode: 'create' }
+    | { mode: 'update'; roleId: string; name: string }
+  >(null);
 
   return (
     <>
@@ -224,7 +249,7 @@ export function RolesPage() {
       </p>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="primary" onClick={() => setChatOpen(true)}>
+        <button className="primary" onClick={() => setChatTarget({ mode: 'create' })}>
           + Train a new role via chat
         </button>
         <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
@@ -252,14 +277,16 @@ export function RolesPage() {
           role={r}
           expanded={expanded === r.id}
           onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
+          onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
           onTrained={() => reload()}
         />
       ))}
 
-      {chatOpen && (
+      {chatTarget && (
         <RoleTrainChatModal
-          onClose={() => setChatOpen(false)}
-          onSaved={() => { setChatOpen(false); reload(); }}
+          target={chatTarget}
+          onClose={() => setChatTarget(null)}
+          onSaved={() => { setChatTarget(null); reload(); }}
         />
       )}
     </>
@@ -267,23 +294,53 @@ export function RolesPage() {
 }
 
 // ── Phase 60b: conversational role trainer (claude CLI subprocess) ─────────
+// ── Phase 65:  + update mode (append knowledge to an existing role) ────────
 
-const SEED_GREETING = [
+type ChatTarget =
+  | { mode: 'create' }
+  | { mode: 'update'; roleId: string; name: string };
+
+const CREATE_GREETING = [
   '你好！我会帮你定义一个新的 helm role。',
   '',
   '我跑在你机器上的 Claude Code CLI 里 — 默认带文件读取、grep、shell、web fetch；helm 还接了 `train_role`、`read_lark_doc` 等 MCP 工具。',
   '',
-  '先告诉我：你想训练什么样的专家？领域、关心的项目、想沉淀的文档/代码都可以一起说。当你确认方案后，直接说"保存这个为 XXX role"，我就调 train_role 存下来。',
+  '先告诉我：你想训练什么样的专家？领域、关心的项目、想沉淀的文档/代码都可以一起说。当你确认方案后，直接说"保存这个为 XXX role"，我就调 `train_role` 存下来。',
 ].join('\n');
+
+function updateGreeting(roleName: string, roleId: string): string {
+  return [
+    `好，给现有 role **${roleName}** (\`${roleId}\`) 增量补充知识。`,
+    '',
+    '我会用 helm 的 `update_role` MCP 工具 — 它**只 append、不覆盖**：原有的 chunks 不会被擦掉。也可以同时改 system prompt（如果你想纠正某些表述）。',
+    '',
+    '**冲突检测**：调 `update_role` 时，helm 会先把新内容和已有 chunks 跑一遍语义比对。如果有重叠（cosine ≥ 0.85），工具会返回 `status: "conflicts"`，**不会写入**。我会把每个冲突念给你听，你逐条选：',
+    '- *"两条都留"*：我用 `force: true` 重新调一次 → 新旧并存；',
+    '- *"用新的替换旧的"*：我先调 `delete_role_chunk` 删旧 chunk，再用 `force: true` 调 `update_role`。',
+    '',
+    '没有冲突时直接写入。告诉我你想加什么：新文档、规范、对话沉淀、命令清单都行。读 Lark 文档贴 URL 就行；读代码告诉我项目路径。',
+  ].join('\n');
+}
 
 interface ChatMessageView {
   role: 'user' | 'assistant';
   content: string;
 }
 
-function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function RoleTrainChatModal({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: ChatTarget;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const initialGreeting = target.mode === 'update'
+    ? updateGreeting(target.name, target.roleId)
+    : CREATE_GREETING;
   const [messages, setMessages] = useState<ChatMessageView[]>([
-    { role: 'assistant', content: SEED_GREETING },
+    { role: 'assistant', content: initialGreeting },
   ]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -330,11 +387,15 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
     }
   }
 
+  const title = target.mode === 'update'
+    ? `Update role: ${target.name}`
+    : 'Train a new role via chat';
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Train a new role via chat"
+      aria-label={title}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
@@ -348,7 +409,7 @@ function RoleTrainChatModal({ onClose, onSaved }: { onClose: () => void; onSaved
       >
         <div className="row" style={{ marginBottom: 12 }}>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Train a new role via chat</div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
             <div className="muted" style={{ fontSize: 12 }}>
               Powered by your local <code>claude</code> CLI (Phase 60b). When you&apos;re ready, say
               {' '}<em>&quot;保存这个为 XXX role&quot;</em> — the agent calls helm&apos;s

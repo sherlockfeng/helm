@@ -193,4 +193,106 @@ describe('roles-train-search happy', () => {
     const rolesNow = listRoles(harness.db).map((r) => r.id);
     expect(rolesNow).not.toContain('role-empty');
   });
+
+  // Phase 65: update_role appends; train_role replaces. The two flows must
+  // be cleanly distinct so a user "update X" call can't accidentally wipe
+  // 50 hard-won knowledge chunks.
+  describe('update_role (Phase 65)', () => {
+    it('appendDocuments adds chunks alongside existing — no wipe', async () => {
+      // Seed: train fresh role with one doc.
+      await mcpClient.callTool({
+        name: 'train_role',
+        arguments: {
+          roleId: 'role-tce',
+          name: 'TCE 专家',
+          baseSystemPrompt: 'You are a TCE deploy expert.',
+          documents: [{ filename: 'overview.md', content: 'TCE overview: containerized deploys, replicas...' }],
+        },
+      });
+      const before = getChunksForRole(harness.db, 'role-tce');
+      expect(before.length).toBeGreaterThan(0);
+
+      // Update: append a runbook. Old chunk count should grow, not reset.
+      // Phase 66: pass `force: true` so this test exercises pure append
+      // semantics — conflict detection is covered by conflict.spec.ts. The
+      // pseudo-embedder is a char-bin bag and can flag two unrelated short
+      // English texts as similar enough to surface a false-positive
+      // conflict; we don't want that noise here.
+      const r = await mcpClient.callTool({
+        name: 'update_role',
+        arguments: {
+          roleId: 'role-tce',
+          appendDocuments: [{
+            filename: 'rollback-runbook.md',
+            content: 'Rollback procedure: 1. tce rollback <service>. 2. Verify health check...',
+          }],
+          force: true,
+        },
+      });
+      expect(r.isError).not.toBe(true);
+      const body = parseJsonContent(r) as { status: string; chunksAdded: number; totalChunks: number };
+      expect(body.status).toBe('applied');
+      expect(body.chunksAdded).toBeGreaterThan(0);
+      expect(body.totalChunks).toBe(before.length + body.chunksAdded);
+
+      const after = getChunksForRole(harness.db, 'role-tce');
+      // The original "overview" content is still findable.
+      expect(after.some((c) => /containerized deploys/.test(c.chunkText))).toBe(true);
+      // The new "rollback" content is also there.
+      expect(after.some((c) => /tce rollback/i.test(c.chunkText))).toBe(true);
+    });
+
+    it('baseSystemPrompt-only update changes the prompt without touching chunks', async () => {
+      await mcpClient.callTool({
+        name: 'train_role',
+        arguments: {
+          roleId: 'role-x', name: 'X',
+          baseSystemPrompt: 'old prompt',
+          documents: [{ filename: 'd.md', content: 'corn cob coral' }],
+        },
+      });
+      const beforeChunks = getChunksForRole(harness.db, 'role-x').length;
+
+      await mcpClient.callTool({
+        name: 'update_role',
+        arguments: { roleId: 'role-x', baseSystemPrompt: 'corrected new prompt' },
+      });
+      const after = getChunksForRole(harness.db, 'role-x');
+      expect(after.length).toBe(beforeChunks); // no chunks added or removed
+
+      const role = parseJsonContent(
+        await mcpClient.callTool({ name: 'get_role', arguments: { roleId: 'role-x' } }),
+      ) as { systemPrompt: string };
+      expect(role.systemPrompt).toBe('corrected new prompt');
+    });
+
+    it('attack: update_role on unknown role returns isError (no silent train)', async () => {
+      const r = await mcpClient.callTool({
+        name: 'update_role',
+        arguments: {
+          roleId: 'role-ghost',
+          appendDocuments: [{ filename: 'x.md', content: 'should not land' }],
+        },
+      });
+      expect(r.isError).toBe(true);
+      // Confirm no role row was created — update is strict-update, not upsert.
+      const roles = listRoles(harness.db).map((r) => r.id);
+      expect(roles).not.toContain('role-ghost');
+    });
+
+    it('attack: update_role with no fields → isError (forbids silent no-op)', async () => {
+      await mcpClient.callTool({
+        name: 'train_role',
+        arguments: {
+          roleId: 'role-y', name: 'Y',
+          documents: [{ filename: 'd.md', content: 'content' }],
+        },
+      });
+      const r = await mcpClient.callTool({
+        name: 'update_role',
+        arguments: { roleId: 'role-y' },
+      });
+      expect(r.isError).toBe(true);
+    });
+  });
 });

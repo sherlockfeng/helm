@@ -33,6 +33,7 @@ import {
   searchKnowledge,
   seedBuiltinRoles,
   trainRole,
+  updateRole,
 } from '../roles/library.js';
 import {
   confirmCapture,
@@ -42,7 +43,7 @@ import {
 } from '../requirements/capture.js';
 import { formatRequirementForInjection, recallRequirements } from '../requirements/recall.js';
 import { summarizeCampaign, type LlmClient } from '../summarizer/campaign.js';
-import { getChunksForRole } from '../storage/repos/roles.js';
+import { deleteChunkById, getChunksForRole } from '../storage/repos/roles.js';
 import { listCampaigns } from '../storage/repos/campaigns.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 
@@ -299,7 +300,11 @@ export function createMcpServer(
   }, async ({ roleId }) => jsonResult(getRole(deps.db, roleId)));
 
   server.registerTool('train_role', {
-    description: 'Create or retrain a custom agent role by indexing documents into a knowledge base.',
+    description:
+      'Create OR full-replace a custom agent role with the given documents. '
+      + 'WARNING: if the role already exists, ALL existing knowledge chunks are deleted '
+      + 'and replaced with these. For incremental updates (append knowledge / refine the '
+      + 'system prompt without wiping), use `update_role` instead.',
     inputSchema: {
       roleId: z.string(),
       name: z.string(),
@@ -312,6 +317,84 @@ export function createMcpServer(
       roleId: role.id, name: role.name,
       chunksIndexed: getChunksForRole(deps.db, role.id).length,
     });
+  });
+
+  server.registerTool('update_role', {
+    description:
+      'Incrementally update an existing helm role WITHOUT wiping its existing knowledge. '
+      + 'Use this when the user says e.g. "add this new TCE rollback runbook to the TCE 专家 role" '
+      + 'or "fix the system prompt to mention X". `appendDocuments` chunks new docs and INSERTs '
+      + 'alongside existing chunks; `baseSystemPrompt` / `name` overwrite those single fields. '
+      + 'Pass at least one of {appendDocuments, baseSystemPrompt, name}. Errors when roleId '
+      + 'is unknown — for new roles, use `train_role`. '
+      + '\n\n'
+      + 'CONFLICT FLOW (Phase 66): when `appendDocuments` is provided, helm first compares '
+      + 'each new chunk against existing chunks via cosine similarity. If any pair scores ≥ 0.85, '
+      + 'the tool returns `{ status: "conflicts", conflicts: [...] }` WITHOUT writing anything. '
+      + 'Each conflict carries `existingChunkId`, `existingChunkText`, `newChunkText`, and `similarity`. '
+      + 'You MUST surface these to the user and let them decide per conflict: '
+      + '(a) keep both — re-call this tool with `force: true`; '
+      + '(b) replace the old version — call `delete_role_chunk` with each `existingChunkId` '
+      + 'the user wants to drop, then re-call this tool with `force: true`. '
+      + 'No conflicts → tool writes immediately and returns `{ status: "applied", ... }`.',
+    inputSchema: {
+      roleId: z.string(),
+      name: z.string().optional(),
+      baseSystemPrompt: z.string().optional(),
+      appendDocuments: z
+        .array(z.object({ filename: z.string(), content: z.string() }))
+        .optional(),
+      force: z.boolean().optional().describe(
+        'Skip conflict detection and append unconditionally. Pass true only after the '
+        + 'user has reviewed any conflicts surfaced by a prior call.',
+      ),
+    },
+  }, async ({ roleId, name, baseSystemPrompt, appendDocuments, force }) => {
+    try {
+      const result = await updateRole(deps.db, {
+        roleId,
+        ...(name !== undefined ? { name } : {}),
+        ...(baseSystemPrompt !== undefined ? { baseSystemPrompt } : {}),
+        ...(appendDocuments !== undefined ? { appendDocuments } : {}),
+        ...(force !== undefined ? { force } : {}),
+        embedFn,
+      });
+      if (result.status === 'conflicts') {
+        return jsonResult({
+          status: 'conflicts',
+          roleId,
+          conflicts: result.conflicts,
+          nextStep:
+            'Show each conflict to the user. For each, ask "keep both" (re-call '
+            + 'update_role with force=true) or "replace old" (delete_role_chunk on '
+            + 'existingChunkId, then update_role with force=true).',
+        });
+      }
+      return jsonResult({
+        status: 'applied',
+        roleId: result.role.id,
+        name: result.role.name,
+        chunksAdded: result.chunksAdded,
+        totalChunks: getChunksForRole(deps.db, result.role.id).length,
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('delete_role_chunk', {
+    description:
+      'Phase 66: delete a single knowledge chunk from a role by id. The id comes '
+      + 'from a prior `update_role` conflict report (each conflict carries '
+      + '`existingChunkId`). Use this only when the user has explicitly chosen to '
+      + 'replace the old version with the incoming one — after deleting, re-call '
+      + '`update_role` with `force: true` to land the new chunks.',
+    inputSchema: {
+      chunkId: z.string(),
+    },
+  }, async ({ chunkId }) => {
+    const removed = deleteChunkById(deps.db, chunkId);
+    return jsonResult({ chunkId, removed });
   });
 
   server.registerTool('search_knowledge', {

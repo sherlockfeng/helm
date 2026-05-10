@@ -92,7 +92,7 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
 }
 
 /**
- * Phase 65: incremental update for an existing role. Differs from
+ * Phase 65/66: incremental update for an existing role. Differs from
  * `trainRole` (Phase 7) which is a full replace:
  *
  *   - **`appendDocuments`** chunks new content and INSERTs alongside the
@@ -104,8 +104,26 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
  *   - At least one of {appendDocuments, baseSystemPrompt, name} must be
  *     provided — empty input throws so the caller can't silently no-op.
  *
- * Returns the refreshed Role row + the count of chunks newly added (so
- * the UI can say "added 7 chunks").
+ * Phase 66: when `appendDocuments` is given, helm runs an explicit
+ * **comparison step** first — each new chunk is embedded and compared
+ * against every existing chunk's embedding (cosine similarity). Any pair
+ * with similarity ≥ `CONFLICT_THRESHOLD` is flagged as a "conflict" and
+ * the result is returned WITHOUT writing to the DB, so the caller can
+ * surface those overlaps to the user for confirmation. Pass `force: true`
+ * to skip detection (e.g. after the user has decided to keep both
+ * versions, or after they've called `deleteChunkById` to remove the old
+ * one).
+ *
+ * Returns one of two shapes (discriminated union on `status`):
+ *   - `{ status: 'applied', role, chunksAdded }`     — DB was written
+ *   - `{ status: 'conflicts', conflicts: [...] }`    — nothing written;
+ *     caller must resolve and retry with `force: true` (or after deleting
+ *     the conflicting old chunks via `deleteChunkById`).
+ *
+ * Note: name / baseSystemPrompt updates are NEVER blocked by conflicts —
+ * conflicts are a property of the chunk knowledge base, not the role
+ * metadata. A pure prompt-rename update has nothing to conflict with so
+ * it always lands as `'applied'`.
  */
 export interface UpdateRoleInput {
   roleId: string;
@@ -116,13 +134,41 @@ export interface UpdateRoleInput {
   /** Documents to chunk + APPEND. Existing chunks stay. */
   appendDocuments?: Array<{ filename: string; content: string }>;
   embedFn: (text: string) => Promise<Float32Array>;
+  /**
+   * Phase 66: skip conflict detection and append unconditionally. Pass
+   * `true` after the user has reviewed conflicts and chosen to either (a)
+   * keep both versions or (b) delete the colliding old chunk via
+   * `deleteChunkById` and re-call.
+   */
+  force?: boolean;
 }
 
-export interface UpdateRoleResult {
-  role: Role;
-  /** Number of new chunks inserted (sum across all appendDocuments). */
-  chunksAdded: number;
+/** Phase 66: a flagged overlap between a new chunk and an existing chunk. */
+export interface ChunkConflict {
+  /** Existing chunk ID — pass to deleteChunkById if the user wants to replace. */
+  existingChunkId: string;
+  existingChunkText: string;
+  existingSourceFile?: string;
+  /** Index of the conflicting new doc in `appendDocuments`. */
+  newDocIndex: number;
+  newDocFilename: string;
+  newChunkText: string;
+  /** Cosine similarity (1 = identical). */
+  similarity: number;
 }
+
+export type UpdateRoleResult =
+  | { status: 'applied'; role: Role; chunksAdded: number }
+  | { status: 'conflicts'; conflicts: ChunkConflict[] };
+
+/**
+ * Phase 66: similarity at or above this counts as a conflict needing user
+ * confirmation. 0.85 is empirically a good cut for the pseudo-embedder
+ * (token-bag) — paraphrases of the same fact land >0.9, while genuinely
+ * unrelated docs sit <0.5. If we swap in a real embedder later, this
+ * threshold may need to retune.
+ */
+export const CONFLICT_THRESHOLD = 0.85;
 
 export async function updateRole(
   db: Database.Database,
@@ -136,6 +182,41 @@ export async function updateRole(
   const docs = input.appendDocuments ?? [];
   if (input.name === undefined && input.baseSystemPrompt === undefined && docs.length === 0) {
     throw new Error('updateRole: nothing to update — pass at least one of name / baseSystemPrompt / appendDocuments');
+  }
+
+  // Phase 66: pre-embed new chunks once. We need them for both the
+  // conflict scan AND (if we proceed) the actual insert, so doing it
+  // upfront avoids re-running the embedder.
+  const newChunks: Array<{
+    docIndex: number;
+    filename: string;
+    text: string;
+    embedding: Float32Array;
+  }> = [];
+  for (let i = 0; i < docs.length; i++) {
+    const doc = docs[i]!;
+    for (const chunk of chunkDocument(doc.content, doc.filename)) {
+      newChunks.push({
+        docIndex: i,
+        filename: doc.filename,
+        text: chunk.text,
+        embedding: await input.embedFn(chunk.text),
+      });
+    }
+  }
+
+  // Phase 66: comparison step. Skip when force=true (caller has already
+  // resolved) or when there are no docs (prompt/name-only update has
+  // nothing to compare).
+  if (!input.force && newChunks.length > 0) {
+    const conflicts = findConflictingChunks(db, existing.id, newChunks);
+    if (conflicts.length > 0) {
+      // IMPORTANT: do NOT write anything to the DB here. The whole point
+      // of detection is "ask first, write later". Even the name /
+      // baseSystemPrompt update is held back so the user gets one
+      // coherent confirmation moment instead of partial state.
+      return { status: 'conflicts', conflicts };
+    }
   }
 
   const now = new Date().toISOString();
@@ -155,26 +236,70 @@ export async function updateRole(
   // Append chunks — DO NOT call deleteChunksForRole. That's the entire
   // point: existing knowledge survives.
   let chunksAdded = 0;
-  for (const doc of docs) {
-    const chunks = chunkDocument(doc.content, doc.filename);
-    for (const chunk of chunks) {
-      const embedding = await input.embedFn(chunk.text);
-      const row: KnowledgeChunk = {
-        id: randomUUID(),
-        roleId: existing.id,
-        sourceFile: doc.filename,
-        chunkText: chunk.text,
-        embedding,
-        createdAt: now,
-      };
-      insertChunk(db, row);
-      chunksAdded += 1;
-    }
+  for (const c of newChunks) {
+    const row: KnowledgeChunk = {
+      id: randomUUID(),
+      roleId: existing.id,
+      sourceFile: c.filename,
+      chunkText: c.text,
+      embedding: c.embedding,
+      createdAt: now,
+    };
+    insertChunk(db, row);
+    chunksAdded += 1;
   }
 
   const refreshed = getRoleRow(db, existing.id);
   if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);
-  return { role: refreshed, chunksAdded };
+  return { status: 'applied', role: refreshed, chunksAdded };
+}
+
+/**
+ * Phase 66: scan a role's existing chunks against a batch of pre-embedded
+ * new chunks. For each new chunk, the highest-scoring existing chunk
+ * above {@link CONFLICT_THRESHOLD} is reported (one entry per overlapping
+ * new chunk, not per pair — keeps the user-facing list tight).
+ *
+ * Existing chunks without an embedding (legacy rows) are skipped: we
+ * can't compare them, so we err on the side of "no conflict" and let
+ * the append proceed. That's the same fail-open behavior `searchKnowledge`
+ * uses.
+ */
+export function findConflictingChunks(
+  db: Database.Database,
+  roleId: string,
+  newChunks: Array<{
+    docIndex: number;
+    filename: string;
+    text: string;
+    embedding: Float32Array;
+  }>,
+): ChunkConflict[] {
+  const existing = getChunksForRole(db, roleId).filter((c) => c.embedding != null);
+  if (existing.length === 0) return [];
+
+  const conflicts: ChunkConflict[] = [];
+  for (const nc of newChunks) {
+    let best: { chunk: KnowledgeChunk; score: number } | null = null;
+    for (const ec of existing) {
+      const score = cosineSimilarity(nc.embedding, ec.embedding!);
+      if (score >= CONFLICT_THRESHOLD && (!best || score > best.score)) {
+        best = { chunk: ec, score };
+      }
+    }
+    if (best) {
+      conflicts.push({
+        existingChunkId: best.chunk.id,
+        existingChunkText: best.chunk.chunkText,
+        ...(best.chunk.sourceFile ? { existingSourceFile: best.chunk.sourceFile } : {}),
+        newDocIndex: nc.docIndex,
+        newDocFilename: nc.filename,
+        newChunkText: nc.text,
+        similarity: best.score,
+      });
+    }
+  }
+  return conflicts;
 }
 
 export interface KnowledgeSearchResult {

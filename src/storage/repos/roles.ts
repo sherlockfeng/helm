@@ -84,6 +84,20 @@ export function deleteChunksForRole(db: Database.Database, roleId: string): void
   db.prepare(`DELETE FROM knowledge_chunks WHERE role_id = ?`).run(roleId);
 }
 
+/**
+ * Phase 66: delete a single chunk by id. Used by `delete_role_chunk` MCP
+ * tool when the user resolves an `update_role` conflict by saying "drop
+ * the old version and use the new one" — caller deletes the existing
+ * chunk, then re-calls update_role with `force: true`.
+ *
+ * Returns true when a row was actually removed (so callers can distinguish
+ * "deleted" from "id not found, nothing to do").
+ */
+export function deleteChunkById(db: Database.Database, chunkId: string): boolean {
+  const info = db.prepare(`DELETE FROM knowledge_chunks WHERE id = ?`).run(chunkId);
+  return info.changes > 0;
+}
+
 // ── AgentSession ───────────────────────────────────────────────────────────
 
 export function upsertAgentSession(db: Database.Database, session: AgentSession): void {

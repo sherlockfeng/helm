@@ -304,19 +304,44 @@ async function handleInbound(
     return;
   }
 
-  // Unknown / non-command message. Enqueue if we have a binding, drop
-  // otherwise — silent because random Lark chatter shouldn't pollute logs.
+  // Unknown / non-command message. Enqueue if we have a binding for the
+  // (chat, thread) tuple; otherwise log a WARN with full coordinates so a
+  // user reporting "I bound the chat but my messages don't reach Cursor"
+  // leaves a trail in helm.log we can debug from.
+  //
+  // Phase 70: previously this path returned silently when no binding
+  // matched — making thread-id mismatches look identical to "user sent
+  // random chatter in an unbound Lark chat". Loud-dropping when bindings
+  // EXIST for the chat but none match the thread surfaces the actionable
+  // case (likely thread-id mismatch) without spamming logs from chats the
+  // user never bound to.
   const allInChat = db.prepare(
     `SELECT id FROM channel_bindings WHERE channel = 'lark' AND external_chat = ?`,
   ).all(meta.larkChatId) as Array<{ id: string }>;
   if (allInChat.length === 0) return;
 
+  const bindingsInChat = allInChat
+    .map(({ id }) => getChannelBinding(db, id))
+    .filter((b): b is ChannelBinding => Boolean(b));
   const binding = findBindingForLarkThread(
-    allInChat.map(({ id }) => getChannelBinding(db, id)).filter((b): b is ChannelBinding => Boolean(b)),
+    bindingsInChat,
     meta.larkChatId,
     meta.larkThreadId,
   );
-  if (!binding) return;
+  if (!binding) {
+    log.warn('lark_message_dropped_no_thread_binding', {
+      data: {
+        larkChatId: meta.larkChatId,
+        larkThreadId: meta.larkThreadId ?? null,
+        larkMessageId: meta.larkMessageId,
+        candidateBindings: bindingsInChat.map((b) => ({
+          id: b.id, externalThread: b.externalThread ?? null,
+          hostSessionId: b.hostSessionId ?? null,
+        })),
+      },
+    });
+    return;
+  }
 
   const messageRowId = enqueueMessage(db, {
     bindingId: binding.id,

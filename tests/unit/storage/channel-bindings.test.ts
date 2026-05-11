@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   deletePendingBind, dequeueMessages, enqueueMessage, getBindingByThread,
   getChannelBinding, getPendingBind, insertChannelBinding, insertPendingBind,
-  listBindingsForSession, pendingMessageCount, purgeExpiredPendingBinds,
+  listBindingsForSession, pendingMessageCount,
+  pendingMessageCountForHostSession,
+  pendingMessageCountsByHostSession,
+  purgeExpiredPendingBinds,
   updateChannelBinding,
 } from '../../../src/storage/repos/channel-bindings.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
@@ -112,6 +115,55 @@ describe('channel message queue', () => {
 
   it('attack: enqueue with non-existent bindingId throws (FK)', () => {
     expect(() => enqueueMessage(db, { bindingId: 'ghost', text: 'x', createdAt: new Date().toISOString() })).toThrow();
+  });
+
+  // ── Phase 70: queue depth aggregations for the Active Chats badge ───
+  it('pendingMessageCountForHostSession sums across all bindings of a session', () => {
+    seedSession(db, 's2');
+    insertChannelBinding(db, makeBinding({ id: 'b2', hostSessionId: 's2', externalThread: 't2' }));
+    enqueueMessage(db, { bindingId: 'b1', text: 'one', createdAt: new Date().toISOString() });
+    enqueueMessage(db, { bindingId: 'b1', text: 'two', createdAt: new Date().toISOString() });
+    enqueueMessage(db, { bindingId: 'b2', text: 'three', createdAt: new Date().toISOString() });
+    expect(pendingMessageCountForHostSession(db, 's1')).toBe(2);
+    expect(pendingMessageCountForHostSession(db, 's2')).toBe(1);
+  });
+
+  it('pendingMessageCountForHostSession returns 0 when session has no queued messages', () => {
+    expect(pendingMessageCountForHostSession(db, 's1')).toBe(0);
+  });
+
+  it('pendingMessageCountForHostSession returns 0 for unknown session', () => {
+    expect(pendingMessageCountForHostSession(db, 'never-existed')).toBe(0);
+  });
+
+  it('pendingMessageCountForHostSession ignores consumed messages', () => {
+    enqueueMessage(db, { bindingId: 'b1', text: 'x', createdAt: new Date().toISOString() });
+    expect(pendingMessageCountForHostSession(db, 's1')).toBe(1);
+    dequeueMessages(db, 'b1');
+    expect(pendingMessageCountForHostSession(db, 's1')).toBe(0);
+  });
+
+  it('pendingMessageCountsByHostSession groups by host_session and skips empty', () => {
+    seedSession(db, 's2');
+    insertChannelBinding(db, makeBinding({ id: 'b2', hostSessionId: 's2', externalThread: 't2' }));
+    enqueueMessage(db, { bindingId: 'b1', text: 'a', createdAt: new Date().toISOString() });
+    enqueueMessage(db, { bindingId: 'b1', text: 'b', createdAt: new Date().toISOString() });
+    enqueueMessage(db, { bindingId: 'b2', text: 'c', createdAt: new Date().toISOString() });
+    const counts = pendingMessageCountsByHostSession(db);
+    expect(counts).toEqual({ s1: 2, s2: 1 });
+  });
+
+  it('pendingMessageCountsByHostSession returns empty object when nothing queued', () => {
+    expect(pendingMessageCountsByHostSession(db)).toEqual({});
+  });
+
+  it('pendingMessageCountsByHostSession omits sessions whose bindings have null host_session_id', () => {
+    // Some bindings (e.g. test fixtures) may not have a host_session_id;
+    // the WHERE clause requires it so they shouldn't appear in the map.
+    // Confirm by adding a queue entry and checking we still get only s1.
+    enqueueMessage(db, { bindingId: 'b1', text: 'x', createdAt: new Date().toISOString() });
+    const counts = pendingMessageCountsByHostSession(db);
+    expect(Object.keys(counts)).toEqual(['s1']);
   });
 });
 

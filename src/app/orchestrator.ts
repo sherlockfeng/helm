@@ -999,11 +999,19 @@ async function runHostStopLongPoll(
   const drain = (): string | null => {
     const bindings = listBindingsForSession(db, hostSessionId);
     const lines: string[] = [];
+    let drainedCount = 0;
     for (const binding of bindings) {
       const messages = dequeueMessages(db, binding.id);
+      drainedCount += messages.length;
       for (const m of messages) {
         if (m.text) lines.push(m.text);
       }
+    }
+    // Phase 70: tell the UI we ate N messages so the "📨 queued" badge
+    // can disappear without waiting for the next 30s reconcile. Only
+    // emit when we actually drained something; empty drains are silent.
+    if (drainedCount > 0) {
+      events.emit({ type: 'channel.message_consumed', hostSessionId, count: drainedCount });
     }
     return lines.length === 0 ? null : lines.join('\n\n');
   };

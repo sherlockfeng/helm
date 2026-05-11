@@ -59,7 +59,14 @@ export function ChatsPage() {
   // on the same SSE events the Bindings page listens for.
   const { data: bindingsData, reload: reloadBindings } = useApi(() => helmApi.bindings());
   useEventStream(() => { reload(); reloadBindings(); }, {
-    types: ['session.started', 'session.closed', 'binding.created', 'binding.removed'],
+    types: [
+      'session.started', 'session.closed',
+      'binding.created', 'binding.removed',
+      // Phase 70: when a message is enqueued (Lark → channel_message_queue)
+      // or drained (Cursor host_stop) we want the per-chat badge to flip
+      // immediately, not on the next 30s reconcile.
+      'channel.message_enqueued', 'channel.message_consumed',
+    ],
   });
   const [savingId, setSavingId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
@@ -176,10 +183,36 @@ export function ChatsPage() {
                 session <code title={chat.id}>{shortId(chat.id)}</code>
               </div>
             </div>
-            <span className="helm-status ok">
-              <span className="dot" />
-              last seen {formatRelative(chat.lastSeenAt)}
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <span className="helm-status ok">
+                <span className="dot" />
+                last seen {formatRelative(chat.lastSeenAt)}
+              </span>
+              {/* Phase 70: messages from Lark / other channels are pushed
+                  into channel_message_queue. Cursor only drains via the
+                  `host_stop` hook (turn end / new prompt), so a "queued"
+                  badge tells the user "your message is here but Cursor
+                  needs a nudge before the agent sees it". Hidden when 0. */}
+              {chat.queuedMessageCount ? (
+                <span
+                  className="badge"
+                  title={
+                    `${chat.queuedMessageCount} channel message${chat.queuedMessageCount === 1 ? '' : 's'} `
+                    + 'waiting for Cursor. Send any prompt in this chat (or wait for '
+                    + 'the current turn to end) to drain them.'
+                  }
+                  style={{
+                    background: 'var(--accent, #ff9500)',
+                    color: '#fff',
+                    fontSize: 11,
+                    padding: '2px 6px',
+                    borderRadius: 8,
+                  }}
+                >
+                  📨 {chat.queuedMessageCount} queued
+                </span>
+              ) : null}
+            </div>
           </div>
 
           {/* Phase 42: every bound role renders as a chip with inline ✕.

@@ -53,6 +53,40 @@ export function Layout() {
     types: ['approval.pending', 'approval.settled', 'approval.decision_received'],
   });
 
+  // Phase 70: when a channel message lands in the queue (typically a Lark
+  // → Cursor relay), fire a desktop notification. Reason: the message
+  // sits in `channel_message_queue` until Cursor's next `host_stop`
+  // fires (turn end / new prompt) — until the user nudges Cursor, the
+  // message is invisible. A native notification turns the silent wait
+  // into a visible "go nudge Cursor" prompt.
+  //
+  // Lifecycle:
+  //   - First event: request permission lazily (no popup at boot)
+  //   - Subsequent events: fire a notification if permission granted,
+  //     otherwise drop silently (the in-app badge already shows the
+  //     queue depth)
+  //
+  // We don't fire when the helm window is focused — the user is already
+  // looking at helm, the badge in Active Chats is enough. Notifications
+  // are most useful when helm is in the background.
+  useEventStream(() => {
+    if (typeof Notification === 'undefined') return; // non-Electron / non-browser env
+    if (document.hasFocus()) return;
+    const send = (): void => {
+      try {
+        new Notification('helm', {
+          body: 'Channel message queued for Cursor. Send any prompt in your Cursor chat to receive it.',
+          tag: 'helm-channel-queue', // dedupe — coalesce bursts into one notification
+        });
+      } catch { /* notifications disabled at OS level — silent */ }
+    };
+    if (Notification.permission === 'granted') {
+      send();
+    } else if (Notification.permission !== 'denied') {
+      void Notification.requestPermission().then((p) => { if (p === 'granted') send(); });
+    }
+  }, { types: ['channel.message_enqueued'] });
+
   return (
     <div className="helm-app">
       <aside className="helm-sidebar">

@@ -72,6 +72,9 @@ import {
 } from '../storage/repos/channel-bindings.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createMcpServer } from '../mcp/server.js';
+import { runReview as runHarnessReview } from '../harness/review-runner.js';
+import { getHarnessTaskByHostSession } from '../storage/repos/harness.js';
+import { assembleHarnessSessionContext } from '../harness/session-inject.js';
 import { ClaudeCodeAgent, detectClaudeCli } from '../cli-agent/claude.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
@@ -346,11 +349,30 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     const currentRoleIds = persisted?.roleIds ?? [];
     setLastInjectedRoleIds(deps.db, req.host_session_id, currentRoleIds);
 
+    // Phase 67: Harness stage prompt injection. When a Cursor chat is bound
+    // to a Harness task, layer the appropriate stage's system prompt on top
+    // of the (possibly-empty) role context. This is the primary mechanism
+    // by which the chat learns "you're in implement mode for task X" — no
+    // user paste-in required. The injected block also points at the on-disk
+    // task.md so the agent reads the durable memory itself.
+    const harnessTask = getHarnessTaskByHostSession(deps.db, req.host_session_id);
+    const harnessBlock = harnessTask ? assembleHarnessSessionContext(harnessTask) : '';
+    const merged = [result.context ?? '', harnessBlock]
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .join('\n\n---\n\n');
+
     log.session(req.host_session_id).info('session_start', {
       event: 'session_start',
-      data: { cwd: req.cwd, providers: result.diagnostics, injectedRoleIds: currentRoleIds },
+      data: {
+        cwd: req.cwd,
+        providers: result.diagnostics,
+        injectedRoleIds: currentRoleIds,
+        harnessTaskId: harnessTask?.id ?? null,
+        harnessStage: harnessTask?.currentStage ?? null,
+      },
     });
-    return result.context ? { additional_context: result.context } : {};
+    return merged ? { additional_context: merged } : {};
   });
 
   bridge.registerHandler('host_approval_request', async (req: HostApprovalRequestRequest): Promise<HostApprovalRequestResponse> => {
@@ -685,6 +707,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           return {};
         }
       })(),
+      // Phase 67: Harness reviewer subprocesses pull conventions from the
+      // global Settings field (helm Settings → Harness Conventions). Read
+      // lazily so a Settings save updates the next review without restart.
+      harnessConventions: () => liveConfig.harness?.conventions ?? '',
     });
   }
 
@@ -766,6 +792,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           ...(opts?.cwd ? { cwd: opts.cwd } : {}),
           ...(helmMcpUrl ? { helmMcpUrl } : {}),
         });
+      },
+      // Phase 67: Harness review runner — wires `runReview()` with the
+      // orchestrator's live conventions getter so reviewer subprocesses
+      // always pick up the latest Settings value without restart. Returns
+      // 501 from the endpoint when claude is unavailable on PATH.
+      runHarnessReview: async (taskId: string) => {
+        if (!claudeAvailable) {
+          throw new Error('claude CLI not on PATH; install Claude Code or set up your shell.');
+        }
+        return runHarnessReview(
+          {
+            db: deps.db,
+            getConventions: async () => liveConfig.harness?.conventions ?? '',
+          },
+          { taskId },
+        );
       },
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },

@@ -228,3 +228,90 @@ export interface HostEventLogEntry {
   payload: Record<string, unknown>;
   createdAt: string;
 }
+
+// ── Harness toolchain (Phase 67) ───────────────────────────────────────────
+//
+// These types mirror the on-disk .harness/ files. Source of truth lives on
+// disk (.harness/tasks/<id>/task.md, .harness/archive/<id>.md); helm DB
+// holds an index for fast queries (search by entity / file / project).
+//
+// NOTE: stages are forward-monotonic. Going backwards is a programming error
+// (advanceStage refuses to do it). If scope changes mid-implement, the
+// implementer keeps current_stage = 'implement' and edits the Intent /
+// Structure / Risks fields in place.
+
+export type HarnessStage = 'new_feature' | 'implement' | 'archived';
+
+/** Intent block — three substantive bullets. Free-form prose, no schema rigour. */
+export interface HarnessIntent {
+  background: string;
+  objective: string;
+  scopeIn: string[];
+  scopeOut: string[];
+}
+
+export interface HarnessStructure {
+  entities: string[];
+  relations: string[];
+  /** Each entry is "path/to/file.ts — one-line reason" — kept as raw lines for grepability. */
+  plannedFiles: string[];
+}
+
+export interface HarnessStageLogEntry {
+  at: string;        // ISO timestamp
+  stage: HarnessStage;
+  message: string;
+}
+
+export interface HarnessRelatedTask {
+  taskId: string;
+  oneLiner: string;
+  archivePath: string; // pointer into .harness/archive
+}
+
+export interface HarnessTask {
+  id: string;
+  title: string;
+  currentStage: HarnessStage;
+  projectPath: string;
+  hostSessionId?: string;
+  intent?: HarnessIntent;
+  structure?: HarnessStructure;
+  /** Free-form decisions list. Visible to implementer, HIDDEN from reviewer. */
+  decisions: string[];
+  risks: string[];
+  relatedTasks: HarnessRelatedTask[];
+  stageLog: HarnessStageLogEntry[];
+  implementBaseCommit?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HarnessArchiveCard {
+  taskId: string;
+  entities: string[];
+  filesTouched: string[];
+  modules: string[];
+  patterns: string[];
+  downstream: string[];
+  rulesApplied: string[];
+  oneLiner: string;
+  /** Relative path inside the project — e.g. ".harness/archive/<task_id>.md". */
+  fullDocPointer: string;
+  projectPath: string;
+  archivedAt: string;
+}
+
+export type HarnessReviewStatus = 'pending' | 'completed' | 'failed';
+
+export interface HarnessReview {
+  id: string;
+  taskId: string;
+  status: HarnessReviewStatus;
+  reportText?: string;
+  baseCommit?: string;
+  headCommit?: string;
+  error?: string;
+  spawnedAt: string;
+  completedAt?: string;
+}

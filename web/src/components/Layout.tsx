@@ -22,6 +22,7 @@ const NAV: NavItem[] = [
   { to: '/campaigns', label: 'Campaigns' },
   { to: '/roles', label: 'Roles' },
   { to: '/requirements', label: 'Requirements' },
+  { to: '/harness', label: 'Harness' }, // Phase 67
   { to: '/settings', label: 'Settings' },
 ];
 

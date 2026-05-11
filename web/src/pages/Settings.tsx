@@ -239,6 +239,28 @@ export function SettingsPage() {
         </p>
       </article>
 
+      <h3>Harness Conventions</h3>
+      <article className="helm-card">
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          Free-form project conventions injected into every Harness review subprocess.
+          The reviewer sees this text alongside Intent, Structure, and the diff —
+          but never the implementer's Decisions or Stage Log (information isolation).
+          Edit here, save, and the next review picks up the change.
+        </p>
+        <label className="helm-form-row" style={{ display: 'block' }}>
+          <textarea
+            value={draft.harness?.conventions ?? ''}
+            placeholder={'e.g.\n- All new SQL tables must include created_at/updated_at TEXT NOT NULL.\n- HTTP handlers go through `send(res, ...)`; never `res.write` directly.'}
+            rows={8}
+            style={{ width: '100%', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}
+            onChange={(e) => update((c) => {
+              if (!c.harness) c.harness = { conventions: '' };
+              c.harness.conventions = e.target.value;
+            })}
+          />
+        </label>
+      </article>
+
       <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

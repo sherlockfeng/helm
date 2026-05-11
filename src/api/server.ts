@@ -67,6 +67,17 @@ import {
   MCP_SSE_PATH,
 } from '../mcp/http-sse.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import * as harnessLib from '../harness/library.js';
+import {
+  getReview as harnessGetReview,
+  listReviewsForTask as harnessListReviews,
+} from '../storage/repos/harness.js';
+import type { HarnessReview } from '../storage/types.js';
+
+const harnessReviewRepos = {
+  getReview: harnessGetReview,
+  listReviewsForTask: harnessListReviews,
+};
 
 export interface HttpApiDeps {
   db: Database.Database;
@@ -191,6 +202,14 @@ export interface HttpApiDeps {
   cliAgentFactory?: (
     opts?: { cwd?: string },
   ) => import('../cli-agent/claude.js').ClaudeCodeAgent | null;
+  /**
+   * Phase 67: spawn the Harness review subprocess for a given task. Wraps
+   * `runReview()` from `src/harness/review-runner.ts` with the orchestrator's
+   * pre-bound conventions getter + DB. Returns the completed review row.
+   * When undefined (e.g. tests that don't want to shell out), POST to
+   * `/api/harness/tasks/:id/review` returns 501.
+   */
+  runHarnessReview?: (taskId: string) => Promise<HarnessReview>;
 }
 
 export interface HttpApiOptions {
@@ -663,6 +682,190 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!removed) return send(res, 404, { error: 'unknown_binding' });
         deps.events?.emit({ type: 'binding.removed', bindingId: bindingMatch[1]! });
         return send(res, 200, { ok: true });
+      }
+
+      // ── Harness toolchain (Phase 67) ────────────────────────────────────
+      //
+      // The renderer hits these from the Harness page. Most of them are
+      // lightweight wrappers around src/harness/library — the real surface
+      // is the MCP tool set used by Cursor agents. The HTTP layer exists so
+      // the helm UI doesn't have to speak MCP.
+
+      if (url.pathname === '/api/harness/tasks') {
+        if (req.method === 'GET') {
+          const projectPath = url.searchParams.get('projectPath') ?? undefined;
+          const tasks = harnessLib.listTasks(deps.db, projectPath ? { projectPath } : {});
+          return send(res, 200, { tasks });
+        }
+        if (req.method === 'POST') {
+          let parsed: { taskId?: string; title?: string; projectPath?: string;
+            hostSessionId?: string;
+            intent?: { background?: string; objective?: string; scopeIn?: string[]; scopeOut?: string[] };
+          };
+          try { parsed = JSON.parse(ctx.body); } catch { return badRequest(res, 'invalid JSON'); }
+          if (!parsed.taskId || !parsed.title || !parsed.projectPath) {
+            return badRequest(res, 'taskId, title, projectPath are required');
+          }
+          try {
+            const intentInput = parsed.intent
+              ? {
+                  ...(parsed.intent.background !== undefined ? { background: parsed.intent.background } : {}),
+                  ...(parsed.intent.objective !== undefined ? { objective: parsed.intent.objective } : {}),
+                  ...(parsed.intent.scopeIn !== undefined ? { scopeIn: parsed.intent.scopeIn } : {}),
+                  ...(parsed.intent.scopeOut !== undefined ? { scopeOut: parsed.intent.scopeOut } : {}),
+                }
+              : undefined;
+            const result = harnessLib.createTask(deps.db, {
+              taskId: parsed.taskId,
+              title: parsed.title,
+              projectPath: parsed.projectPath,
+              ...(parsed.hostSessionId ? { hostSessionId: parsed.hostSessionId } : {}),
+              ...(intentInput ? { intent: intentInput } : {}),
+            });
+            return send(res, 200, { task: result.task, relatedFound: result.relatedFound });
+          } catch (err) {
+            return badRequest(res, (err as Error).message);
+          }
+        }
+        return methodNotAllowed(res);
+      }
+
+      const taskByIdMatch = url.pathname.match(/^\/api\/harness\/tasks\/([^/]+)$/);
+      if (taskByIdMatch) {
+        const taskId = taskByIdMatch[1]!;
+        if (req.method === 'GET') {
+          try { return send(res, 200, harnessLib.getTask(deps.db, taskId)); }
+          catch { return send(res, 404, { error: 'unknown_task' }); }
+        }
+        return methodNotAllowed(res);
+      }
+
+      const advanceMatch = url.pathname.match(/^\/api\/harness\/tasks\/([^/]+)\/advance$/);
+      if (advanceMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let parsed: { toStage?: 'implement' | 'archived'; implementBaseCommit?: string; message?: string };
+        try { parsed = JSON.parse(ctx.body); } catch { return badRequest(res, 'invalid JSON'); }
+        if (!parsed.toStage) return badRequest(res, 'toStage is required');
+        try {
+          const updated = harnessLib.advanceStage(deps.db, {
+            taskId: advanceMatch[1]!,
+            toStage: parsed.toStage,
+            ...(parsed.implementBaseCommit ? { implementBaseCommit: parsed.implementBaseCommit } : {}),
+            ...(parsed.message ? { message: parsed.message } : {}),
+          });
+          return send(res, 200, updated);
+        } catch (err) {
+          return badRequest(res, (err as Error).message);
+        }
+      }
+
+      const reviewSpawnMatch = url.pathname.match(/^\/api\/harness\/tasks\/([^/]+)\/review$/);
+      if (reviewSpawnMatch) {
+        if (req.method === 'GET') {
+          // List reviews for the task (newest first).
+          const reviews = harnessReviewRepos.listReviewsForTask(deps.db, reviewSpawnMatch[1]!);
+          return send(res, 200, { reviews });
+        }
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.runHarnessReview) {
+          return send(res, 501, {
+            error: 'not_implemented',
+            message: 'review subprocess factory not wired (claude CLI may be missing)',
+          });
+        }
+        // Run review asynchronously is tempting but MVP: await it. The
+        // subprocess timeout is bounded; the renderer fetches with a long
+        // timeout. If we ever care about backgrounding, switch to a job
+        // queue + status polling.
+        try {
+          const review = await deps.runHarnessReview(reviewSpawnMatch[1]!);
+          return send(res, 200, review);
+        } catch (err) {
+          return internalError(res, err);
+        }
+      }
+
+      const reviewByIdMatch = url.pathname.match(/^\/api\/harness\/reviews\/([^/]+)$/);
+      if (reviewByIdMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const review = harnessReviewRepos.getReview(deps.db, reviewByIdMatch[1]!);
+        if (!review) return send(res, 404, { error: 'unknown_review' });
+        return send(res, 200, review);
+      }
+
+      const pushReviewMatch = url.pathname.match(
+        /^\/api\/harness\/tasks\/([^/]+)\/push-review\/([^/]+)$/,
+      );
+      if (pushReviewMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        try {
+          const result = harnessLib.pushReviewToImplementChat(
+            deps.db,
+            { taskId: pushReviewMatch[1]!, reviewId: pushReviewMatch[2]! },
+            deps.events,
+          );
+          return send(res, 200, result);
+        } catch (err) {
+          return badRequest(res, (err as Error).message);
+        }
+      }
+
+      const archiveMatch = url.pathname.match(/^\/api\/harness\/tasks\/([^/]+)\/archive$/);
+      if (archiveMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let parsed: {
+          oneLiner?: string;
+          entities?: string[]; filesTouched?: string[]; modules?: string[];
+          patterns?: string[]; downstream?: string[]; rulesApplied?: string[];
+        };
+        try { parsed = JSON.parse(ctx.body); } catch { return badRequest(res, 'invalid JSON'); }
+        if (!parsed.oneLiner) return badRequest(res, 'oneLiner is required');
+        try {
+          const result = harnessLib.archiveTask(deps.db, {
+            taskId: archiveMatch[1]!,
+            oneLiner: parsed.oneLiner,
+            ...(parsed.entities ? { entities: parsed.entities } : {}),
+            ...(parsed.filesTouched ? { filesTouched: parsed.filesTouched } : {}),
+            ...(parsed.modules ? { modules: parsed.modules } : {}),
+            ...(parsed.patterns ? { patterns: parsed.patterns } : {}),
+            ...(parsed.downstream ? { downstream: parsed.downstream } : {}),
+            ...(parsed.rulesApplied ? { rulesApplied: parsed.rulesApplied } : {}),
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          return badRequest(res, (err as Error).message);
+        }
+      }
+
+      const reindexMatch = url.pathname.match(/^\/api\/harness\/tasks\/([^/]+)\/reindex$/);
+      if (reindexMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let parsed: { projectPath?: string };
+        try { parsed = JSON.parse(ctx.body); } catch { return badRequest(res, 'invalid JSON'); }
+        if (!parsed.projectPath) return badRequest(res, 'projectPath required');
+        const result = harnessLib.reindexTask(deps.db, parsed.projectPath, reindexMatch[1]!);
+        if (!result) return send(res, 404, { error: 'task_md_not_found' });
+        return send(res, 200, result);
+      }
+
+      if (url.pathname === '/api/harness/archive') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const projectPath = url.searchParams.get('projectPath') ?? undefined;
+        const tokens = (url.searchParams.getAll('q') || []).filter((t) => t.length > 0);
+        if (tokens.length > 0) {
+          return send(res, 200, {
+            cards: harnessLib.searchArchive(deps.db, {
+              tokens,
+              ...(projectPath ? { projectPath } : {}),
+            }),
+          });
+        }
+        return send(res, 200, {
+          cards: harnessLib.listArchiveCards(
+            deps.db,
+            projectPath ? { projectPath } : {},
+          ),
+        });
       }
 
       return notFound(res);

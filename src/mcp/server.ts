@@ -46,6 +46,23 @@ import { summarizeCampaign, type LlmClient } from '../summarizer/campaign.js';
 import { deleteChunkById, getChunksForRole } from '../storage/repos/roles.js';
 import { listCampaigns } from '../storage/repos/campaigns.js';
 import { getRequirement } from '../storage/repos/requirements.js';
+import {
+  advanceStage,
+  appendStageLog,
+  archiveTask,
+  createTask,
+  getTask as getHarnessTaskCore,
+  listTasks as listHarnessTasksCore,
+  pushReviewToImplementChat,
+  reindexTask,
+  searchArchive,
+  updateField,
+  type UpdateFieldName,
+  type UpdateFieldValue,
+} from '../harness/library.js';
+import { getReview as getHarnessReviewRow, listReviewsForTask } from '../storage/repos/harness.js';
+import { runReview, type RunReviewDeps } from '../harness/review-runner.js';
+import type { HarnessStage } from '../storage/types.js';
 
 export interface McpServerDeps {
   db: Database.Database;
@@ -75,6 +92,19 @@ export interface McpServerDeps {
    * exposed through the MCP surface so non-trainer chats benefit too.
    */
   larkCli?: import('../channel/lark/cli-runner.js').LarkCliRunner;
+  /**
+   * Phase 67: returns the global Harness conventions text. helm Settings
+   * stores the string; the orchestrator wires this getter so reviewer
+   * subprocesses always read the latest. When absent, conventions are
+   * empty (reviewer is told "no conventions configured").
+   */
+  harnessConventions?: () => Promise<string> | string;
+  /**
+   * Phase 67: optional override for the review subprocess runner. Tests
+   * substitute a fake (e.g. a deterministic stub) so they don't shell out
+   * to `claude`.
+   */
+  runReviewOverride?: typeof runReview;
 }
 
 export interface McpServerInfo {
@@ -639,6 +669,276 @@ export function createMcpServer(
     } catch (err) {
       return errorResult(`read_lark_doc failed: ${(err as Error).message}`);
     }
+  });
+
+  // ── Harness toolchain (Phase 67) ────────────────────────────────────────
+  //
+  // These ten tools drive the on-disk Harness workflow scaffold. Source of
+  // truth lives in `.harness/` files in the user's project; helm's DB is
+  // the index. Stages are forward-monotonic — `harness_advance_stage`
+  // refuses to go backwards.
+  //
+  // The reviewer chokepoint is `harness_run_review`, which spawns a fresh
+  // claude subprocess with Intent + Structure + diff + global conventions
+  // ONLY. Decisions / Stage Log are deliberately excluded (information
+  // isolation). See assembleReviewerPayload in templates/review.ts.
+
+  server.registerTool('harness_create_task', {
+    description:
+      'Create a new Harness task. Creates `.harness/tasks/<taskId>/task.md` on disk + a DB index row, '
+      + 'and runs an exact-match archive lookup over the intent text to populate Related Tasks. '
+      + 'Returns the new task plus any related archive cards found.',
+    inputSchema: {
+      taskId: z.string().describe('YYYY-MM-DD-<kebab-slug> format. Caller computes it.'),
+      title: z.string(),
+      projectPath: z.string().describe('Absolute path to the user\'s project root.'),
+      hostSessionId: z.string().optional().describe('Cursor host session this task is bound to (optional at create-time).'),
+      intent: z.object({
+        background: z.string().optional(),
+        objective: z.string().optional(),
+        scopeIn: z.array(z.string()).optional(),
+        scopeOut: z.array(z.string()).optional(),
+      }).optional(),
+    },
+  }, async ({ taskId, title, projectPath, hostSessionId, intent }) => {
+    try {
+      const intentInput = intent
+        ? {
+            ...(intent.background !== undefined ? { background: intent.background } : {}),
+            ...(intent.objective !== undefined ? { objective: intent.objective } : {}),
+            ...(intent.scopeIn !== undefined ? { scopeIn: intent.scopeIn } : {}),
+            ...(intent.scopeOut !== undefined ? { scopeOut: intent.scopeOut } : {}),
+          }
+        : undefined;
+      const result = createTask(deps.db, {
+        taskId, title, projectPath,
+        ...(hostSessionId ? { hostSessionId } : {}),
+        ...(intentInput ? { intent: intentInput } : {}),
+      });
+      return jsonResult({
+        taskId: result.task.id,
+        currentStage: result.task.currentStage,
+        relatedFound: result.relatedFound,
+        message: result.relatedFound.length
+          ? `Created. Found ${result.relatedFound.length} related archive(s) — surfaced in task.md → Related Tasks.`
+          : 'Created. No related archives.',
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_get_task', {
+    description: 'Read the full Harness task state (Intent / Structure / Decisions / Risks / Stage Log).',
+    inputSchema: { taskId: z.string() },
+  }, async ({ taskId }) => {
+    try { return jsonResult(getHarnessTaskCore(deps.db, taskId)); }
+    catch (err) { return errorResult((err as Error).message); }
+  });
+
+  server.registerTool('harness_list_tasks', {
+    description: 'List Harness tasks. Filter by projectPath when provided; returns most-recently-created first.',
+    inputSchema: { projectPath: z.string().optional() },
+  }, async ({ projectPath }) => {
+    return jsonResult(listHarnessTasksCore(deps.db, projectPath ? { projectPath } : {}));
+  });
+
+  server.registerTool('harness_update_field', {
+    description:
+      'Update a single section of task.md: title, intent, structure, decisions, risks, planned_files, host_session_id, related_tasks. '
+      + 'For intent/structure, partial updates merge with existing values. For list-typed fields, value REPLACES the whole list — '
+      + 'callers wanting to append should read first then submit the appended list.',
+    inputSchema: {
+      taskId: z.string(),
+      field: z.enum([
+        'title', 'intent', 'structure', 'decisions', 'risks',
+        'planned_files', 'host_session_id', 'related_tasks',
+      ]),
+      // value is intentionally untyped (z.unknown) — the library's applyFieldUpdate
+      // does the per-field validation. Surfacing all per-field shapes here would
+      // bloat the schema without adding safety.
+      value: z.unknown(),
+    },
+  }, async ({ taskId, field, value }) => {
+    try {
+      const updated = updateField(
+        deps.db, taskId,
+        field as UpdateFieldName,
+        value as UpdateFieldValue,
+      );
+      return jsonResult({ taskId: updated.id, field, currentStage: updated.currentStage });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_append_stage_log', {
+    description: 'Append a one-line entry to the task\'s Stage Log. Use after every substantive turn.',
+    inputSchema: { taskId: z.string(), message: z.string() },
+  }, async ({ taskId, message }) => {
+    try {
+      const updated = appendStageLog(deps.db, taskId, message);
+      return jsonResult({ taskId: updated.id, entries: updated.stageLog.length });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_advance_stage', {
+    description:
+      'Advance the Harness task forward one stage. Forward-only; refuses any backwards move. '
+      + 'When transitioning to "implement", `implementBaseCommit` is REQUIRED (caller passes the current git HEAD). '
+      + 'Allowed transitions: new_feature → implement → archived.',
+    inputSchema: {
+      taskId: z.string(),
+      toStage: z.enum(['implement', 'archived']),
+      implementBaseCommit: z.string().optional().describe('Required for toStage="implement". The current git HEAD SHA at the user\'s project root.'),
+      message: z.string().optional(),
+    },
+  }, async ({ taskId, toStage, implementBaseCommit, message }) => {
+    try {
+      const updated = advanceStage(deps.db, {
+        taskId,
+        toStage: toStage as HarnessStage,
+        ...(implementBaseCommit ? { implementBaseCommit } : {}),
+        ...(message ? { message } : {}),
+      });
+      return jsonResult({
+        taskId: updated.id,
+        currentStage: updated.currentStage,
+        implementBaseCommit: updated.implementBaseCommit,
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_run_review', {
+    description:
+      'Spawn a fresh `claude -p` reviewer subprocess for the task. The reviewer sees Intent + Structure + diff + global conventions ONLY '
+      + '(Decisions and Stage Log are deliberately excluded — information isolation contract). '
+      + 'Returns the review row with status + reportText. Diff = HEAD vs implement_base_commit recorded when the task entered implement.',
+    inputSchema: { taskId: z.string() },
+  }, async ({ taskId }) => {
+    try {
+      const reviewDeps: RunReviewDeps = {
+        db: deps.db,
+        ...(deps.harnessConventions
+          ? { getConventions: async () => String(await deps.harnessConventions!()) }
+          : {}),
+      };
+      const review = await (deps.runReviewOverride ?? runReview)(reviewDeps, { taskId });
+      return jsonResult({
+        reviewId: review.id,
+        status: review.status,
+        reportText: review.reportText,
+        baseCommit: review.baseCommit,
+        headCommit: review.headCommit,
+        error: review.error,
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_push_review_to_implement', {
+    description:
+      'Push a completed review report into the implement chat\'s queue. The report lands in the agent\'s context the next time it stops to think (host_stop long-poll). Idempotent: pushing the same review twice enqueues two copies.',
+    inputSchema: {
+      taskId: z.string(),
+      reviewId: z.string(),
+    },
+  }, async ({ taskId, reviewId }) => {
+    try {
+      const result = pushReviewToImplementChat(deps.db, { taskId, reviewId });
+      return jsonResult(result);
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_get_review_report', {
+    description: 'Fetch a previously-spawned review by id. Returns the report text + status.',
+    inputSchema: { reviewId: z.string() },
+  }, async ({ reviewId }) => {
+    const r = getHarnessReviewRow(deps.db, reviewId);
+    if (!r) return errorResult(`Review not found: ${reviewId}`);
+    return jsonResult(r);
+  });
+
+  server.registerTool('harness_list_reviews', {
+    description: 'List all review attempts for a task, newest first.',
+    inputSchema: { taskId: z.string() },
+  }, async ({ taskId }) => {
+    return jsonResult(listReviewsForTask(deps.db, taskId));
+  });
+
+  server.registerTool('harness_archive', {
+    description:
+      'Archive a Harness task: writes `.harness/archive/<taskId>.md` and inserts the structured index row. '
+      + 'Archive cards exist for exact-match retrieval — fill entities / files_touched / modules thoughtfully so future tasks find this one. '
+      + 'Idempotent: re-archiving regenerates the card from the latest input.',
+    inputSchema: {
+      taskId: z.string(),
+      oneLiner: z.string(),
+      entities: z.array(z.string()).optional(),
+      filesTouched: z.array(z.string()).optional(),
+      modules: z.array(z.string()).optional(),
+      patterns: z.array(z.string()).optional(),
+      downstream: z.array(z.string()).optional(),
+      rulesApplied: z.array(z.string()).optional(),
+    },
+  }, async ({ taskId, oneLiner, entities, filesTouched, modules, patterns, downstream, rulesApplied }) => {
+    try {
+      const result = archiveTask(deps.db, {
+        taskId, oneLiner,
+        ...(entities !== undefined ? { entities } : {}),
+        ...(filesTouched !== undefined ? { filesTouched } : {}),
+        ...(modules !== undefined ? { modules } : {}),
+        ...(patterns !== undefined ? { patterns } : {}),
+        ...(downstream !== undefined ? { downstream } : {}),
+        ...(rulesApplied !== undefined ? { rulesApplied } : {}),
+      });
+      return jsonResult({
+        taskId: result.task.id,
+        currentStage: result.task.currentStage,
+        archiveCard: result.card,
+      });
+    } catch (err) {
+      return errorResult((err as Error).message);
+    }
+  });
+
+  server.registerTool('harness_search_archive', {
+    description:
+      'Token-based exact-match retrieval over Harness archive cards. ANY of the supplied tokens '
+      + 'matching ANY of {one_liner, entities, files_touched, modules, patterns, downstream, rules_applied} '
+      + 'counts as a hit. Optionally scope to a single project_path. Returns a list of cards, most recent first.',
+    inputSchema: {
+      tokens: z.array(z.string()).min(1),
+      projectPath: z.string().optional(),
+      limit: z.number().min(1).max(50).optional(),
+    },
+  }, async ({ tokens, projectPath, limit }) => {
+    return jsonResult(searchArchive(deps.db, {
+      tokens,
+      ...(projectPath ? { projectPath } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    }));
+  });
+
+  server.registerTool('harness_reindex_task', {
+    description:
+      'Re-read `.harness/tasks/<taskId>/task.md` from disk and update helm\'s DB index. '
+      + 'Use after the user hand-edits task.md outside helm\'s tools. Returns null when the file is missing.',
+    inputSchema: {
+      taskId: z.string(),
+      projectPath: z.string(),
+    },
+  }, async ({ taskId, projectPath }) => {
+    const t = reindexTask(deps.db, projectPath, taskId);
+    if (!t) return errorResult(`task.md not found at ${projectPath}/.harness/tasks/${taskId}/task.md`);
+    return jsonResult({ taskId: t.id, currentStage: t.currentStage });
   });
 
   return server;

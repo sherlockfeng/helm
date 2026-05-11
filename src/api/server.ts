@@ -1427,8 +1427,16 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
         ...(result.stderr ? { stderr: result.stderr } : {}),
       });
     } catch (err) {
-      deps.logger?.warn('role_train_chat_failed', { data: { error: (err as Error).message } });
-      send(ctx.response, 502, { error: 'cli_failed', message: (err as Error).message });
+      const { interpretClaudeError } = await import('../cli-agent/claude.js');
+      const interpreted = interpretClaudeError(err);
+      deps.logger?.warn('role_train_chat_failed', {
+        data: { error: interpreted.raw, hint: interpreted.hint },
+      });
+      send(ctx.response, 502, {
+        error: 'cli_failed',
+        message: interpreted.message,
+        hint: interpreted.hint,
+      });
     } finally {
       // Stateless contract: we re-create the agent on every turn (cheap —
       // just a tmp-dir + JSON write), so dispose immediately to clean up

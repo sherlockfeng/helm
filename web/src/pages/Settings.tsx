@@ -22,6 +22,27 @@ import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
+/**
+ * Curated list of Cursor models surfaced in the Settings dropdown. Cursor
+ * doesn't publish a programmatic "list available models" endpoint, so this
+ * is maintained manually — when Cursor ships a new model, add it here.
+ *
+ * `auto` (the default) lets Cursor pick per request. Listing the others
+ * gives users a 1-click choice for the common cases without locking out
+ * anything else: the dropdown has a "Custom…" escape hatch that flips
+ * back to a free-text input.
+ */
+const KNOWN_CURSOR_MODELS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'auto', label: 'auto (Cursor decides)' },
+  { id: 'claude-4.7-opus', label: 'Claude Opus 4.7' },
+  { id: 'claude-4.6-sonnet', label: 'Claude Sonnet 4.6' },
+  { id: 'claude-4.5-haiku', label: 'Claude Haiku 4.5' },
+  { id: 'gpt-5.1', label: 'GPT-5.1' },
+  { id: 'gpt-5', label: 'GPT-5' },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { id: 'grok-4-fast', label: 'Grok 4 Fast' },
+];
+
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
@@ -210,15 +231,10 @@ export function SettingsPage() {
             <option value="cloud">cloud (CURSOR_API_KEY required)</option>
           </select>
         </label>
-        <label className="helm-form-row">
-          <div className="muted">Model</div>
-          <input
-            type="text"
-            value={draft.cursor.model}
-            placeholder="auto"
-            onChange={(e) => update((c) => { c.cursor.model = e.target.value; })}
-          />
-        </label>
+        <CursorModelField
+          value={draft.cursor.model}
+          onChange={(model) => update((c) => { c.cursor.model = model; })}
+        />
         {draft.cursor.mode === 'cloud' && (
           <label className="helm-form-row">
             <div className="muted">API key</div>
@@ -401,5 +417,65 @@ export function SettingsPage() {
         )}
       </article>
     </>
+  );
+}
+
+/**
+ * Model picker for Cursor: dropdown of KNOWN_CURSOR_MODELS + a "Custom…"
+ * option that flips back to a free-text input. The free-text mode is
+ * sticky for the current edit session — once the user picks Custom we
+ * keep showing the text input until they switch back to a known model
+ * via the dropdown.
+ *
+ * The component derives "is custom" from whether the saved value is in
+ * KNOWN_CURSOR_MODELS, plus a local override the user can toggle. That
+ * way an existing config with model="some-future-cursor-thing" naturally
+ * renders in custom mode without losing the value.
+ */
+function CursorModelField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (model: string) => void;
+}) {
+  const isKnown = KNOWN_CURSOR_MODELS.some((m) => m.id === value);
+  const [showCustom, setShowCustom] = useState(!isKnown);
+
+  const useCustom = showCustom || !isKnown;
+
+  return (
+    <label className="helm-form-row">
+      <div className="muted">Model</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select
+          value={useCustom ? '__custom__' : value}
+          onChange={(e) => {
+            if (e.target.value === '__custom__') {
+              setShowCustom(true);
+              // Don't clobber the existing model string — let the user edit it.
+              return;
+            }
+            setShowCustom(false);
+            onChange(e.target.value);
+          }}
+          style={{ minWidth: 220 }}
+        >
+          {KNOWN_CURSOR_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+          <option value="__custom__">Custom…</option>
+        </select>
+        {useCustom && (
+          <input
+            type="text"
+            value={value}
+            placeholder="model id (e.g. cursor-fast)"
+            onChange={(e) => onChange(e.target.value)}
+            style={{ flex: 1, minWidth: 180 }}
+          />
+        )}
+      </div>
+    </label>
   );
 }

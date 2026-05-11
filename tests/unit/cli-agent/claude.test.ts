@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ClaudeCodeAgent, serializeTranscript, detectClaudeCli } from '../../../src/cli-agent/claude.js';
+import { ClaudeCodeAgent, serializeTranscript, detectClaudeCli, interpretClaudeError } from '../../../src/cli-agent/claude.js';
 
 interface RecordedSpawn {
   bin: string;
@@ -215,5 +215,69 @@ describe('detectClaudeCli', () => {
       exec: exec as any,
     });
     expect(r).toBeNull();
+  });
+});
+
+describe('interpretClaudeError', () => {
+  it('detects "binary not on PATH" via ENOENT', () => {
+    const r = interpretClaudeError(Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }));
+    expect(r.hint).toBe('install');
+    expect(r.message).toMatch(/code\.claude\.com/);
+    expect(r.message).toMatch(/install/i);
+  });
+
+  it('detects "binary not on PATH" via stderr "command not found"', () => {
+    const err = new Error('Command failed');
+    (err as Error & { stderr: string }).stderr = '/bin/sh: claude: command not found\n';
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('install');
+  });
+
+  it('detects "needs login" via "please log in"', () => {
+    const err = new Error('Command failed with exit code 1');
+    (err as Error & { stderr: string }).stderr = 'Error: Please log in. Run `claude login` to authenticate.\n';
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('login');
+    expect(r.message).toMatch(/claude login/);
+  });
+
+  it('detects "needs login" via "Unauthorized"', () => {
+    const err = new Error('exit 1');
+    (err as Error & { stderr: string }).stderr = 'HTTP 401 Unauthorized\n';
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('login');
+  });
+
+  it('detects "needs login" via "invalid api key"', () => {
+    const err = new Error('exit 1');
+    (err as Error & { stderr: string }).stderr = 'Invalid API key provided\n';
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('login');
+  });
+
+  it('returns the raw message when no pattern matches', () => {
+    const err = new Error('something exploded');
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('unknown');
+    expect(r.message).toBe('something exploded');
+  });
+
+  it('install hint takes precedence over login when both signals present', () => {
+    // ENOENT in code dominates: if the binary literally isn't there,
+    // an "unauthorized" line in stderr is noise.
+    const err = Object.assign(new Error('spawn claude ENOENT'), {
+      code: 'ENOENT',
+      stderr: '401 unauthorized',
+    });
+    const r = interpretClaudeError(err);
+    expect(r.hint).toBe('install');
+  });
+
+  it('preserves the raw stderr in .raw for debug surfaces', () => {
+    const err = new Error('exit 1');
+    (err as Error & { stderr: string }).stderr = 'sensitive: please login\nstacktrace line 1\nstacktrace line 2';
+    const r = interpretClaudeError(err);
+    expect(r.raw).toContain('please login');
+    expect(r.raw).toContain('stacktrace line 1');
   });
 });

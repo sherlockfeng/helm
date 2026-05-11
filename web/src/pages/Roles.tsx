@@ -377,7 +377,17 @@ function RoleTrainChatModal({
       const tail = r.stderr?.trim() ?? '';
       setStderrTail(tail.length > 0 ? tail.slice(-400) : null);
     } catch (e) {
-      const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : (e as Error).message;
+      // The HTTP layer (handleRoleTrainChat) interprets claude CLI failures
+      // via interpretClaudeError() and returns `{ message, hint }`. We
+      // prefer the interpreted message because raw `claude` stderr is
+      // typically an ENOENT dump or a generic "401" line — not actionable.
+      let msg: string;
+      if (e instanceof ApiError) {
+        const body = e.body as { message?: string } | undefined;
+        msg = body?.message ?? e.message ?? `${e.status}`;
+      } else {
+        msg = (e as Error).message;
+      }
       setErr(msg);
       // Roll back the optimistic user message so the user can retry from the input.
       setMessages(messages);
@@ -399,6 +409,12 @@ function RoleTrainChatModal({
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
+        // The page-content rule `.helm-main > * { max-width: ... }` was
+        // clamping this fixed-positioned overlay to the body container
+        // width because the modal renders inside the Roles fragment (which
+        // is a direct child of .helm-main). Explicit override keeps the
+        // overlay viewport-sized so the white card actually centers.
+        maxWidth: 'none',
       }}
       onClick={onClose}
     >

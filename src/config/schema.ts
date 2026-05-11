@@ -83,6 +83,20 @@ const HarnessConfigSchema = z.object({
   conventions: z.string().default(''),
 }).strict();
 
+// Phase 68: global default-engine selector. Picks which LLM engine drives
+// the summarizer / Harness reviewer / role-trainer modal. `EngineRouter`
+// reads this field at every call site so a Settings save takes effect
+// without an orchestrator restart.
+//
+// Why string-literal union + zod default rather than letting it be optional:
+// the rest of helm reads `liveConfig.engine.default` directly, so a missing
+// value would force defensive coalescing in every call site. Default to
+// 'claude' for backward-compat — that's the engine the existing
+// reviewer / role-trainer paths assume.
+const EngineConfigSchema = z.object({
+  default: z.enum(['cursor', 'claude']).default('claude'),
+}).strict();
+
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   approval: ApprovalConfigSchema.default({}),
@@ -91,6 +105,7 @@ export const HelmConfigSchema = z.object({
   docFirst: DocFirstConfigSchema.default({}),
   cursor: CursorConfigSchema.default({}),
   harness: HarnessConfigSchema.default({}),
+  engine: EngineConfigSchema.default({}),
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

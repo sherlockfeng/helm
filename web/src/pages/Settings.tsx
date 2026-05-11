@@ -160,6 +160,28 @@ export function SettingsPage() {
         </div>
       )}
 
+      {/* Phase 68: global default engine. Drives summarizer / Harness
+          reviewer / Roles training-chat. Placed at the top of Settings
+          because the rest of the page mostly tunes engine-specific knobs
+          (Cursor mode/key, Harness conventions). */}
+      <h3>Default engine</h3>
+      <article className="helm-card">
+        <DefaultEngineField
+          value={draft.engine?.default ?? 'claude'}
+          onChange={(id) => update((c) => {
+            if (!c.engine) c.engine = { default: id };
+            else c.engine.default = id;
+          })}
+        />
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+          Picks which LLM engine drives the Campaign summarizer, the
+          Harness reviewer subprocess, and the Roles "Train via chat"
+          modal. Settings save takes effect on the next request — no
+          restart needed. Switching engines does NOT migrate already-saved
+          summaries or review reports.
+        </p>
+      </article>
+
       {/* P1-3: section headings outside cards, max-width container */}
       <h3>HTTP API</h3>
       <article className="helm-card">
@@ -426,11 +448,6 @@ export function SettingsPage() {
  * sticky for the current edit session — once the user picks Custom we
  * keep showing the text input until they switch back to a known model
  * via the dropdown.
- *
- * The component derives "is custom" from whether the saved value is in
- * KNOWN_CURSOR_MODELS, plus a local override the user can toggle. That
- * way an existing config with model="some-future-cursor-thing" naturally
- * renders in custom mode without losing the value.
  */
 function CursorModelField({
   value,
@@ -453,7 +470,6 @@ function CursorModelField({
           onChange={(e) => {
             if (e.target.value === '__custom__') {
               setShowCustom(true);
-              // Don't clobber the existing model string — let the user edit it.
               return;
             }
             setShowCustom(false);
@@ -477,5 +493,65 @@ function CursorModelField({
         )}
       </div>
     </label>
+  );
+}
+
+/**
+ * Default-engine picker (Phase 68). Renders two radio rows — one per
+ * engine — alongside a "ready / missing" status line fetched from
+ * `/api/engine/health`. The status line includes the actionable hint
+ * ("Run `claude login`" / "Install cursor-agent CLI") when ready=false,
+ * so the user can fix the issue without leaving Settings.
+ */
+function DefaultEngineField({
+  value,
+  onChange,
+}: {
+  value: 'cursor' | 'claude';
+  onChange: (id: 'cursor' | 'claude') => void;
+}) {
+  const { data, loading, error } = useApi(() => helmApi.engineHealth());
+  const healths = data?.engines ?? [];
+  const find = (id: 'cursor' | 'claude') => healths.find((h) => h.engine === id);
+
+  function RadioRow({ id, label }: { id: 'cursor' | 'claude'; label: string }) {
+    const h = find(id);
+    const detailMissing = loading
+      ? 'detecting…'
+      : error
+        ? 'health unknown'
+        : h
+          ? (h.ready ? `ready (${h.detail})` : h.detail)
+          : 'unknown';
+    return (
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+        <input
+          type="radio"
+          name="default-engine"
+          value={id}
+          checked={value === id}
+          onChange={() => onChange(id)}
+          style={{ marginTop: 3 }}
+        />
+        <span style={{ flex: 1 }}>
+          <strong>{label}</strong>
+          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
+            {h?.ready ? '· ✓' : '· ⚠'} {detailMissing}
+          </span>
+          {h && !h.ready && h.hint && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+              <em>→ {h.hint}</em>
+            </div>
+          )}
+        </span>
+      </label>
+    );
+  }
+
+  return (
+    <div>
+      <RadioRow id="claude" label="Claude Code" />
+      <RadioRow id="cursor" label="Cursor" />
+    </div>
   );
 }

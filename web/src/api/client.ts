@@ -253,6 +253,10 @@ export const helmApi = {
       'POST', '/api/diagnostics',
     ),
 
+  // ── Engine health (Phase 68) ──
+  engineHealth: () =>
+    request<{ engines: import('./types.js').EngineHealth[] }>('GET', '/api/engine/health'),
+
   // ── Harness toolchain (Phase 67) ──
   harnessTasks: (projectPath?: string) =>
     request<{ tasks: HarnessTaskView[] }>(

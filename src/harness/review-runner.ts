@@ -32,6 +32,7 @@ import {
 } from '../storage/repos/harness.js';
 import type { HarnessReview } from '../storage/types.js';
 import { assembleReviewerPayload, REVIEW_SYSTEM_PROMPT } from './templates/review.js';
+import { interpretClaudeError } from '../cli-agent/claude.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -118,10 +119,14 @@ export async function runReview(
     updateReview(deps.db, completed);
     return completed;
   } catch (err) {
+    // Translate raw claude-subprocess errors into actionable next-step
+    // hints (e.g. "run `claude login`" / "install claude CLI") so the
+    // helm UI can surface something useful instead of an ENOENT dump.
+    const interpreted = interpretClaudeError(err);
     const failed: HarnessReview = {
       ...pending,
       status: 'failed',
-      error: (err as Error).message,
+      error: interpreted.message,
       completedAt: new Date().toISOString(),
     };
     updateReview(deps.db, failed);

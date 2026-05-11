@@ -175,6 +175,64 @@ export class ClaudeCodeAgent {
   }
 }
 
+/**
+ * Classify a `claude` CLI failure and produce a user-actionable message.
+ *
+ * `claude` errors land here in two shapes:
+ *   1. `execFileAsync` throws when the binary isn't on PATH — we see
+ *      `code='ENOENT'` and an obvious message.
+ *   2. `claude` exits non-zero (e.g. auth missing) — the thrown error has
+ *      `.stderr` from the subprocess; we scan it for keywords.
+ *
+ * The patterns are deliberately generous because claude's CLI wording
+ * varies across versions. False positives here just produce a slightly
+ * more verbose error message than the raw text, which is fine.
+ */
+export type ClaudeErrorHint = 'install' | 'login' | 'unknown';
+
+export interface InterpretedClaudeError {
+  /** User-facing message — concrete next action when we recognized the error. */
+  message: string;
+  /** Tag the renderer / UI can use to show targeted help (e.g. a "Run `claude login`" button). */
+  hint: ClaudeErrorHint;
+  /** The original error message (and stderr tail), for the debug panel. */
+  raw: string;
+}
+
+const NEEDS_LOGIN_RE = /\b(login required|please log[\s-]?in|sign[\s-]?in|not authenticated|unauthorized|invalid api key|missing api key|api[\s-]?key.*(missing|required|not set))\b|\b401\b/i;
+const NOT_INSTALLED_RE = /\bENOENT\b|\bcommand not found\b|\bno such file or directory\b|\bspawn.*ENOENT\b/i;
+
+export function interpretClaudeError(err: unknown): InterpretedClaudeError {
+  const e = err as { message?: string; stderr?: unknown; stdout?: unknown; code?: string };
+  const stderr = e.stderr ? String(e.stderr) : '';
+  const stdout = e.stdout ? String(e.stdout) : '';
+  const rawMessage = e.message ?? String(err);
+  const haystack = `${rawMessage}\n${stderr}\n${stdout}`;
+  const raw = [rawMessage, stderr.trim()].filter((s) => s.length > 0).join('\n');
+
+  if (e.code === 'ENOENT' || NOT_INSTALLED_RE.test(haystack)) {
+    return {
+      message:
+        'claude CLI not found on PATH. Install it from https://code.claude.com '
+        + '(macOS: `brew install --cask claude`), then run `claude login` once and retry. '
+        + "helm holds zero API keys for this path — claude's own auth runs the model.",
+      hint: 'install',
+      raw,
+    };
+  }
+  if (NEEDS_LOGIN_RE.test(haystack)) {
+    return {
+      message:
+        'claude CLI is installed but not authenticated. Open a terminal, run `claude login`, '
+        + 'complete the browser flow, then retry. helm holds zero API keys for this path — '
+        + "claude's own auth runs the model.",
+      hint: 'login',
+      raw,
+    };
+  }
+  return { message: rawMessage, hint: 'unknown', raw };
+}
+
 /** Format a conversation as a single text prompt. Exported for tests. */
 export function serializeTranscript(messages: readonly ChatMessage[]): string {
   // All turns except the last get framed; the last user message is the

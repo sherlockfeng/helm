@@ -249,7 +249,11 @@ code, pre {
   padding: 28px 32px;
 }
 
-.helm-main > * { max-width: var(--container-max); }
+/* Page-content width clamp. Excludes `[role="dialog"]` so any future
+ * modal that sits at the top of a page's fragment isn't accidentally
+ * sized to the body container — fixed-positioned overlays need the
+ * full viewport. */
+.helm-main > *:not([role="dialog"]) { max-width: var(--container-max); }
 .helm-main > h2 {
   margin: 0 0 4px;
   font-size: 22px;

@@ -21,7 +21,11 @@ export type AppEvent =
   | { type: 'session.closed'; hostSessionId: string }
   | { type: 'binding.created'; binding: ChannelBinding }
   | { type: 'binding.removed'; bindingId: string }
-  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number };
+  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number }
+  // Phase 70: fired when a `host_stop` drain pulls one or more messages
+  // off the queue. Listeners (notably the Active Chats UI) use it to
+  // clear the "📨 N queued" badge without waiting for the 30s reconcile.
+  | { type: 'channel.message_consumed'; hostSessionId: string; count: number };
 
 export type AppEventType = AppEvent['type'];
 export type AppEventOf<T extends AppEventType> = Extract<AppEvent, { type: T }>;

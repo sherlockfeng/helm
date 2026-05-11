@@ -47,6 +47,7 @@ import {
   getPendingBind,
   listAllChannelBindings,
   listPendingBinds,
+  pendingMessageCountsByHostSession,
 } from '../storage/repos/channel-bindings.js';
 import {
   getChunksForRole,
@@ -357,7 +358,16 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/active-chats') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const sessions = listActiveSessions(deps.db);
-        return send(res, 200, { chats: sessions });
+        // Phase 70: hydrate each chat with its current pending-message
+        // depth so the UI can show a "queued" badge. One aggregate query
+        // covers all rows; chats with no queue get omitted from the map
+        // and fall back to undefined (the renderer treats undefined as 0).
+        const queueDepth = pendingMessageCountsByHostSession(deps.db);
+        const enriched = sessions.map((s) => ({
+          ...s,
+          ...(queueDepth[s.id] ? { queuedMessageCount: queueDepth[s.id] } : {}),
+        }));
+        return send(res, 200, { chats: enriched });
       }
 
       // Phase 25: bind / unbind a chat to a single role (legacy single-select

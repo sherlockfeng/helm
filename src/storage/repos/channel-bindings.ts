@@ -126,6 +126,48 @@ export function pendingMessageCount(db: Database.Database, bindingId: string): n
   return row.cnt;
 }
 
+/**
+ * Phase 70: total queued (unconsumed) messages across every binding owned
+ * by a host_session. Used by the Active Chats UI to show a "📨 N queued"
+ * badge so the user knows messages are waiting for Cursor's next
+ * `host_stop` drain.
+ *
+ * Joins channel_bindings on host_session_id and sums pending messages.
+ * Returns 0 when there are no bindings for the session.
+ */
+export function pendingMessageCountForHostSession(
+  db: Database.Database,
+  hostSessionId: string,
+): number {
+  const row = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM channel_message_queue q
+    JOIN channel_bindings b ON b.id = q.binding_id
+    WHERE b.host_session_id = ? AND q.consumed_at IS NULL
+  `).get(hostSessionId) as { cnt: number };
+  return row.cnt;
+}
+
+/**
+ * Phase 70: aggregate queue depth for every host_session that has at
+ * least one queued message. Used by the Active Chats list-level fetch so
+ * we hydrate every card's badge in one round trip.
+ */
+export function pendingMessageCountsByHostSession(
+  db: Database.Database,
+): Record<string, number> {
+  const rows = db.prepare(`
+    SELECT b.host_session_id as host_session_id, COUNT(*) as cnt
+    FROM channel_message_queue q
+    JOIN channel_bindings b ON b.id = q.binding_id
+    WHERE q.consumed_at IS NULL AND b.host_session_id IS NOT NULL
+    GROUP BY b.host_session_id
+  `).all() as Array<{ host_session_id: string; cnt: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.host_session_id] = r.cnt;
+  return out;
+}
+
 // ── PendingBind ────────────────────────────────────────────────────────────
 
 function rowToPendingBind(row: Record<string, unknown>): PendingBind {

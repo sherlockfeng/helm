@@ -36,11 +36,17 @@ function truncate(s: string, max = 60): string {
 }
 
 /**
- * Phase 36: most human-readable label for a Cursor chat. Falls back through
- * firstPrompt (Phase 32) → cwd → short id so old / brand-new chats still get
- * something useful instead of a UUID.
+ * Most human-readable label for a Cursor chat. Priority chain:
+ *   Phase 55: displayName (user-set chat rename — highest priority)
+ *   Phase 36/32: firstPrompt
+ *   cwd
+ *   short id (last resort)
+ *
+ * Active Chats page has the same chain in its own renderer; the duplicate
+ * here is a known fork — keep them in sync when adding new label sources.
  */
 function chatLabel(chat: ActiveChat | undefined, fallbackId: string): string {
+  if (chat?.displayName) return truncate(chat.displayName);
   if (chat?.firstPrompt) return truncate(chat.firstPrompt);
   if (chat?.cwd) return chat.cwd;
   return shortId(fallbackId);
@@ -223,7 +229,7 @@ function ActiveRow({
           {/* Phase 36: human-readable Cursor chat label (firstPrompt → cwd → id).
               When the host_session row was deleted, fall back to the binding's
               stored hostSessionId so this never reads as blank. */}
-          <div style={{ fontWeight: 600, fontSize: 14 }} title={chat?.firstPrompt ?? chat?.cwd ?? binding.hostSessionId}>
+          <div style={{ fontWeight: 600, fontSize: 14 }} title={chat?.displayName ?? chat?.firstPrompt ?? chat?.cwd ?? binding.hostSessionId}>
             {chatLabel(chat, binding.hostSessionId)}
           </div>
           <div className="label" style={{ marginTop: 6 }}>

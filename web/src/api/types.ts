@@ -27,6 +27,13 @@ export interface ActiveChat {
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;
+  /**
+   * Phase 70: number of channel-queue messages waiting to be drained into
+   * this Cursor chat (only fires when the agent next calls `host_stop`).
+   * The Active Chats UI surfaces a "📨 N queued" badge so the user knows
+   * to nudge Cursor; without it, queued messages look invisible.
+   */
+  queuedMessageCount?: number;
 }
 
 export interface PendingApproval {
@@ -236,6 +243,9 @@ export type AppEvent =
   | { type: 'session.closed'; hostSessionId: string }
   | { type: 'binding.created'; binding: { id: string; channel: string; hostSessionId?: string } }
   | { type: 'binding.removed'; bindingId: string }
-  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number };
+  | { type: 'channel.message_enqueued'; bindingId: string; messageId: number }
+  // Phase 70: fires when host_stop drains the queue (Cursor turn end /
+  // new prompt). Renderer uses it to clear the "📨 queued" badge.
+  | { type: 'channel.message_consumed'; hostSessionId: string; count: number };
 
 export type AppEventType = AppEvent['type'];

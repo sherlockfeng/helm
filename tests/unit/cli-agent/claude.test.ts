@@ -265,8 +265,10 @@ describe('interpretClaudeError', () => {
   it('install hint takes precedence over login when both signals present', () => {
     // ENOENT in code dominates: if the binary literally isn't there,
     // an "unauthorized" line in stderr is noise.
-    const err = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
-    (err as Error & { stderr: string }).stderr = '401 unauthorized';
+    const err = Object.assign(new Error('spawn claude ENOENT'), {
+      code: 'ENOENT',
+      stderr: '401 unauthorized',
+    });
     const r = interpretClaudeError(err);
     expect(r.hint).toBe('install');
   });

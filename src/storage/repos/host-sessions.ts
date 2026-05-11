@@ -14,6 +14,9 @@ function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string
     firstPrompt: row['first_prompt'] != null ? String(row['first_prompt']) : undefined,
     displayName: row['display_name'] != null ? String(row['display_name']) : undefined,
     lastInjectedRoleIds: parseInjectedRoleIds(row['last_injected_role_ids']),
+    lastInjectedGuideVersion: row['last_injected_guide_version'] != null
+      ? Number(row['last_injected_guide_version'])
+      : undefined,
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
@@ -287,4 +290,21 @@ export function setLastInjectedRoleIds(
     : JSON.stringify([...roleIds].sort());
   db.prepare(`UPDATE host_sessions SET last_injected_role_ids = ? WHERE id = ?`)
     .run(encoded, id);
+}
+
+/**
+ * Phase 71: record which version of the Helm tool guide we last injected
+ * into this chat. The orchestrator's session-start + prompt-submit handlers
+ * compare against `HELM_TOOL_GUIDE_VERSION`; mismatch → inject + bump.
+ *
+ * `null` clears the marker — used in tests + as a "force re-inject on next
+ * prompt-submit" reset hatch.
+ */
+export function setLastInjectedGuideVersion(
+  db: Database.Database,
+  id: string,
+  version: number | null,
+): void {
+  db.prepare(`UPDATE host_sessions SET last_injected_guide_version = ? WHERE id = ?`)
+    .run(version, id);
 }

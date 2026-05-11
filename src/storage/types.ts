@@ -147,6 +147,12 @@ export interface HostSession {
    * bound mid-chat actually takes effect. Empty / null = nothing injected
    * yet (i.e. the next prompt-submit will inject if any roles are bound). */
   lastInjectedRoleIds?: readonly string[];
+  /** Phase 71: which version of the Helm tool guide has been injected
+   * into this chat. Compared against `HELM_TOOL_GUIDE_VERSION` on every
+   * session-start + prompt-submit; mismatch triggers (re-)injection so
+   * chats that pre-existed the guide (or that were live when we bumped
+   * the version) pick up the freshened text on their next interaction. */
+  lastInjectedGuideVersion?: number;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

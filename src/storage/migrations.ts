@@ -325,6 +325,13 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_harness_reviews_task ON harness_reviews(task_id);
     `,
   },
+  {
+    version: 11,
+    description: 'host_sessions.last_injected_guide_version — Phase 71: per-chat marker for which version of the Helm tool guide was injected. Lets us push a freshened guide to existing chats by bumping the version constant.',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN last_injected_guide_version INTEGER;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

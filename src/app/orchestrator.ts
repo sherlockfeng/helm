@@ -62,6 +62,7 @@ import {
   closeStaleHostSessions,
   getHostSession,
   setHostSessionFirstPrompt,
+  setLastInjectedGuideVersion,
   setLastInjectedRoleIds,
   upsertHostSession,
 } from '../storage/repos/host-sessions.js';
@@ -81,6 +82,11 @@ import { detectCursorAgentCli } from '../cli-agent/cursor.js';
 import type { EngineAdapter, EngineId } from '../engine/types.js';
 import { getHarnessTaskByHostSession } from '../storage/repos/harness.js';
 import { assembleHarnessSessionContext } from '../harness/session-inject.js';
+import {
+  HELM_TOOL_GUIDE,
+  HELM_TOOL_GUIDE_VERSION,
+  wrapToolGuideForPromptInjection,
+} from './helm-tool-guide.js';
 import { detectClaudeCli } from '../cli-agent/claude.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
@@ -363,10 +369,16 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     // task.md so the agent reads the durable memory itself.
     const harnessTask = getHarnessTaskByHostSession(deps.db, req.host_session_id);
     const harnessBlock = harnessTask ? assembleHarnessSessionContext(harnessTask) : '';
-    const merged = [result.context ?? '', harnessBlock]
+    // Phase 71: append the Helm tool guide. Always inject at session_start —
+    // it's short and sits next to the (much larger) role context. Record
+    // the version so the host_prompt_submit fallback path doesn't double-
+    // inject. Done LAST so the guide appears at the end of the system block;
+    // role + harness context come first since they're chat-specific.
+    const merged = [result.context ?? '', harnessBlock, HELM_TOOL_GUIDE]
       .map((s) => s.trim())
       .filter((s) => s.length > 0)
       .join('\n\n---\n\n');
+    setLastInjectedGuideVersion(deps.db, req.host_session_id, HELM_TOOL_GUIDE_VERSION);
 
     log.session(req.host_session_id).info('session_start', {
       event: 'session_start',
@@ -376,6 +388,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         injectedRoleIds: currentRoleIds,
         harnessTaskId: harnessTask?.id ?? null,
         harnessStage: harnessTask?.currentStage ?? null,
+        guideVersion: HELM_TOOL_GUIDE_VERSION,
       },
     });
     return merged ? { additional_context: merged } : {};
@@ -429,6 +442,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     // are treated as DIFFERENT — the first prompt-submit always writes a
     // baseline so subsequent comparisons have a stable anchor.
     const session = getHostSession(deps.db, req.host_session_id);
+    // Blocks we want to prefix into the user's message, in the order they
+    // should appear. Each path appends independently; we assemble once.
+    const prefixBlocks: string[] = [];
+
     if (session && session.cwd) {
       const currentRoleIds = [...(session.roleIds ?? [])].sort();
       const sameSet = session.lastInjectedRoleIds !== undefined
@@ -461,7 +478,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
               result.context,
               '</helm:role-context>',
             ].join('\n');
-            const rewritten = `${block}\n\n${req.prompt ?? ''}`;
+            prefixBlocks.push(block);
             log.session(req.host_session_id).info('prompt_submit_role_inject', {
               event: 'prompt_submit_role_inject',
               data: {
@@ -471,7 +488,6 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
                 providers: result.diagnostics,
               },
             });
-            return { continue: true, user_message: rewritten };
           }
         } else {
           log.session(req.host_session_id).info('prompt_submit_role_unbound', {
@@ -480,6 +496,32 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           });
         }
       }
+
+      // Phase 71: inject the Helm tool guide if this chat hasn't yet
+      // received the current version. Catches:
+      //   - chats that existed BEFORE helm started (sessionStart never fired)
+      //   - chats where the guide text was bumped (lastInjectedGuideVersion
+      //     lags HELM_TOOL_GUIDE_VERSION)
+      // Idempotent: after injecting we mark the version, so subsequent
+      // prompts in the same chat skip this path. We do NOT block on the
+      // role path being a no-op — the guide injects even when no role
+      // change happened, as long as the version is stale.
+      if (session.lastInjectedGuideVersion !== HELM_TOOL_GUIDE_VERSION) {
+        prefixBlocks.push(wrapToolGuideForPromptInjection());
+        setLastInjectedGuideVersion(deps.db, req.host_session_id, HELM_TOOL_GUIDE_VERSION);
+        log.session(req.host_session_id).info('prompt_submit_guide_inject', {
+          event: 'prompt_submit_guide_inject',
+          data: {
+            from: session.lastInjectedGuideVersion ?? null,
+            to: HELM_TOOL_GUIDE_VERSION,
+          },
+        });
+      }
+    }
+
+    if (prefixBlocks.length > 0) {
+      const rewritten = `${prefixBlocks.join('\n\n')}\n\n${req.prompt ?? ''}`;
+      return { continue: true, user_message: rewritten };
     }
 
     return { continue: true };

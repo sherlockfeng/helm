@@ -49,9 +49,23 @@ export interface RunReviewDeps {
    * config provider; tests substitute a stub.
    */
   getConventions?: () => Promise<string>;
-  /** Override the `claude` binary (testing). */
+  /**
+   * Phase 68: pluggable reviewer engine. Default still spawns `claude -p`
+   * directly; the orchestrator overrides this to route through
+   * EngineRouter so cursor / claude switching takes effect.
+   *
+   * Signature is (payload, systemPrompt, cwd) → review text. helmMcpUrl
+   * injection is the adapter's responsibility (claude / cursor both bake
+   * it in).
+   */
+  runReviewerEngine?: (
+    userPayload: string,
+    systemPrompt: string,
+    cwd: string,
+  ) => Promise<string>;
+  /** Override the `claude` binary (testing). Only used when runReviewerEngine is the default. */
   claudeBin?: string;
-  /** Override the spawner (testing). */
+  /** Override the spawner (testing). Only used when runReviewerEngine is the default. */
   exec?: typeof execFileAsync;
   /** Per-review timeout. Reviewers are usually short (<1 min) but allow long tail. */
   timeoutMs?: number;
@@ -101,13 +115,19 @@ export async function runReview(
     const conventions = await getConventions();
 
     const payload = assembleReviewerPayload({ task, diff, conventions });
-    const reportText = await spawnClaudeReview(payload, {
-      claudeBin: deps.claudeBin,
-      exec: deps.exec,
-      timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      helmMcpUrl: deps.helmMcpUrl ?? DEFAULT_HELM_MCP_URL,
-      cwd: task.projectPath,
-    });
+    // Phase 68: prefer the orchestrator-supplied engine runner (routes
+    // through EngineRouter). Default path keeps the legacy direct-claude
+    // spawn so test code paths and any caller that hasn't wired the
+    // engine router still work.
+    const reportText = deps.runReviewerEngine
+      ? await deps.runReviewerEngine(payload, REVIEW_SYSTEM_PROMPT, task.projectPath)
+      : await spawnClaudeReview(payload, {
+        claudeBin: deps.claudeBin,
+        exec: deps.exec,
+        timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        helmMcpUrl: deps.helmMcpUrl ?? DEFAULT_HELM_MCP_URL,
+        cwd: task.projectPath,
+      });
 
     const completed: HarnessReview = {
       ...pending,

@@ -73,9 +73,15 @@ import {
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createMcpServer } from '../mcp/server.js';
 import { runReview as runHarnessReview } from '../harness/review-runner.js';
+import { EngineRouter, EngineNotAvailableError } from '../engine/router.js';
+import { buildClaudeAdapter } from '../engine/adapters/claude-adapter.js';
+import { buildCursorAdapter } from '../engine/adapters/cursor-adapter.js';
+import { detectEngines } from '../engine/detect.js';
+import { detectCursorAgentCli } from '../cli-agent/cursor.js';
+import type { EngineAdapter, EngineId } from '../engine/types.js';
 import { getHarnessTaskByHostSession } from '../storage/repos/harness.js';
 import { assembleHarnessSessionContext } from '../harness/session-inject.js';
-import { ClaudeCodeAgent, detectClaudeCli } from '../cli-agent/claude.js';
+import { detectClaudeCli } from '../cli-agent/claude.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
@@ -641,22 +647,87 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // extra key needed. Cloud mode falls back to CURSOR_API_KEY env. The
   // client is rebuilt inside summarizeFn so a Settings edit + Save
   // propagates on the next call without restart.
+  //
+  // Phase 68: now routes through EngineRouter so the user's global default
+  // engine choice flows through. Cursor path keeps the existing semantics;
+  // claude path produces JSON via `claude -p` and gets a format-pass retry
+  // wrapped around it (see claude-adapter + json-retry).
   function summarizeFn(): (campaignId: string) => Promise<unknown> {
     return async (campaignId: string) => {
-      const llm = new CursorLlmClient({
-        apiKey: liveConfig.cursor.apiKey,
-        modelId: liveConfig.cursor.model,
-        mode: liveConfig.cursor.mode,
-      });
+      const adapter = engineRouter.current();
       return summarizeCampaign(deps.db, campaignId, {
-        llm,
+        llm: adapter.summarize,
+        // `model` only matters to the cursor adapter; claude ignores it.
         model: liveConfig.cursor.model,
-        // Cursor's Agent.prompt ignores maxTokens (model-config layer owns
-        // it); pass through for the LlmClient interface contract.
         maxTokens: 2048,
       });
     };
   }
+
+  // Phase 68: EngineRouter. Adapters are rebuilt on every Settings save
+  // (because the underlying cursor SDK config depends on liveConfig.cursor)
+  // via `refreshEngineRouter()`; the router itself holds onto a mutable
+  // adapter map so the rebuild swap is atomic from caller POV.
+  let currentAdapters: Partial<Record<EngineId, EngineAdapter>> = {};
+  function buildAdapters(): Partial<Record<EngineId, EngineAdapter>> {
+    const httpPort = httpApi.port();
+    const helmMcpUrl = httpPort
+      ? `http://127.0.0.1:${httpPort}/mcp/sse`
+      : undefined;
+    const map: Partial<Record<EngineId, EngineAdapter>> = {};
+    if (claudeAvailable) {
+      const claudeDeps: Parameters<typeof buildClaudeAdapter>[0] = {};
+      if (helmMcpUrl) claudeDeps.helmMcpUrl = helmMcpUrl;
+      map.claude = buildClaudeAdapter(claudeDeps);
+    }
+    // The cursor adapter's summarize/review work without cursor-agent (they
+    // go through the SDK), but runConversation needs the CLI. We always
+    // register the adapter when the Cursor SDK can be constructed; the
+    // adapter itself throws EngineCapabilityUnsupportedError on the
+    // conversational path when cursorAgentAvailable === false.
+    try {
+      const cursorDeps: Parameters<typeof buildCursorAdapter>[0] = {
+        cursor: {
+          mode: liveConfig.cursor.mode,
+          model: liveConfig.cursor.model,
+          ...(liveConfig.cursor.apiKey ? { apiKey: liveConfig.cursor.apiKey } : {}),
+        },
+        cursorAgentAvailable,
+      };
+      if (helmMcpUrl) cursorDeps.helmMcpUrl = helmMcpUrl;
+      map.cursor = buildCursorAdapter(cursorDeps);
+    } catch (err) {
+      // CursorLlmClient throws in cloud mode when no API key is configured.
+      // That's a config issue, not a "binary missing" — log + skip so the
+      // router reports "cursor not available" with the actionable hint.
+      log.info('cursor_adapter_skip', {
+        data: { reason: (err as Error).message },
+      });
+    }
+    return map;
+  }
+  function refreshEngineRouter(): void {
+    currentAdapters = buildAdapters();
+  }
+  const engineRouter = new EngineRouter({
+    adapters: new Proxy({} as Partial<Record<EngineId, EngineAdapter>>, {
+      // Always read the latest currentAdapters — so refreshEngineRouter()
+      // takes effect on the next router.current() call, no caching.
+      get(_t, key) { return currentAdapters[key as EngineId]; },
+      ownKeys() { return Object.keys(currentAdapters); },
+      getOwnPropertyDescriptor(_t, key) {
+        if (currentAdapters[key as EngineId]) {
+          return { configurable: true, enumerable: true };
+        }
+        return undefined;
+      },
+    }),
+    defaultGetter: () => liveConfig.engine.default,
+  });
+  // NOTE: we DON'T call `refreshEngineRouter()` here because
+  // `buildAdapters()` reads `httpApi.port()` to assemble helmMcpUrl, and
+  // httpApi is declared below. The initial build runs right after
+  // `httpApi = createHttpApi(...)` (search "refreshEngineRouter()" below).
 
   // Phase 45: MCP HTTP/SSE factory. Builds a fresh McpServer per SSE
   // connection, reusing the orchestrator's already-built knowledge registry
@@ -729,8 +800,18 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         // effect without a Helm restart. Always-on providers
         // (LocalRolesProvider / RequirementsArchiveProvider) are untouched.
         reconfigureKnowledgeProviders();
+        // Phase 68: rebuild engine adapters so a Settings save (e.g.
+        // cursor.mode toggle or cursor.apiKey change) takes effect on the
+        // next router.current(). Note: liveConfig.engine.default itself is
+        // re-read on every router.current() via defaultGetter, so the user
+        // flipping the default doesn't even need this rebuild — only
+        // ADAPTER-internal config does.
+        refreshEngineRouter();
         log.info('config_saved_providers_reloaded', {
-          data: { configuredIds: [...configuredProviderIds] },
+          data: {
+            configuredIds: [...configuredProviderIds],
+            engineDefault: liveConfig.engine.default,
+          },
         });
         return liveConfig;
       },
@@ -777,34 +858,46 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         ...input,
         embedFn: makePseudoEmbedFn(),
       }),
-      // Phase 60b: role-trainer chat factory. Each turn spawns a fresh
-      // `claude -p` with helm's MCP injected via --mcp-config. The agent
-      // owns the conversation; helm holds zero API keys (claude's own
-      // auth runs the model). The factory returns null when claude isn't
-      // on PATH so the endpoint can 501 with an actionable message.
-      cliAgentFactory: (opts) => {
-        if (!claudeAvailable) return null;
-        const httpPort = httpApi.port();
-        const helmMcpUrl = httpPort
-          ? `http://127.0.0.1:${httpPort}/mcp/sse`
-          : undefined;
-        return new ClaudeCodeAgent({
-          ...(opts?.cwd ? { cwd: opts.cwd } : {}),
-          ...(helmMcpUrl ? { helmMcpUrl } : {}),
-        });
-      },
-      // Phase 67: Harness review runner — wires `runReview()` with the
-      // orchestrator's live conventions getter so reviewer subprocesses
-      // always pick up the latest Settings value without restart. Returns
-      // 501 from the endpoint when claude is unavailable on PATH.
-      runHarnessReview: async (taskId: string) => {
-        if (!claudeAvailable) {
-          throw new Error('claude CLI not on PATH; install Claude Code or set up your shell.');
+      // Phase 60b / 68: role-trainer conversation runner. Goes through the
+      // EngineRouter so the user's default engine (claude or cursor) drives
+      // the chat. Returns null when no adapter supports runConversation —
+      // the endpoint then 501s with an actionable message.
+      runConversation: async (input) => {
+        let adapter;
+        try {
+          adapter = engineRouter.current();
+        } catch (err) {
+          // EngineNotAvailableError → null so endpoint 501s.
+          if (err instanceof EngineNotAvailableError) return null;
+          throw err;
         }
+        return adapter.runConversation(input);
+      },
+      // Phase 68: engine health report for the Settings page. Re-runs the
+      // detection probes each call (cheap — two `--version` execs) so the
+      // user sees the live state of `claude` / `cursor-agent` whenever
+      // they open Settings.
+      getEngineHealth: () => detectEngines(),
+      // Phase 67 / 68: Harness review runner. Now uses the engine router so
+      // the active engine's `review()` capability is called. Conventions
+      // come from helm Settings (lazy-read; Settings save updates next
+      // review without restart).
+      runHarnessReview: async (taskId: string) => {
         return runHarnessReview(
           {
             db: deps.db,
             getConventions: async () => liveConfig.harness?.conventions ?? '',
+            runReviewerEngine: async (payload, systemPrompt, cwd) => {
+              const adapter = engineRouter.current();
+              const httpPort = httpApi.port();
+              const reviewInput: Parameters<typeof adapter.review>[0] = {
+                userPayload: payload,
+                systemPrompt,
+                cwd,
+              };
+              if (httpPort) reviewInput.helmMcpUrl = `http://127.0.0.1:${httpPort}/mcp/sse`;
+              return adapter.review(reviewInput);
+            },
           },
           { taskId },
         );
@@ -813,19 +906,36 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
 
+  // Phase 60b / 68: CLI availability flags, optimistically true. Async
+  // probes below flip them to the real value once `--version` resolves;
+  // the engine adapters honor whichever value is current when
+  // `refreshEngineRouter()` runs. Declared BEFORE the initial refresh
+  // because buildAdapters() reads them.
+  let claudeAvailable = true;
+  let cursorAgentAvailable = true;
+
+  // Phase 68: with `httpApi` now built, do the initial engine adapter
+  // build — adapters need `httpApi.port()` to assemble the helmMcpUrl
+  // they'll inject into subprocess MCP configs. The async CLI probes
+  // below may later call refreshEngineRouter() again to drop adapters
+  // whose binary turned out to be missing.
+  refreshEngineRouter();
+
   let started = false;
 
-  // Phase 60b: probe `claude` CLI availability once at boot. The factory
-  // above checks this before spawning so a missing CLI surfaces as a clean
-  // 501 rather than a stack trace from the sub-shell. Probe is async; we
-  // optimistically assume claude IS on PATH until the probe resolves —
-  // worst case the first turn surfaces an exec error.
-  let claudeAvailable = true;
   void detectClaudeCli().then((info) => {
     claudeAvailable = info != null;
     log.info('cli_agent_probe', {
-      data: { claude: info ?? null },
+      data: { engine: 'claude', info: info ?? null },
     });
+    refreshEngineRouter();
+  });
+  void detectCursorAgentCli().then((info) => {
+    cursorAgentAvailable = info != null;
+    log.info('cli_agent_probe', {
+      data: { engine: 'cursor-agent', info: info ?? null },
+    });
+    refreshEngineRouter();
   });
 
   return {

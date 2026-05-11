@@ -203,6 +203,23 @@ export interface HttpApiDeps {
     opts?: { cwd?: string },
   ) => import('../cli-agent/claude.js').ClaudeCodeAgent | null;
   /**
+   * Phase 68: pluggable conversational runner used by handleRoleTrainChat.
+   * Goes through EngineRouter so the user's default engine drives the
+   * chat. Returns null when no engine is currently available
+   * (`EngineRouter.current()` throws); the endpoint then 501s with an
+   * actionable message.
+   */
+  runConversation?: (
+    input: import('../engine/types.js').RunConversationInput,
+  ) => Promise<import('../engine/types.js').RunConversationResult | null>;
+  /**
+   * Phase 68: GET /api/engine/health returns whatever this resolves to.
+   * Orchestrator wires `detectEngines()`. Tests substitute fakes. When
+   * absent, the endpoint returns 501 so the Settings UI can fall back
+   * to showing "health unknown".
+   */
+  getEngineHealth?: () => Promise<import('../engine/types.js').EngineHealth[]>;
+  /**
    * Phase 67: spawn the Harness review subprocess for a given task. Wraps
    * `runReview()` from `src/harness/review-runner.ts` with the orchestrator's
    * pre-bound conventions getter + DB. Returns the completed review row.
@@ -690,6 +707,27 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // lightweight wrappers around src/harness/library — the real surface
       // is the MCP tool set used by Cursor agents. The HTTP layer exists so
       // the helm UI doesn't have to speak MCP.
+
+      // ── Engine health (Phase 68) ─────────────────────────────────────
+      //
+      // GET /api/engine/health → [{ engine, ready, detail, hint? }, ...]
+      // Lets the Settings page show "cursor (ready) / claude (missing — Run
+      // `claude login`)" alongside the Default engine selector.
+
+      if (url.pathname === '/api/engine/health') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        if (!deps.getEngineHealth) {
+          return send(res, 501, {
+            error: 'not_implemented', message: 'engine health detection not wired',
+          });
+        }
+        try {
+          const healths = await deps.getEngineHealth();
+          return send(res, 200, { engines: healths });
+        } catch (err) {
+          return internalError(res, err);
+        }
+      }
 
       if (url.pathname === '/api/harness/tasks') {
         if (req.method === 'GET') {
@@ -1349,13 +1387,17 @@ const ROLE_TRAIN_SYSTEM_PROMPT = [
 ].join('\n');
 
 function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
-  const factory = deps.cliAgentFactory;
-  if (!factory) {
+  // Phase 68: prefer runConversation (engine-router-routed); fall back to
+  // legacy cliAgentFactory (direct ClaudeCodeAgent) so existing test seams
+  // that wire only `cliAgentFactory` still work.
+  const runConv = deps.runConversation;
+  const legacyFactory = deps.cliAgentFactory;
+  if (!runConv && !legacyFactory) {
     return send(ctx.response, 501, {
       error: 'not_implemented',
       message:
-        'role-train chat backend is not wired. Install Claude Code '
-        + '(https://code.claude.com) and run `helm setup-mcp claude` once.',
+        'role-train chat backend is not wired. Install Claude Code or Cursor '
+        + 'CLI, then check helm Settings → Default engine.',
     });
   }
   let parsed: unknown;
@@ -1386,32 +1428,45 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
     validated.push({ role: m['role'], content: m['content'] });
   }
 
-  let agent;
-  try {
-    // projectPath becomes the spawned subprocess's cwd, so claude's
-    // built-in `read` / `grep` / `glob` see the user's actual codebase.
-    agent = factory(projectPath ? { cwd: projectPath } : undefined);
-  }
-  catch (err) {
-    return send(ctx.response, 501, {
-      error: 'no_provider',
-      message: (err as Error).message,
-    });
-  }
-  if (!agent) {
-    return send(ctx.response, 501, {
-      error: 'no_provider',
-      message:
-        'Claude Code CLI not detected. Install it from https://code.claude.com '
-        + 'and `claude login` once, then retry.',
-    });
-  }
-
   void (async () => {
     try {
-      const result = await agent.sendConversation(validated, {
-        systemPrompt: ROLE_TRAIN_SYSTEM_PROMPT,
-      });
+      let result;
+      if (runConv) {
+        const convInput: import('../engine/types.js').RunConversationInput = {
+          messages: validated,
+          systemPrompt: ROLE_TRAIN_SYSTEM_PROMPT,
+        };
+        if (projectPath) convInput.cwd = projectPath;
+        const r = await runConv(convInput);
+        if (!r) {
+          return send(ctx.response, 501, {
+            error: 'no_provider',
+            message:
+              'No engine adapter is currently available. Open helm Settings → '
+              + 'Default engine and pick / install one (claude or cursor).',
+          });
+        }
+        result = r;
+      } else {
+        // Legacy path: ClaudeCodeAgent directly. Kept so test seams that
+        // wire `cliAgentFactory` directly still pass.
+        const agent = legacyFactory!(projectPath ? { cwd: projectPath } : undefined);
+        if (!agent) {
+          return send(ctx.response, 501, {
+            error: 'no_provider',
+            message:
+              'Claude Code CLI not detected. Install it from https://code.claude.com '
+              + 'and `claude login` once, then retry.',
+          });
+        }
+        try {
+          result = await agent.sendConversation(validated, {
+            systemPrompt: ROLE_TRAIN_SYSTEM_PROMPT,
+          });
+        } finally {
+          agent.dispose();
+        }
+      }
       deps.logger?.info('role_train_chat_turn', {
         data: {
           sessionId: result.sessionId,
@@ -1419,29 +1474,27 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
           stderrLen: result.stderr.length,
         },
       });
-      send(ctx.response, 200, {
+      return send(ctx.response, 200, {
         message: { role: 'assistant', content: result.text },
         sessionId: result.sessionId,
-        // Surface stderr separately so the renderer's debug panel can show
-        // claude's MCP-connection notes etc. without polluting the message.
         ...(result.stderr ? { stderr: result.stderr } : {}),
       });
     } catch (err) {
+      // Phase 68 + #68: route claude / cursor errors through the same
+      // interpreter so the modal sees an actionable "install / login"
+      // message instead of a raw ENOENT / 401 dump. The legacy ClaudeCodeAgent
+      // is disposed inside the inner try/finally above (line ~1466), so no
+      // outer cleanup needed here.
       const { interpretClaudeError } = await import('../cli-agent/claude.js');
       const interpreted = interpretClaudeError(err);
       deps.logger?.warn('role_train_chat_failed', {
         data: { error: interpreted.raw, hint: interpreted.hint },
       });
-      send(ctx.response, 502, {
+      return send(ctx.response, 502, {
         error: 'cli_failed',
         message: interpreted.message,
         hint: interpreted.hint,
       });
-    } finally {
-      // Stateless contract: we re-create the agent on every turn (cheap —
-      // just a tmp-dir + JSON write), so dispose immediately to clean up
-      // the tmp MCP-config dir.
-      agent?.dispose();
     }
   })();
 }

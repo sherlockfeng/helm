@@ -135,8 +135,20 @@ export interface HelmConfig {
   // Phase 67: global Harness conventions, injected into every reviewer
   // subprocess. Optional in the type so older saved configs still parse.
   harness?: { conventions: string };
+  // Phase 68: global default engine. Drives Roles modal, Harness reviewer,
+  // and Campaign summarizer. Optional so old configs parse; server applies
+  // a 'claude' default when missing.
+  engine?: { default: 'cursor' | 'claude' };
   // Phase 60b removed `anthropic` — role-trainer now shells out to claude CLI
   // and uses its own auth (`claude login`).
+}
+
+/** Phase 68: per-engine readiness shown alongside the Default engine selector. */
+export interface EngineHealth {
+  engine: 'cursor' | 'claude';
+  ready: boolean;
+  detail: string;
+  hint?: string;
 }
 
 export interface CampaignSummary {

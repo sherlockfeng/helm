@@ -507,6 +507,111 @@ describe('createHelmApp — shutdown wakes pendings', () => {
   });
 });
 
+describe('createHelmApp — binding.removed auto-settles pending approvals (Phase 72)', () => {
+  it('settles pending approvals for a chat once it has no remaining Lark binding', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      upsertHostSession(db, {
+        id: 'sess-x', host: 'cursor', cwd: '/proj', status: 'active',
+        firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
+      });
+      bindLark(db, 'sess-x');
+
+      // Fire an approval — gate sees the Lark binding and waits for a user decision.
+      const bridgeP = sendBridgeMessage(
+        { type: 'host_approval_request', host_session_id: 'sess-x', tool: 'Shell', command: 'rm /tmp/x' },
+        { socketPath, timeoutMs: 5000 },
+      ) as Promise<{ decision: string; reason?: string }>;
+      await waitFor(() => app.approval.listPending().length === 1);
+
+      // User unbinds via Lark / UI → we simulate by removing the row + emitting.
+      db.prepare(`DELETE FROM channel_bindings WHERE id = ?`).run('b_sess-x');
+      app.events.emit({ type: 'binding.removed', bindingId: 'b_sess-x', hostSessionId: 'sess-x' });
+
+      const res = await bridgeP;
+      expect(res.decision).toBe('allow');
+      expect(res.reason).toContain('binding removed');
+
+      // Registry no longer holds the pending row.
+      expect(app.approval.listPending().length).toBe(0);
+    } finally {
+      await app.stop();
+    }
+  });
+
+  it('does NOT settle pending approvals when other Lark bindings remain on the chat', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      upsertHostSession(db, {
+        id: 'sess-y', host: 'cursor', cwd: '/proj', status: 'active',
+        firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
+      });
+      // Two Lark bindings on the same chat — only one will go away.
+      bindLark(db, 'sess-y');
+      insertChannelBinding(db, {
+        id: 'b_sess-y-extra', channel: 'lark', hostSessionId: 'sess-y',
+        externalChat: 'oc_other', externalThread: 'tr_other', waitEnabled: false,
+        createdAt: new Date().toISOString(),
+      });
+
+      const bridgeP = sendBridgeMessage(
+        { type: 'host_approval_request', host_session_id: 'sess-y', tool: 'Shell', command: 'rm /tmp/x' },
+        { socketPath, timeoutMs: 5000 },
+      ) as Promise<{ decision: string }>;
+      await waitFor(() => app.approval.listPending().length === 1);
+
+      // Remove ONE of the two bindings.
+      db.prepare(`DELETE FROM channel_bindings WHERE id = ?`).run('b_sess-y');
+      app.events.emit({ type: 'binding.removed', bindingId: 'b_sess-y', hostSessionId: 'sess-y' });
+
+      // Pending still alive — the other Lark binding can still route a decision.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(app.approval.listPending().length).toBe(1);
+
+      // Clean up so the bridge promise resolves.
+      await app.stop();
+      const res = await bridgeP;
+      expect(res.decision).toBe('ask'); // shutdown wakes pendings with 'ask'
+    } finally {
+      // app.stop() may have been called already; idempotent.
+      try { await app.stop(); } catch { /* noop */ }
+    }
+  });
+
+  it('no-ops when binding.removed lacks hostSessionId (legacy emit sites)', async () => {
+    const loggers = createCapturingLoggerFactory();
+    const app = createHelmApp({ db, loggers, bridgeSocketPath: socketPath });
+    await app.start();
+    try {
+      upsertHostSession(db, {
+        id: 'sess-z', host: 'cursor', cwd: '/proj', status: 'active',
+        firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
+      });
+      bindLark(db, 'sess-z');
+      const bridgeP = sendBridgeMessage(
+        { type: 'host_approval_request', host_session_id: 'sess-z', tool: 'Shell', command: 'rm' },
+        { socketPath, timeoutMs: 5000 },
+      ) as Promise<{ decision: string }>;
+      await waitFor(() => app.approval.listPending().length === 1);
+
+      // Event without hostSessionId — listener should bail out.
+      app.events.emit({ type: 'binding.removed', bindingId: 'b_sess-z' });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(app.approval.listPending().length).toBe(1);
+
+      await app.stop();
+      const res = await bridgeP;
+      expect(res.decision).toBe('ask');
+    } finally {
+      try { await app.stop(); } catch { /* noop */ }
+    }
+  });
+});
+
 describe('createHelmApp — Lark bind-ack (Phase 61)', () => {
   it('on binding.created: posts an ack to the Lark thread + enqueues a Cursor confirm-request', async () => {
     const loggers = createCapturingLoggerFactory();

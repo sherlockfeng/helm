@@ -44,6 +44,7 @@ import { listDocAuditsByTask } from '../storage/repos/doc-audit.js';
 import {
   deleteChannelBinding,
   deletePendingBind,
+  getChannelBinding,
   getPendingBind,
   listAllChannelBindings,
   listPendingBinds,
@@ -705,9 +706,19 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       const bindingMatch = url.pathname.match(/^\/api\/bindings\/([^/]+)$/);
       if (bindingMatch && bindingMatch[1] !== 'pending' && bindingMatch[1] !== 'consume') {
         if (req.method !== 'DELETE') return methodNotAllowed(res);
+        // Phase 72: capture hostSessionId BEFORE deleting so the
+        // binding.removed event can carry it to the orchestrator's
+        // pending-approval auto-settle listener. Otherwise the row is
+        // gone and downstream listeners can't tell which chat lost its
+        // binding.
+        const existing = getChannelBinding(deps.db, bindingMatch[1]!);
         const removed = deleteChannelBinding(deps.db, bindingMatch[1]!);
         if (!removed) return send(res, 404, { error: 'unknown_binding' });
-        deps.events?.emit({ type: 'binding.removed', bindingId: bindingMatch[1]! });
+        deps.events?.emit({
+          type: 'binding.removed',
+          bindingId: bindingMatch[1]!,
+          ...(existing?.hostSessionId ? { hostSessionId: existing.hostSessionId } : {}),
+        });
         return send(res, 200, { ok: true });
       }
 

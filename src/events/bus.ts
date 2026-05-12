@@ -20,7 +20,11 @@ export type AppEvent =
   | { type: 'session.started'; session: HostSession }
   | { type: 'session.closed'; hostSessionId: string }
   | { type: 'binding.created'; binding: ChannelBinding }
-  | { type: 'binding.removed'; bindingId: string }
+  // Phase 72: `hostSessionId` lets downstream listeners (the orchestrator's
+  // pending-approval auto-settle path) clean up state attached to the chat
+  // whose binding just went away. Optional because legacy emit sites may
+  // not have it; auto-settle no-ops in that case.
+  | { type: 'binding.removed'; bindingId: string; hostSessionId?: string }
   | { type: 'channel.message_enqueued'; bindingId: string; messageId: number }
   // Phase 70: fired when a `host_stop` drain pulls one or more messages
   // off the queue. Listeners (notably the Active Chats UI) use it to

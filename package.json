@@ -21,6 +21,7 @@
     "build:backend": "tsup",
     "build:web": "pnpm --filter helm-web build",
     "build": "pnpm build:backend && pnpm build:web",
+    "start": "pnpm build && pnpm dev:electron",
     "package": "pnpm build && electron-builder",
     "package:mac": "pnpm build && electron-builder --mac",
     "package:dir": "pnpm build && electron-builder --dir",

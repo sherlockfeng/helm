@@ -56,7 +56,12 @@ beforeEach(async () => {
 afterEach(async () => { await harness.shutdown(); });
 
 describe('role-reinject-on-bind happy', () => {
-  it('first prompt before any role bound: no helm-injection prefix', async () => {
+  it('first prompt before any role bound: only the Helm tool guide is prefixed (no role block)', async () => {
+    // Phase 71: every chat receives the Helm tool guide on its first
+    // prompt-submit (if sessionStart didn't already deliver it). With NO
+    // roles bound, the prompt-submit handler returns ONLY the tool guide
+    // block — no <helm:role-context>. Subsequent prompts in this chat
+    // see undefined (guide already marked).
     const r = await runHookViaBridge(harness, {
       event: 'beforeSubmitPrompt',
       payload: {
@@ -67,8 +72,16 @@ describe('role-reinject-on-bind happy', () => {
     }) as { continue: boolean; user_message?: string };
 
     expect(r.continue).toBe(true);
-    // No bound roles → no rewrite.
-    expect(r.user_message).toBeUndefined();
+    expect(r.user_message).toContain('<helm:tool-guide>');
+    expect(r.user_message).not.toContain('<helm:role-context>');
+    expect(r.user_message).toMatch(/<\/helm:tool-guide>[\s\S]*how are things\?/);
+
+    // Second prompt in the same chat: guide is marked → no prefix.
+    const second = await runHookViaBridge(harness, {
+      event: 'beforeSubmitPrompt',
+      payload: { session_id: 'sess_r', prompt: 'follow-up', workspace_roots: ['/proj'] },
+    }) as { user_message?: string };
+    expect(second.user_message).toBeUndefined();
   });
 
   it('binding a role mid-chat → next prompt-submit prefixes the helm role-context block', async () => {

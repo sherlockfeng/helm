@@ -21,14 +21,31 @@ beforeEach(async () => {
 afterEach(async () => { await harness.shutdown(); });
 
 describe('session-start-injection happy', () => {
-  it('returns empty when chat is unbound — Phase 25 resolver finds no role on the host_session', async () => {
+  it('returns just the Helm tool guide when chat is unbound (Phase 71)', async () => {
+    // Phase 71: sessionStart ALWAYS injects the Helm tool guide so the
+    // Cursor agent knows helm is a desktop app + MCP namespace, even when
+    // no roles / no Harness task / no knowledge providers contributed.
+    // Pre-Phase-71 this test asserted `additional_context` was undefined —
+    // now it carries just the guide.
     const r = await runHookViaBridge(harness, {
       event: 'sessionStart',
       payload: { session_id: 'sess_a', cwd: '/proj' },
-    }) as Record<string, unknown>;
-    // The orchestrator wires resolveRoleId to read host_sessions.role_id.
-    // Brand-new chat has no binding, so getSessionContext is a no-op.
-    expect(r['additional_context']).toBeUndefined();
+    }) as { additional_context?: string };
+    expect(r.additional_context).toBeDefined();
+    expect(r.additional_context).toContain('helm is a desktop GUI');
+    expect(r.additional_context).toContain('list_roles');
+    expect(r.additional_context).toContain('harness_create_task');
+  });
+
+  it('Phase 71: records lastInjectedGuideVersion on the host_session row', async () => {
+    await runHookViaBridge(harness, {
+      event: 'sessionStart',
+      payload: { session_id: 'sess_guide_marker', cwd: '/proj' },
+    });
+    const row = harness.db.prepare(
+      `SELECT last_injected_guide_version FROM host_sessions WHERE id = ?`,
+    ).get('sess_guide_marker') as { last_injected_guide_version: number };
+    expect(row.last_injected_guide_version).toBe(1);
   });
 
   it('aggregates a fake provider into the response markdown', async () => {

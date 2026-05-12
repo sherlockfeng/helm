@@ -6,17 +6,25 @@
  * relay's class-based AgentForgeDB methods.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   deleteChunksForRole,
   getChunksForRole,
   getRole as getRoleRow,
+  getSourceByFingerprint,
   insertChunk,
+  insertSource,
   listRoles as listRoleRows,
   upsertRole,
 } from '../storage/repos/roles.js';
-import type { Role, KnowledgeChunk } from '../storage/types.js';
+import type {
+  KnowledgeChunk,
+  KnowledgeChunkKind,
+  KnowledgeSource,
+  KnowledgeSourceKind,
+  Role,
+} from '../storage/types.js';
 import { PRODUCT_SYSTEM_PROMPT } from './builtin/product.js';
 import { DEVELOPER_SYSTEM_PROMPT } from './builtin/developer.js';
 import { TESTER_SYSTEM_PROMPT } from './builtin/tester.js';
@@ -44,12 +52,78 @@ export function listRoles(db: Database.Database): Role[] {
   return listRoleRows(db);
 }
 
+/**
+ * Phase 73: input document carries optional `kind` (chunk type) +
+ * optional `sourceKind` / `origin` (provenance). When sourceKind/origin
+ * are omitted, the library infers — a URL filename → `lark-doc`, a path
+ * with `/` → `file`, otherwise → `inline`. The `kind` defaults to
+ * `'other'` so existing callers keep working.
+ */
+export interface TrainRoleDocument {
+  filename: string;
+  content: string;
+  /** Chunk discriminator — propagated to every chunk this doc produces. */
+  kind?: KnowledgeChunkKind;
+  /** Source row's `kind` — defaults inferred from `filename` shape. */
+  sourceKind?: KnowledgeSourceKind;
+  /** Source row's `origin` (URL / abs path / inline pseudo-id). Defaults to `filename`. */
+  origin?: string;
+  /** Optional human-readable label stamped on the source row. */
+  sourceLabel?: string;
+}
+
 export interface TrainRoleInput {
   roleId: string;
   name: string;
-  documents: Array<{ filename: string; content: string }>;
+  documents: TrainRoleDocument[];
   baseSystemPrompt?: string;
   embedFn: (text: string) => Promise<Float32Array>;
+}
+
+/**
+ * Phase 73: per-input materialization plan. Each TrainRoleDocument resolves
+ * to one source row (new or reused by fingerprint) plus its chunks. We
+ * compute this up-front so trainRole / updateRole both share the same
+ * source-id allocation logic.
+ */
+function fingerprintDoc(filename: string, content: string): string {
+  return createHash('sha256').update(`${filename}\n${content}`).digest('hex');
+}
+
+function inferSourceKind(filename: string): KnowledgeSourceKind {
+  if (/^https?:\/\//i.test(filename)) return 'lark-doc';
+  if (filename.includes('/')) return 'file';
+  return 'inline';
+}
+
+/**
+ * Phase 73: returns the source row for this doc (creating it if no row
+ * with the same fingerprint exists in this role). Idempotent for the
+ * "user re-trains the same doc" case — see Decision §C in the task doc
+ * for why we still let chunks get re-inserted alongside the reused
+ * source row instead of dedup'ing.
+ */
+function ensureSource(
+  db: Database.Database,
+  roleId: string,
+  doc: TrainRoleDocument,
+  now: string,
+): KnowledgeSource {
+  const fp = fingerprintDoc(doc.filename, doc.content);
+  const existing = getSourceByFingerprint(db, roleId, fp);
+  if (existing) return existing;
+  const sourceKind = doc.sourceKind ?? inferSourceKind(doc.filename);
+  const row: KnowledgeSource = {
+    id: randomUUID(),
+    roleId,
+    kind: sourceKind,
+    origin: doc.origin ?? doc.filename,
+    fingerprint: fp,
+    createdAt: now,
+  };
+  if (doc.sourceLabel) row.label = doc.sourceLabel;
+  insertSource(db, row);
+  return row;
 }
 
 export async function trainRole(db: Database.Database, input: TrainRoleInput): Promise<Role> {
@@ -68,9 +142,15 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
     createdAt: now,
   });
 
+  // Phase 73: full-replace wipes the role's existing chunks. Sources from
+  // previous trainRole calls also become orphans — drop them, because the
+  // user has explicitly asked to rebuild this role from these documents.
+  // (updateRole's append mode is the path that preserves prior state.)
   deleteChunksForRole(db, input.roleId);
+  db.prepare(`DELETE FROM knowledge_sources WHERE role_id = ?`).run(input.roleId);
 
   for (const doc of input.documents) {
+    const source = ensureSource(db, input.roleId, doc, now);
     const chunks = chunkDocument(doc.content, doc.filename);
     for (const chunk of chunks) {
       const embedding = await input.embedFn(chunk.text);
@@ -80,6 +160,8 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
         sourceFile: doc.filename,
         chunkText: chunk.text,
         embedding,
+        kind: doc.kind ?? 'other',
+        sourceId: source.id,
         createdAt: now,
       };
       insertChunk(db, row);
@@ -131,8 +213,10 @@ export interface UpdateRoleInput {
   name?: string;
   /** New system prompt. Omit to keep existing. */
   baseSystemPrompt?: string;
-  /** Documents to chunk + APPEND. Existing chunks stay. */
-  appendDocuments?: Array<{ filename: string; content: string }>;
+  /** Documents to chunk + APPEND. Existing chunks stay. Phase 73: now
+   * carries the same `TrainRoleDocument` shape (with optional `kind` /
+   * `sourceKind` / `origin` / `sourceLabel`). */
+  appendDocuments?: TrainRoleDocument[];
   embedFn: (text: string) => Promise<Float32Array>;
   /**
    * Phase 66: skip conflict detection and append unconditionally. Pass
@@ -187,20 +271,25 @@ export async function updateRole(
   // Phase 66: pre-embed new chunks once. We need them for both the
   // conflict scan AND (if we proceed) the actual insert, so doing it
   // upfront avoids re-running the embedder.
+  // Phase 73: also carry the parent doc's kind so the chunk-write step
+  // (which lives after the conflict gate) can propagate it.
   const newChunks: Array<{
     docIndex: number;
     filename: string;
     text: string;
     embedding: Float32Array;
+    kind: KnowledgeChunkKind;
   }> = [];
   for (let i = 0; i < docs.length; i++) {
     const doc = docs[i]!;
+    const kind: KnowledgeChunkKind = doc.kind ?? 'other';
     for (const chunk of chunkDocument(doc.content, doc.filename)) {
       newChunks.push({
         docIndex: i,
         filename: doc.filename,
         text: chunk.text,
         embedding: await input.embedFn(chunk.text),
+        kind,
       });
     }
   }
@@ -233,16 +322,27 @@ export async function updateRole(
     });
   }
 
+  // Phase 73: materialize source rows for each input doc. Same-fingerprint
+  // reuses (per Decision §6); new fingerprint creates a new row. We need
+  // these BEFORE chunk insert so each chunk gets its source_id.
+  const sourceByDocIndex = new Map<number, KnowledgeSource>();
+  for (let i = 0; i < docs.length; i++) {
+    sourceByDocIndex.set(i, ensureSource(db, existing.id, docs[i]!, now));
+  }
+
   // Append chunks — DO NOT call deleteChunksForRole. That's the entire
   // point: existing knowledge survives.
   let chunksAdded = 0;
   for (const c of newChunks) {
+    const source = sourceByDocIndex.get(c.docIndex)!;
     const row: KnowledgeChunk = {
       id: randomUUID(),
       roleId: existing.id,
       sourceFile: c.filename,
       chunkText: c.text,
       embedding: c.embedding,
+      kind: c.kind,
+      sourceId: source.id,
       createdAt: now,
     };
     insertChunk(db, row);
@@ -305,7 +405,17 @@ export function findConflictingChunks(
 export interface KnowledgeSearchResult {
   chunkText: string;
   sourceFile?: string;
+  /** Phase 73: chunk kind discriminator — lets callers filter / weight by type. */
+  kind: KnowledgeChunkKind;
+  /** Phase 73: which `knowledge_sources` row produced this chunk. */
+  sourceId?: string;
   score: number;
+}
+
+export interface SearchKnowledgeOptions {
+  topK?: number;
+  /** Phase 73: when provided, restrict the candidate pool to chunks of this kind. */
+  kind?: KnowledgeChunkKind;
 }
 
 export async function searchKnowledge(
@@ -313,19 +423,33 @@ export async function searchKnowledge(
   roleId: string,
   query: string,
   embedFn: (text: string) => Promise<Float32Array>,
-  topK = 5,
+  optsOrTopK: SearchKnowledgeOptions | number = {},
 ): Promise<KnowledgeSearchResult[]> {
-  const chunks = getChunksForRole(db, roleId);
+  // Backward-compat: previous callers passed `topK` as the 5th positional arg.
+  const opts: SearchKnowledgeOptions = typeof optsOrTopK === 'number'
+    ? { topK: optsOrTopK }
+    : optsOrTopK;
+  const topK = opts.topK ?? 5;
+
+  // Phase 73: push the kind filter into the DB query so we don't load the
+  // whole chunk table just to discard most of it. cosine ranking happens in
+  // JS over whatever survives the WHERE clause.
+  const chunks = getChunksForRole(db, roleId, opts.kind ? { kind: opts.kind } : {});
   if (chunks.length === 0) return [];
 
   const queryVec = await embedFn(query);
   return chunks
     .filter((c) => c.embedding != null)
-    .map((c) => ({
-      chunkText: c.chunkText,
-      sourceFile: c.sourceFile,
-      score: cosineSimilarity(queryVec, c.embedding!),
-    }))
+    .map((c) => {
+      const r: KnowledgeSearchResult = {
+        chunkText: c.chunkText,
+        kind: c.kind,
+        score: cosineSimilarity(queryVec, c.embedding!),
+      };
+      if (c.sourceFile !== undefined) r.sourceFile = c.sourceFile;
+      if (c.sourceId !== undefined) r.sourceId = c.sourceId;
+      return r;
+    })
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 }

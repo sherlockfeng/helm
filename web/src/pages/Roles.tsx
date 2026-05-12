@@ -16,7 +16,35 @@ import { useRef, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
-import type { RoleSummary } from '../api/types.js';
+import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
+
+/**
+ * Phase 73 — palette for the chunk-kind badge. Reuses existing semantic
+ * tokens (--danger, --success) where they fit so colors stay coherent
+ * across helm without introducing new tokens.
+ */
+const KIND_BADGE_STYLE: Record<KnowledgeChunkKind, { bg: string; fg: string; label: string }> = {
+  spec:     { bg: '#3b82f6', fg: '#fff', label: 'spec' },
+  example:  { bg: '#10b981', fg: '#fff', label: 'example' },
+  warning:  { bg: '#ef4444', fg: '#fff', label: 'warning' },
+  runbook:  { bg: '#8b5cf6', fg: '#fff', label: 'runbook' },
+  glossary: { bg: '#6b7280', fg: '#fff', label: 'glossary' },
+  other:    { bg: 'var(--border)', fg: 'var(--text-secondary)', label: 'other' },
+};
+
+function KindBadge({ kind }: { kind: KnowledgeChunkKind }) {
+  const style = KIND_BADGE_STYLE[kind];
+  return (
+    <span style={{
+      display: 'inline-block',
+      background: style.bg, color: style.fg,
+      fontSize: 10, fontWeight: 600, padding: '1px 6px',
+      borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5,
+    }}>{style.label}</span>
+  );
+}
+
+const KIND_OPTIONS: KnowledgeChunkKind[] = ['other', 'spec', 'example', 'warning', 'runbook', 'glossary'];
 
 function shortId(id: string, len = 12): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
@@ -34,6 +62,12 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
   const [trainOk, setTrainOk] = useState(false);
   const [name, setName] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  // Phase 73: kind selector for the next train batch. Applies to ALL files
+  // uploaded in one click (per-file kind would need more UI than this form
+  // can carry — agents driving the MCP path can set per-doc kinds).
+  const [trainKind, setTrainKind] = useState<KnowledgeChunkKind>('other');
+  // Phase 73: in-flight drop on a knowledge source.
+  const [droppingSourceId, setDroppingSourceId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Pre-fill form once detail loads
@@ -64,7 +98,13 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
     }
     setTraining(true);
     try {
-      const documents = await Promise.all(Array.from(files).map(readFile));
+      const documents = await Promise.all(Array.from(files).map(async (f) => ({
+        ...(await readFile(f)),
+        // Phase 73: stamp every doc with the selected kind. `'other'` is the
+        // default and the safe choice when the user hasn't picked a more
+        // specific category.
+        kind: trainKind,
+      })));
       await helmApi.trainRole(roleId, {
         name: name.trim(),
         documents,
@@ -83,15 +123,82 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
     }
   }
 
+  async function dropSource(sourceId: string, origin: string): Promise<void> {
+    if (!window.confirm(
+      `Drop knowledge source "${origin}"?\n\n`
+      + 'This cascade-deletes every chunk derived from this source. '
+      + 'Chunks from other sources are not affected.',
+    )) return;
+    setDroppingSourceId(sourceId);
+    try {
+      await helmApi.dropKnowledgeSource(sourceId);
+      detail.reload();
+      onTrained();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setTrainError(`Drop failed: ${msg}`);
+    } finally {
+      setDroppingSourceId(null);
+    }
+  }
+
   if (detail.loading) return <p className="muted">Loading role…</p>;
   if (detail.error) return <p className="muted" style={{ color: 'var(--danger)' }}>{detail.error.message}</p>;
   if (!detail.data) return null;
-  const { role, chunks } = detail.data;
+  const { role, chunks, sources } = detail.data;
 
   return (
     <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
       <div className="label">System prompt</div>
       <pre style={{ marginBottom: 14 }}>{role.systemPrompt}</pre>
+
+      {/* Phase 73: Sources block. Each knowledge_source row corresponds to
+          one raw-doc ingestion event; the Drop button cascade-deletes every
+          chunk derived from that source. */}
+      {sources && sources.length > 0 && (
+        <>
+          <div className="label">Sources ({sources.length})</div>
+          <ul style={{ margin: '6px 0 14px', paddingLeft: 0, listStyle: 'none' }}>
+            {sources.map((s) => (
+              <li key={s.id} style={{
+                marginBottom: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                justifyContent: 'space-between',
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12 }}>
+                    <span className="muted" style={{ fontSize: 10, marginRight: 6 }}>{s.kind}</span>
+                    <code title={s.origin} style={{
+                      color: 'var(--text-secondary)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-block',
+                      maxWidth: '100%',
+                    }}>{s.origin}</code>
+                  </div>
+                  <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                    {s.chunkCount} chunk{s.chunkCount === 1 ? '' : 's'}
+                    {s.label ? ` · "${s.label}"` : ''}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={droppingSourceId === s.id}
+                  aria-busy={droppingSourceId === s.id}
+                  onClick={() => { void dropSource(s.id, s.origin); }}
+                  style={{ color: 'var(--danger)' }}
+                  title="Drop this source — cascade-deletes its chunks"
+                >
+                  {droppingSourceId === s.id ? 'Dropping…' : 'Drop'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <div className="label">Knowledge chunks ({chunks.length})</div>
       {chunks.length === 0 ? (
@@ -102,7 +209,10 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
         <ul style={{ margin: '6px 0 14px', paddingLeft: 0, listStyle: 'none' }}>
           {chunks.slice(0, 8).map((c) => (
             <li key={c.id} style={{ marginBottom: 8 }}>
-              <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <KindBadge kind={c.kind} />
+                <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
+              </div>
               <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
                 {summarizePrompt(c.chunkText, 200)}
               </div>
@@ -139,6 +249,18 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
           onChange={(e) => setSystemPrompt(e.target.value)}
           style={{ width: '100%', fontFamily: 'inherit' }}
         />
+      </label>
+      <label className="helm-form-row">
+        <div className="muted">Kind (applies to every doc in this batch)</div>
+        <select
+          value={trainKind}
+          onChange={(e) => setTrainKind(e.target.value as KnowledgeChunkKind)}
+          style={{ minWidth: 160 }}
+        >
+          {KIND_OPTIONS.map((k) => (
+            <option key={k} value={k}>{k}</option>
+          ))}
+        </select>
       </label>
       <label className="helm-form-row">
         <div className="muted">Documents (.md / .txt — multiple)</div>

@@ -120,6 +120,7 @@ describe('session-start-injection happy', () => {
       roleId: 'role-pm',
       sourceFile: 'pm-handbook.md',
       chunkText: 'Always validate the customer pain before shipping.',
+      kind: 'other',
       createdAt: new Date().toISOString(),
     });
     // Pre-create the host_session row and bind the role; mimics the user

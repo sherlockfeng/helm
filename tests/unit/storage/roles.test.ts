@@ -47,7 +47,7 @@ describe('roles', () => {
 
   it('deletes role and cascades to chunks', () => {
     upsertRole(db, makeRole());
-    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'x', createdAt: new Date().toISOString() });
+    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'x', kind: 'other', createdAt: new Date().toISOString() });
     deleteRole(db, 'r1');
     expect(getRole(db, 'r1')).toBeUndefined();
     expect(getChunksForRole(db, 'r1')).toHaveLength(0);
@@ -64,7 +64,7 @@ describe('knowledge chunks', () => {
   afterEach(() => { db.close(); });
 
   it('inserts and retrieves chunks for a role', () => {
-    const chunk: KnowledgeChunk = { id: 'ch1', roleId: 'r1', chunkText: 'hello world', createdAt: new Date().toISOString() };
+    const chunk: KnowledgeChunk = { id: 'ch1', roleId: 'r1', chunkText: 'hello world', kind: 'other', createdAt: new Date().toISOString() };
     insertChunk(db, chunk);
     const list = getChunksForRole(db, 'r1');
     expect(list).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('knowledge chunks', () => {
 
   it('stores and retrieves embedding blob', () => {
     const embedding = new Float32Array([0.1, 0.2, 0.3]);
-    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'vec', embedding, createdAt: new Date().toISOString() });
+    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'vec', embedding, kind: 'other', createdAt: new Date().toISOString() });
     const got = getChunksForRole(db, 'r1')[0];
     expect(got?.embedding).toBeInstanceOf(Float32Array);
     const values = Array.from(got!.embedding!);
@@ -83,14 +83,14 @@ describe('knowledge chunks', () => {
   });
 
   it('deleteChunksForRole removes all chunks', () => {
-    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'a', createdAt: new Date().toISOString() });
-    insertChunk(db, { id: 'ch2', roleId: 'r1', chunkText: 'b', createdAt: new Date().toISOString() });
+    insertChunk(db, { id: 'ch1', roleId: 'r1', chunkText: 'a', kind: 'other', createdAt: new Date().toISOString() });
+    insertChunk(db, { id: 'ch2', roleId: 'r1', chunkText: 'b', kind: 'other', createdAt: new Date().toISOString() });
     deleteChunksForRole(db, 'r1');
     expect(getChunksForRole(db, 'r1')).toHaveLength(0);
   });
 
   it('attack: chunk with non-existent roleId throws (FK)', () => {
-    expect(() => insertChunk(db, { id: 'ch1', roleId: 'ghost', chunkText: 'x', createdAt: new Date().toISOString() })).toThrow();
+    expect(() => insertChunk(db, { id: 'ch1', roleId: 'ghost', chunkText: 'x', kind: 'other', createdAt: new Date().toISOString() })).toThrow();
   });
 });
 

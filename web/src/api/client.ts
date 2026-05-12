@@ -208,12 +208,19 @@ export const helmApi = {
   // ── Roles (B3) ──
   roles: () => request<{ roles: RoleSummary[] }>('GET', '/api/roles'),
   role: (roleId: string) =>
-    request<{ role: Role; chunks: RoleChunk[] }>(
+    // Phase 73: `sources` block surfaces the knowledge_source rows + chunk
+    // counts so the Roles page can show a Sources list with Drop buttons.
+    request<{ role: Role; chunks: RoleChunk[]; sources: import('./types.js').KnowledgeSource[] }>(
       'GET', `/api/roles/${encodeURIComponent(roleId)}`,
     ),
   trainRole: (roleId: string, input: TrainRoleInput) =>
     request<{ role: Role }>(
       'POST', `/api/roles/${encodeURIComponent(roleId)}/train`, input,
+    ),
+  /** Phase 73: cascade-delete a knowledge source AND every chunk derived from it. */
+  dropKnowledgeSource: (sourceId: string) =>
+    request<{ removed: boolean; chunksDeleted: number; source: import('./types.js').KnowledgeSource }>(
+      'DELETE', `/api/knowledge-sources/${encodeURIComponent(sourceId)}`,
     ),
 
   // Phase 60b: conversational role training. Each turn POSTs the full

@@ -332,6 +332,37 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE host_sessions ADD COLUMN last_injected_guide_version INTEGER;
     `,
   },
+  {
+    version: 12,
+    description:
+      'Role-knowledge typing + source lineage (Phase 73). Introduces a `knowledge_sources` table that records each raw-doc ingestion event (Lark URL / local file / inline blob, plus SHA-256 fingerprint for dedup), and extends `knowledge_chunks` with a `source_id` FK + a `kind` discriminator (spec/example/warning/runbook/glossary/other). Cascade delete on knowledge_sources → knowledge_chunks gives us C4A-style "drop a source, all derived chunks vanish" cleanup. '
+      + 'CLEAN-SLATE: as part of this migration we DELETE every existing knowledge_chunks row whose source_id IS NULL — which is every row the moment the column is added. This is intentional (Decision §D in the task doc): we trade a one-time loss of trained knowledge for a 100%-traceable knowledge base going forward. Users must re-train roles after this migration lands. Built-in roles are unaffected because they have no chunks (only system prompts).',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_sources (
+        id            TEXT PRIMARY KEY,
+        role_id       TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+        kind          TEXT NOT NULL,
+        origin        TEXT NOT NULL,
+        fingerprint   TEXT NOT NULL,
+        label         TEXT,
+        created_at    TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sources_role        ON knowledge_sources(role_id);
+      CREATE INDEX IF NOT EXISTS idx_sources_fingerprint ON knowledge_sources(role_id, fingerprint);
+
+      ALTER TABLE knowledge_chunks ADD COLUMN source_id TEXT REFERENCES knowledge_sources(id) ON DELETE CASCADE;
+      ALTER TABLE knowledge_chunks ADD COLUMN kind      TEXT NOT NULL DEFAULT 'other';
+      CREATE INDEX IF NOT EXISTS idx_chunks_source ON knowledge_chunks(source_id);
+      CREATE INDEX IF NOT EXISTS idx_chunks_kind   ON knowledge_chunks(role_id, kind);
+
+      -- Decision §D: clean-slate. Every pre-migration chunk has no source_id
+      -- (we just added the column), so this clears the entire chunks table
+      -- except for chunks that get re-inserted by application code AFTER
+      -- migration runs (i.e. via train_role / update_role with the new
+      -- source-aware writer). One-shot data loss; no backfill.
+      DELETE FROM knowledge_chunks WHERE source_id IS NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

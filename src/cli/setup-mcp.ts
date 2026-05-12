@@ -152,7 +152,13 @@ function setupClaudeFallback(url: string, home: string): SetupMcpResult {
 
 function setupCursor(url: string, home: string): SetupMcpResult {
   const path = join(home, '.cursor', 'mcp.json');
-  const result = upsertJsonMcpEntry(path, HELM_MCP_NAME, { url });
+  // Phase 75: Cursor 1.x tightened SSE schema validation — an entry with only
+  // `url` triggers a confusing "Server 'mcpServers' must have either a
+  // command or url" banner because their parser can't infer SSE from `url`
+  // alone. Writing `{ type: 'sse', url }` is explicit + accepted by every
+  // Cursor version we've seen. Same shape we already use for Claude Code's
+  // fallback path, so the two stay symmetric.
+  const result = upsertJsonMcpEntry(path, HELM_MCP_NAME, { type: 'sse', url });
   return {
     target: 'cursor',
     changed: result.changed,

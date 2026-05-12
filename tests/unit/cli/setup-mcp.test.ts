@@ -40,7 +40,7 @@ describe('setup-mcp cursor', () => {
     const file = join(home, '.cursor', 'mcp.json');
     expect(existsSync(file)).toBe(true);
     const json = JSON.parse(readFileSync(file, 'utf8'));
-    expect(json.mcpServers.helm).toEqual({ url: HELM_MCP_URL_DEFAULT });
+    expect(json.mcpServers.helm).toEqual({ type: 'sse', url: HELM_MCP_URL_DEFAULT });
   });
 
   it('preserves existing MCP entries when adding helm', () => {
@@ -58,7 +58,7 @@ describe('setup-mcp cursor', () => {
     expect(r.changed).toBe(true);
     const json = JSON.parse(readFileSync(file, 'utf8'));
     expect(json.mcpServers.Playwright.command).toBe('npx');
-    expect(json.mcpServers.helm).toEqual({ url: HELM_MCP_URL_DEFAULT });
+    expect(json.mcpServers.helm).toEqual({ type: 'sse', url: HELM_MCP_URL_DEFAULT });
     expect(json.somethingElse).toBe(42);
   });
 
@@ -78,7 +78,7 @@ describe('setup-mcp cursor', () => {
     expect(r2.changed).toBe(true);
     const file = join(home, '.cursor', 'mcp.json');
     const json = JSON.parse(readFileSync(file, 'utf8'));
-    expect(json.mcpServers.helm).toEqual({ url: 'http://127.0.0.1:9999/mcp/sse' });
+    expect(json.mcpServers.helm).toEqual({ type: 'sse', url: 'http://127.0.0.1:9999/mcp/sse' });
   });
 
   it('attack: refuses to overwrite a corrupt JSON file (no silent data loss)', () => {
@@ -94,7 +94,35 @@ describe('setup-mcp cursor', () => {
     writeFileSync(file, '');
     expect(() => setupMcp('cursor', { homeDir: home })).not.toThrow();
     const json = JSON.parse(readFileSync(file, 'utf8'));
-    expect(json.mcpServers.helm).toEqual({ url: HELM_MCP_URL_DEFAULT });
+    expect(json.mcpServers.helm).toEqual({ type: 'sse', url: HELM_MCP_URL_DEFAULT });
+  });
+
+  // Phase 75 — Cursor 1.x tightened the SSE schema. An entry with `url` but
+  // no `type` triggers a misleading "Server 'mcpServers' must have either
+  // command or url" banner. Pin the `type: 'sse'` field so future edits
+  // can't drop it silently.
+  it('Phase 75: writes `type: "sse"` explicitly so Cursor 1.x parser is happy', () => {
+    setupMcp('cursor', { homeDir: home });
+    const file = join(home, '.cursor', 'mcp.json');
+    const json = JSON.parse(readFileSync(file, 'utf8'));
+    expect(json.mcpServers.helm.type).toBe('sse');
+    expect(json.mcpServers.helm.url).toBe(HELM_MCP_URL_DEFAULT);
+  });
+
+  it('Phase 75: migrates a pre-Phase-75 url-only entry to include type: sse', () => {
+    // User who ran an older helm setup-mcp ended up with `{ url: ... }`
+    // sans type. Re-running setup-mcp should patch the entry to add the
+    // type field (changed=true) instead of being a no-op.
+    const file = join(home, '.cursor', 'mcp.json');
+    mkdirSync(join(home, '.cursor'), { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      mcpServers: { helm: { url: HELM_MCP_URL_DEFAULT } },
+    }));
+
+    const r = setupMcp('cursor', { homeDir: home });
+    expect(r.changed).toBe(true);
+    const json = JSON.parse(readFileSync(file, 'utf8'));
+    expect(json.mcpServers.helm).toEqual({ type: 'sse', url: HELM_MCP_URL_DEFAULT });
   });
 });
 

@@ -51,9 +51,12 @@ import {
   pendingMessageCountsByHostSession,
 } from '../storage/repos/channel-bindings.js';
 import {
+  deleteSource,
   getChunksForRole,
   getRole as getRoleRow,
+  getSource,
   listRoles as listRolesRepo,
+  listSourcesForRole,
 } from '../storage/repos/roles.js';
 import { recallRequirements } from '../requirements/recall.js';
 import { getRequirement } from '../storage/repos/requirements.js';
@@ -165,7 +168,15 @@ export interface HttpApiDeps {
   trainRole?: (input: {
     roleId: string;
     name: string;
-    documents: Array<{ filename: string; content: string }>;
+    // Phase 73: per-doc kind + provenance. Optional so older callers still work.
+    documents: Array<{
+      filename: string;
+      content: string;
+      kind?: 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
+      sourceKind?: 'lark-doc' | 'file' | 'inline';
+      origin?: string;
+      sourceLabel?: string;
+    }>;
     baseSystemPrompt?: string;
   }) => Promise<unknown>;
   /**
@@ -531,9 +542,33 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           id: c.id,
           sourceFile: c.sourceFile,
           chunkText: c.chunkText,
+          // Phase 73: kind + sourceId surface in the UI as badges / links.
+          kind: c.kind,
+          sourceId: c.sourceId,
           createdAt: c.createdAt,
         }));
-        return send(res, 200, { role, chunks });
+        // Phase 73: include every knowledge_source row for this role with
+        // chunk counts. The Roles page renders a "Sources" block driven by
+        // this list — each entry has a "Drop" button hitting DELETE below.
+        const sources = listSourcesForRole(deps.db, role.id);
+        return send(res, 200, { role, chunks, sources });
+      }
+
+      // Phase 73: explicit drop endpoint. DELETE /api/knowledge-sources/:id
+      // → cascade-removes the source row + every derived chunk via the SQL
+      // FK. Renderer calls this from the Sources list's "Drop" button. The
+      // MCP tool path (`drop_knowledge_source`) calls the same library
+      // helper, so the two routes can't diverge in semantics.
+      const sourceMatch = url.pathname.match(/^\/api\/knowledge-sources\/([^/]+)$/);
+      if (sourceMatch) {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        const before = getSource(deps.db, sourceMatch[1]!);
+        if (!before) return notFound(res);
+        const result = deleteSource(deps.db, sourceMatch[1]!);
+        deps.logger?.info('knowledge_source_dropped', {
+          data: { sourceId: sourceMatch[1]!, roleId: before.roleId, chunksDeleted: result.chunksDeleted },
+        });
+        return send(res, 200, { ...result, source: before });
       }
 
       // ── Requirements (B3) ───────────────────────────────────────────
@@ -1347,7 +1382,20 @@ function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): 
   if (!Array.isArray(documents) || documents.length === 0) {
     return badRequest(ctx.response, 'documents must be a non-empty array');
   }
-  const docs: Array<{ filename: string; content: string }> = [];
+  // Phase 73: per-doc typing + provenance. New fields are all optional so
+  // the existing renderer / older API clients keep working unchanged.
+  const KIND_VALUES = ['spec', 'example', 'warning', 'runbook', 'glossary', 'other'] as const;
+  const SOURCE_KIND_VALUES = ['lark-doc', 'file', 'inline'] as const;
+  type KindLit = (typeof KIND_VALUES)[number];
+  type SourceKindLit = (typeof SOURCE_KIND_VALUES)[number];
+  const docs: Array<{
+    filename: string;
+    content: string;
+    kind?: KindLit;
+    sourceKind?: SourceKindLit;
+    origin?: string;
+    sourceLabel?: string;
+  }> = [];
   for (const raw of documents) {
     if (!raw || typeof raw !== 'object') {
       return badRequest(ctx.response, 'each document must be an object with filename + content');
@@ -1359,7 +1407,28 @@ function handleTrainRole(ctx: RouteContext, deps: HttpApiDeps, roleId: string): 
     if (typeof d['content'] !== 'string') {
       return badRequest(ctx.response, 'each document requires a string content');
     }
-    docs.push({ filename: d['filename'], content: d['content'] });
+    const doc: typeof docs[number] = { filename: d['filename'], content: d['content'] };
+    if (d['kind'] !== undefined) {
+      if (typeof d['kind'] !== 'string' || !KIND_VALUES.includes(d['kind'] as KindLit)) {
+        return badRequest(ctx.response, `kind must be one of ${KIND_VALUES.join(' / ')}`);
+      }
+      doc.kind = d['kind'] as KindLit;
+    }
+    if (d['sourceKind'] !== undefined) {
+      if (typeof d['sourceKind'] !== 'string' || !SOURCE_KIND_VALUES.includes(d['sourceKind'] as SourceKindLit)) {
+        return badRequest(ctx.response, `sourceKind must be one of ${SOURCE_KIND_VALUES.join(' / ')}`);
+      }
+      doc.sourceKind = d['sourceKind'] as SourceKindLit;
+    }
+    if (d['origin'] !== undefined) {
+      if (typeof d['origin'] !== 'string') return badRequest(ctx.response, 'origin must be a string');
+      doc.origin = d['origin'];
+    }
+    if (d['sourceLabel'] !== undefined) {
+      if (typeof d['sourceLabel'] !== 'string') return badRequest(ctx.response, 'sourceLabel must be a string');
+      doc.sourceLabel = d['sourceLabel'];
+    }
+    docs.push(doc);
   }
   if (baseSystemPrompt !== undefined && typeof baseSystemPrompt !== 'string') {
     return badRequest(ctx.response, 'baseSystemPrompt must be a string when provided');

@@ -1,5 +1,12 @@
 import type Database from 'better-sqlite3';
-import type { AgentSession, KnowledgeChunk, Role } from '../types.js';
+import type {
+  AgentSession,
+  KnowledgeChunk,
+  KnowledgeChunkKind,
+  KnowledgeSource,
+  KnowledgeSourceKind,
+  Role,
+} from '../types.js';
 
 function rowToRole(row: Record<string, unknown>): Role {
   return {
@@ -52,32 +59,146 @@ export function deleteRole(db: Database.Database, id: string): void {
   db.prepare(`DELETE FROM roles WHERE id = ?`).run(id);
 }
 
+// ── KnowledgeSource (Phase 73) ─────────────────────────────────────────────
+
+function rowToSource(row: Record<string, unknown>): KnowledgeSource {
+  const s: KnowledgeSource = {
+    id: String(row['id']),
+    roleId: String(row['role_id']),
+    kind: String(row['kind']) as KnowledgeSourceKind,
+    origin: String(row['origin']),
+    fingerprint: String(row['fingerprint']),
+    createdAt: String(row['created_at']),
+  };
+  if (row['label'] != null) s.label = String(row['label']);
+  return s;
+}
+
+export function insertSource(db: Database.Database, src: KnowledgeSource): void {
+  db.prepare(`
+    INSERT INTO knowledge_sources (id, role_id, kind, origin, fingerprint, label, created_at)
+    VALUES (@id, @role_id, @kind, @origin, @fingerprint, @label, @created_at)
+  `).run({
+    id: src.id, role_id: src.roleId, kind: src.kind,
+    origin: src.origin, fingerprint: src.fingerprint,
+    label: src.label ?? null, created_at: src.createdAt,
+  });
+}
+
+export function getSource(db: Database.Database, id: string): KnowledgeSource | undefined {
+  const row = db.prepare(`SELECT * FROM knowledge_sources WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+  return row ? rowToSource(row) : undefined;
+}
+
+/**
+ * Phase 73: lookup by (roleId, fingerprint) so trainRole / updateRole can
+ * reuse the same source row when the user re-ingests an identical doc.
+ * Returns undefined when no match — caller then inserts a new row.
+ */
+export function getSourceByFingerprint(
+  db: Database.Database,
+  roleId: string,
+  fingerprint: string,
+): KnowledgeSource | undefined {
+  const row = db.prepare(
+    `SELECT * FROM knowledge_sources WHERE role_id = ? AND fingerprint = ? LIMIT 1`,
+  ).get(roleId, fingerprint) as Record<string, unknown> | undefined;
+  return row ? rowToSource(row) : undefined;
+}
+
+export interface KnowledgeSourceWithStats extends KnowledgeSource {
+  chunkCount: number;
+}
+
+export function listSourcesForRole(
+  db: Database.Database,
+  roleId: string,
+): KnowledgeSourceWithStats[] {
+  const rows = db.prepare(`
+    SELECT s.*, (
+      SELECT COUNT(*) FROM knowledge_chunks c WHERE c.source_id = s.id
+    ) AS chunk_count
+    FROM knowledge_sources s
+    WHERE s.role_id = ?
+    ORDER BY s.created_at ASC
+  `).all(roleId) as Array<Record<string, unknown> & { chunk_count: number }>;
+  return rows.map((row) => ({
+    ...rowToSource(row),
+    chunkCount: Number(row['chunk_count']),
+  }));
+}
+
+/**
+ * Phase 73: cascade-delete a source. The schema-level ON DELETE CASCADE
+ * on knowledge_chunks.source_id wipes derived chunks atomically. Returns
+ * a small summary so callers can confirm the blast radius.
+ */
+export function deleteSource(
+  db: Database.Database,
+  id: string,
+): { removed: boolean; chunksDeleted: number } {
+  const chunksRow = db.prepare(
+    `SELECT COUNT(*) AS n FROM knowledge_chunks WHERE source_id = ?`,
+  ).get(id) as { n: number };
+  const info = db.prepare(`DELETE FROM knowledge_sources WHERE id = ?`).run(id);
+  return { removed: info.changes > 0, chunksDeleted: Number(chunksRow.n) };
+}
+
 // ── KnowledgeChunk ─────────────────────────────────────────────────────────
 
 export function insertChunk(db: Database.Database, chunk: KnowledgeChunk): void {
   db.prepare(`
-    INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at)
-    VALUES (@id, @role_id, @source_file, @chunk_text, @embedding, @created_at)
+    INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, kind, source_id, created_at)
+    VALUES (@id, @role_id, @source_file, @chunk_text, @embedding, @kind, @source_id, @created_at)
   `).run({
     id: chunk.id, role_id: chunk.roleId, source_file: chunk.sourceFile ?? null,
     chunk_text: chunk.chunkText,
     embedding: chunk.embedding ? Buffer.from(chunk.embedding.buffer) : null,
+    kind: chunk.kind ?? 'other',
+    source_id: chunk.sourceId ?? null,
     created_at: chunk.createdAt,
   });
 }
 
-export function getChunksForRole(db: Database.Database, roleId: string): KnowledgeChunk[] {
-  return (db.prepare(`SELECT * FROM knowledge_chunks WHERE role_id = ? ORDER BY created_at ASC`).all(roleId) as Record<string, unknown>[])
-    .map((row) => ({
-      id: String(row['id']),
-      roleId: String(row['role_id']),
-      sourceFile: row['source_file'] != null ? String(row['source_file']) : undefined,
-      chunkText: String(row['chunk_text']),
-      embedding: row['embedding'] != null
-        ? new Float32Array((row['embedding'] as Buffer).buffer)
-        : undefined,
-      createdAt: String(row['created_at']),
-    }));
+export interface GetChunksOptions {
+  /** Phase 73: when provided, only chunks with this kind are returned. */
+  kind?: KnowledgeChunkKind;
+  /** Phase 73: when provided, only chunks for this source row. */
+  sourceId?: string;
+}
+
+export function getChunksForRole(
+  db: Database.Database,
+  roleId: string,
+  opts: GetChunksOptions = {},
+): KnowledgeChunk[] {
+  const whereClauses = ['role_id = ?'];
+  const params: unknown[] = [roleId];
+  if (opts.kind) {
+    whereClauses.push('kind = ?');
+    params.push(opts.kind);
+  }
+  if (opts.sourceId) {
+    whereClauses.push('source_id = ?');
+    params.push(opts.sourceId);
+  }
+  const sql = `SELECT * FROM knowledge_chunks WHERE ${whereClauses.join(' AND ')} ORDER BY created_at ASC`;
+  return (db.prepare(sql).all(...params) as Record<string, unknown>[])
+    .map((row) => {
+      const chunk: KnowledgeChunk = {
+        id: String(row['id']),
+        roleId: String(row['role_id']),
+        chunkText: String(row['chunk_text']),
+        kind: (row['kind'] != null ? String(row['kind']) : 'other') as KnowledgeChunkKind,
+        createdAt: String(row['created_at']),
+      };
+      if (row['source_file'] != null) chunk.sourceFile = String(row['source_file']);
+      if (row['source_id'] != null) chunk.sourceId = String(row['source_id']);
+      if (row['embedding'] != null) {
+        chunk.embedding = new Float32Array((row['embedding'] as Buffer).buffer);
+      }
+      return chunk;
+    });
 }
 
 export function deleteChunksForRole(db: Database.Database, roleId: string): void {

@@ -53,12 +53,65 @@ export interface Role {
   createdAt: string;
 }
 
+/**
+ * Phase 73: chunk kind discriminator. Lets agents narrow `search_knowledge`
+ * by content type ("only give me runbooks for this incident") instead of
+ * relying on cosine + topK alone. Six categories cover the patterns we've
+ * seen in trained roles; default `'other'` keeps the new column non-NULL
+ * while leaving older / unannotated chunks usable.
+ */
+export type KnowledgeChunkKind =
+  | 'spec'
+  | 'example'
+  | 'warning'
+  | 'runbook'
+  | 'glossary'
+  | 'other';
+
+export const KNOWLEDGE_CHUNK_KINDS: readonly KnowledgeChunkKind[] = [
+  'spec', 'example', 'warning', 'runbook', 'glossary', 'other',
+];
+
+/**
+ * Phase 73: type of raw-doc origin a `KnowledgeSource` row came from.
+ * - `lark-doc`: ingested via the `read_lark_doc` path / a Lark URL
+ * - `file`:     a local Markdown / text file uploaded by the user
+ * - `inline`:   a text blob passed directly to train_role / update_role
+ *               that doesn't have a stable origin URL or filepath
+ */
+export type KnowledgeSourceKind = 'lark-doc' | 'file' | 'inline';
+
+/**
+ * Phase 73: one row per "this chunk came from THAT raw doc" ingestion
+ * event. Cascade-deleted when a role is removed. Cascades to its chunks
+ * when the source itself is dropped — gives users a one-shot way to
+ * retract a Lark doc and have all derived knowledge disappear.
+ */
+export interface KnowledgeSource {
+  id: string;
+  roleId: string;
+  kind: KnowledgeSourceKind;
+  /** URL (lark-doc), absolute path (file), or `inline-<short hash>` (inline). */
+  origin: string;
+  /** SHA-256 of (filename + '\n' + content) — lets `update_role` reuse the
+   * same source row when an identical doc is re-ingested. */
+  fingerprint: string;
+  /** Optional human-readable label set by the user / agent. */
+  label?: string;
+  createdAt: string;
+}
+
 export interface KnowledgeChunk {
   id: string;
   roleId: string;
   sourceFile?: string;
   chunkText: string;
   embedding?: Float32Array;
+  /** Phase 73: kind discriminator — see KnowledgeChunkKind. Default `'other'`. */
+  kind: KnowledgeChunkKind;
+  /** Phase 73: which `knowledge_sources` row this chunk derived from. After
+   * the v12 clean-slate migration, every chunk has a non-null source_id. */
+  sourceId?: string;
   createdAt: string;
 }
 

@@ -198,16 +198,48 @@ export interface RoleSummary extends Role {
   chunkCount: number;
 }
 
+/** Phase 73: chunk type discriminator — surfaced as a badge in the UI. */
+export type KnowledgeChunkKind = 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
+
+/** Phase 73: raw-doc origin type. */
+export type KnowledgeSourceKind = 'lark-doc' | 'file' | 'inline';
+
 export interface RoleChunk {
   id: string;
   sourceFile?: string;
   chunkText: string;
+  /** Phase 73 — defaults to `'other'`. */
+  kind: KnowledgeChunkKind;
+  /** Phase 73 — FK to `KnowledgeSource.id`. Always set on chunks created
+   * after migration v12; absent on legacy chunks (none should remain after
+   * the v12 clean-slate wipe, but the field stays optional defensively). */
+  sourceId?: string;
+  createdAt: string;
+}
+
+/** Phase 73: one row in the Sources block of the Role detail page. */
+export interface KnowledgeSource {
+  id: string;
+  roleId: string;
+  kind: KnowledgeSourceKind;
+  origin: string;
+  fingerprint: string;
+  label?: string;
+  chunkCount: number;
   createdAt: string;
 }
 
 export interface TrainRoleInput {
   name: string;
-  documents: Array<{ filename: string; content: string }>;
+  documents: Array<{
+    filename: string;
+    content: string;
+    // Phase 73 — optional typing + provenance per document.
+    kind?: KnowledgeChunkKind;
+    sourceKind?: KnowledgeSourceKind;
+    origin?: string;
+    sourceLabel?: string;
+  }>;
   baseSystemPrompt?: string;
 }
 

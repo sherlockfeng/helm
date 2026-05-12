@@ -43,7 +43,13 @@ import {
 } from '../requirements/capture.js';
 import { formatRequirementForInjection, recallRequirements } from '../requirements/recall.js';
 import { summarizeCampaign, type LlmClient } from '../summarizer/campaign.js';
-import { deleteChunkById, getChunksForRole } from '../storage/repos/roles.js';
+import {
+  deleteChunkById,
+  deleteSource,
+  getChunksForRole,
+  getSource,
+  listSourcesForRole,
+} from '../storage/repos/roles.js';
 import { listCampaigns } from '../storage/repos/campaigns.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 import {
@@ -332,13 +338,27 @@ export function createMcpServer(
   server.registerTool('train_role', {
     description:
       'Create OR full-replace a custom agent role with the given documents. '
-      + 'WARNING: if the role already exists, ALL existing knowledge chunks are deleted '
+      + 'WARNING: if the role already exists, ALL existing knowledge chunks AND sources are deleted '
       + 'and replaced with these. For incremental updates (append knowledge / refine the '
-      + 'system prompt without wiping), use `update_role` instead.',
+      + 'system prompt without wiping), use `update_role` instead. '
+      + '\n\n'
+      + 'Phase 73 — TYPING + LINEAGE: each document carries an optional `kind` '
+      + '(spec / example / warning / runbook / glossary / other; default `other`) that propagates '
+      + 'to every chunk. Internally helm creates a `knowledge_source` row per document so that '
+      + '`drop_knowledge_source` can cascade-delete derived chunks later. Optional `sourceKind` '
+      + '(lark-doc / file / inline; inferred when omitted) + `origin` (URL / abs path / inline id) '
+      + 'tag where this doc came from.',
     inputSchema: {
       roleId: z.string(),
       name: z.string(),
-      documents: z.array(z.object({ filename: z.string(), content: z.string() })).min(1),
+      documents: z.array(z.object({
+        filename: z.string(),
+        content: z.string(),
+        kind: z.enum(['spec', 'example', 'warning', 'runbook', 'glossary', 'other']).optional(),
+        sourceKind: z.enum(['lark-doc', 'file', 'inline']).optional(),
+        origin: z.string().optional(),
+        sourceLabel: z.string().optional(),
+      })).min(1),
       baseSystemPrompt: z.string().optional(),
     },
   }, async ({ roleId, name, documents, baseSystemPrompt }) => {
@@ -372,7 +392,15 @@ export function createMcpServer(
       name: z.string().optional(),
       baseSystemPrompt: z.string().optional(),
       appendDocuments: z
-        .array(z.object({ filename: z.string(), content: z.string() }))
+        .array(z.object({
+          filename: z.string(),
+          content: z.string(),
+          // Phase 73: per-doc typing + provenance, same shape as train_role.
+          kind: z.enum(['spec', 'example', 'warning', 'runbook', 'glossary', 'other']).optional(),
+          sourceKind: z.enum(['lark-doc', 'file', 'inline']).optional(),
+          origin: z.string().optional(),
+          sourceLabel: z.string().optional(),
+        }))
         .optional(),
       force: z.boolean().optional().describe(
         'Skip conflict detection and append unconditionally. Pass true only after the '
@@ -428,15 +456,57 @@ export function createMcpServer(
   });
 
   server.registerTool('search_knowledge', {
-    description: "RAG search against a role's knowledge base.",
+    description:
+      "RAG search against a role's knowledge base. "
+      + 'Phase 73: optional `kind` narrows the candidate pool to chunks of a single type '
+      + '(spec / example / warning / runbook / glossary / other) BEFORE cosine ranking. '
+      + 'Use it when you want a specific content shape — e.g. "give me the runbook for X" '
+      + 'instead of letting cosine pick across all chunk kinds.',
     inputSchema: {
       roleId: z.string(),
       query: z.string(),
       topK: z.number().min(1).max(20).optional(),
+      kind: z.enum(['spec', 'example', 'warning', 'runbook', 'glossary', 'other']).optional(),
     },
-  }, async ({ roleId, query, topK }) => {
-    const results = await searchKnowledge(deps.db, roleId, query, embedFn, topK ?? 5);
+  }, async ({ roleId, query, topK, kind }) => {
+    const opts: { topK?: number; kind?: 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other' } = {
+      topK: topK ?? 5,
+    };
+    if (kind) opts.kind = kind;
+    const results = await searchKnowledge(deps.db, roleId, query, embedFn, opts);
     return jsonResult(results);
+  });
+
+  // ── Phase 73: knowledge sources (typing + lineage) ──────────────────────
+
+  server.registerTool('list_knowledge_sources', {
+    description:
+      'List every `knowledge_source` row for a role. Each source row represents one '
+      + 'raw-doc ingestion event (Lark URL / file / inline blob) and tracks how many chunks were '
+      + 'derived from it. Use this to show the user what sources back a role before they decide '
+      + 'whether to drop one with `drop_knowledge_source`.',
+    inputSchema: { roleId: z.string() },
+  }, async ({ roleId }) => {
+    return jsonResult(listSourcesForRole(deps.db, roleId));
+  });
+
+  server.registerTool('drop_knowledge_source', {
+    description:
+      "Cascade-delete a knowledge source AND every chunk derived from it. Use this when the user "
+      + 'says "drop the Lark doc at URL X" or "this source is outdated, remove it". After this, '
+      + '`search_knowledge` will no longer surface anything from that source — but chunks from '
+      + 'OTHER sources for the same role are untouched. Idempotent: returns `removed: false` '
+      + 'when the source id was not found.',
+    inputSchema: { sourceId: z.string() },
+  }, async ({ sourceId }) => {
+    const sourceBefore = getSource(deps.db, sourceId);
+    const result = deleteSource(deps.db, sourceId);
+    return jsonResult({
+      sourceId,
+      removed: result.removed,
+      chunksDeleted: result.chunksDeleted,
+      ...(sourceBefore ? { source: sourceBefore } : {}),
+    });
   });
 
   // ── Requirements (Phase 7) ──────────────────────────────────────────────

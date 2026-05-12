@@ -242,7 +242,8 @@ export type AppEvent =
   | { type: 'session.started'; session: ActiveChat }
   | { type: 'session.closed'; hostSessionId: string }
   | { type: 'binding.created'; binding: { id: string; channel: string; hostSessionId?: string } }
-  | { type: 'binding.removed'; bindingId: string }
+  // Phase 72: hostSessionId added so renderer paths can scope reactions.
+  | { type: 'binding.removed'; bindingId: string; hostSessionId?: string }
   | { type: 'channel.message_enqueued'; bindingId: string; messageId: number }
   // Phase 70: fires when host_stop drains the queue (Cursor turn end /
   // new prompt). Renderer uses it to clear the "📨 queued" badge.

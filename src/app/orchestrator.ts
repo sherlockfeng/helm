@@ -298,6 +298,51 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     deps.notifier?.closeForApproval?.(e.approvalId);
   });
 
+  // Phase 72: when a binding is removed, auto-settle any pending approvals
+  // belonging to that chat if the chat now has NO remaining Lark binding.
+  // Rationale: the Phase 46 gate auto-allows new approvals for unbound
+  // chats. Without this listener, approvals that landed BEFORE the unbind
+  // sit in pending state until they hit the timeout (~10 min default) —
+  // the user sees a "approval needed" notification long after they've
+  // disconnected the chat from Lark. We settle with `permission='allow'`
+  // to match the gate's "no remote channel → auto-allow" semantics. The
+  // decided-by tag distinguishes this from the regular policy / UI paths
+  // in the audit trail.
+  events.on((e) => {
+    if (e.type !== 'binding.removed') return;
+    const hostSessionId = e.hostSessionId;
+    if (!hostSessionId) return;
+    // Only auto-settle if the chat has no remaining Lark binding —
+    // matches the requireApproval gate. If another Lark thread is still
+    // bound, the user might still expect the approval to flow through
+    // there; leave the pending row alone.
+    const remaining = listBindingsForSession(deps.db, hostSessionId);
+    if (remaining.some((b) => b.channel === 'lark')) return;
+
+    const pending = registry.listPending().filter((r) => r.hostSessionId === hostSessionId);
+    for (const req of pending) {
+      const settled = registry.settle(req.id, {
+        permission: 'allow',
+        decidedBy: 'policy',
+        reason: 'binding removed — chat no longer remote-mediated, helm auto-allowed',
+      });
+      if (settled) {
+        events.emit({
+          type: 'approval.settled',
+          approvalId: req.id,
+          decision: 'allow',
+          decidedBy: 'policy',
+          reason: 'binding removed',
+        });
+      }
+    }
+    if (pending.length > 0) {
+      log.info('binding_removed_auto_settled_pending', {
+        data: { hostSessionId, count: pending.length },
+      });
+    }
+  });
+
   // Bridge handlers. Phase 8 wires only the two flows we have engines for:
   // host_session_start (knowledge injection) + host_approval_request (registry/policy).
   const bridge = new BridgeServer({

@@ -277,8 +277,15 @@ async function handleInbound(
       return;
     }
     for (const { id } of bindings) {
+      // Phase 72: read hostSessionId BEFORE deleting so the event payload
+      // carries it. Mirrors api/server.ts's DELETE path.
+      const full = getChannelBinding(db, id);
       db.prepare(`DELETE FROM channel_bindings WHERE id = ?`).run(id);
-      events.emit({ type: 'binding.removed', bindingId: id });
+      events.emit({
+        type: 'binding.removed',
+        bindingId: id,
+        ...(full?.hostSessionId ? { hostSessionId: full.hostSessionId } : {}),
+      });
     }
     log.info('lark_unbind', { data: { count: bindings.length } });
     void replyToLark(channel, meta.larkChatId, meta.larkMessageId,

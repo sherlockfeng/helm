@@ -189,6 +189,23 @@ function upsertJsonMcpEntry(
   if (existsSync(filePath)) {
     const raw = readFileSync(filePath, 'utf8').trim();
     if (raw) {
+      // Phase 75: detect duplicate top-level `mcpServers` keys BEFORE
+      // letting JSON.parse silently keep the last one. We've seen this
+      // pattern in the wild — Cursor's settings panel or third-party
+      // tooling appending a second `"mcpServers": {...}` block, which
+      // makes JSON.parse drop the first block (containing helm) AND
+      // produces a confusing parser error in Cursor's UI ("Server
+      // 'mcpServers' must have either command or url"). Refuse to write
+      // until the user merges the blocks by hand — auto-merging would
+      // be helpful but risks data loss if the duplicate was intentional.
+      const dupes = findDuplicateMcpServersKeys(raw);
+      if (dupes > 1) {
+        throw new Error(
+          `setup-mcp: ${filePath} has ${dupes} top-level "mcpServers" entries (JSON allows but undefined-behavior). `
+          + 'Cursor / Claude will silently drop the first block and complain about a "Server \'mcpServers\'" parse error. '
+          + 'Open the file and merge both blocks into one before re-running setup-mcp.',
+        );
+      }
       try {
         const candidate = JSON.parse(raw);
         if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
@@ -223,6 +240,46 @@ function upsertJsonMcpEntry(
   // conventions in the wild.
   writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n');
   return { changed: true };
+}
+
+/**
+ * Phase 75: count top-level `"mcpServers"` keys in a JSON string without
+ * relying on JSON.parse (which silently dedups duplicates by keeping the
+ * last one — exactly the failure mode we're trying to surface).
+ *
+ * Walks the JSON char-by-char tracking depth + string state so the key
+ * "mcpServers" inside a nested object / inside a string literal doesn't
+ * count. Cheap regex-with-state, not a real parser — sufficient because
+ * we only need to flag the case "the top-level object has two keys named
+ * mcpServers", which has only one ambiguous read.
+ */
+function findDuplicateMcpServersKeys(raw: string): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let topLevelCount = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') {
+      // Heuristic: at the top level (depth === 1) right after an opening
+      // brace / comma, a `"mcpServers"` substring followed by `:` is a key.
+      // "mcpServers" with surrounding quotes is 12 chars.
+      if (!inString && depth === 1 && raw.slice(i, i + 12) === '"mcpServers"') {
+        // Confirm it's a key (next non-whitespace char is `:`).
+        let j = i + 12;
+        while (j < raw.length && /\s/.test(raw[j]!)) j++;
+        if (raw[j] === ':') topLevelCount++;
+      }
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') depth--;
+  }
+  return topLevelCount;
 }
 
 function shallowEqualJson(a: unknown, b: unknown): boolean {

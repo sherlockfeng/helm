@@ -109,6 +109,43 @@ describe('setup-mcp cursor', () => {
     expect(json.mcpServers.helm.url).toBe(HELM_MCP_URL_DEFAULT);
   });
 
+  it('Phase 75: refuses to write when the file has duplicate top-level `mcpServers` keys', () => {
+    // Real-world failure mode: Cursor's Settings UI or a third-party tool
+    // appended a second `"mcpServers"` block instead of merging into the
+    // existing one. JSON.parse silently drops the first block — including
+    // helm — which produces the confusing "Server 'mcpServers'" parser
+    // error in Cursor's UI. Refuse to write so the user notices.
+    const file = join(home, '.cursor', 'mcp.json');
+    mkdirSync(join(home, '.cursor'), { recursive: true });
+    writeFileSync(file, [
+      '{',
+      '  "mcpServers": {',
+      '    "alpha": { "command": "x" }',
+      '  },',
+      '  "mcpServers": {',
+      '    "beta": { "command": "y" }',
+      '  }',
+      '}',
+    ].join('\n'));
+
+    expect(() => setupMcp('cursor', { homeDir: home })).toThrow(/duplicate.*mcpServers|merge both blocks/i);
+  });
+
+  it('Phase 75: nested "mcpServers" string inside another key is NOT counted as a duplicate', () => {
+    const file = join(home, '.cursor', 'mcp.json');
+    mkdirSync(join(home, '.cursor'), { recursive: true });
+    writeFileSync(file, [
+      '{',
+      '  "mcpServers": {',
+      '    "alpha": { "command": "echo mcpServers" }',
+      '  },',
+      '  "note": "remember to back up mcpServers"',
+      '}',
+    ].join('\n'));
+    // Should add helm fine — no actual duplicate.
+    expect(() => setupMcp('cursor', { homeDir: home })).not.toThrow();
+  });
+
   it('Phase 75: migrates a pre-Phase-75 url-only entry to include type: sse', () => {
     // User who ran an older helm setup-mcp ended up with `{ url: ... }`
     // sans type. Re-running setup-mcp should patch the entry to add the

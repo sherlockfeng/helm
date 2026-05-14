@@ -132,11 +132,28 @@ export interface KnowledgeProviderConfig {
   config?: Record<string, unknown>;
 }
 
+/** Phase 77: knowledge lifecycle thresholds — user-tunable in Settings. */
+export interface KnowledgeLifecycleConfig {
+  /** Min chunk age (days, since createdAt) before archive becomes eligible. Default 90. */
+  archiveAfterDays: number;
+  /** Max access_count for a chunk to still count as "cold". Default 3. */
+  archiveBelowAccessCount: number;
+  /** Time constant (days) for exp(-Δt/τ) decay during fusion re-rank. Default 30. */
+  decayTauDays: number;
+  /** Max boost / penalty α the decay re-rank can apply. 0 disables. Default 0.3. */
+  decayAlpha: number;
+}
+
 export interface HelmConfig {
   server: { port: number };
   approval: { defaultTimeoutMs: number; waitPollMs: number };
   lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
-  knowledge: { providers: KnowledgeProviderConfig[] };
+  knowledge: {
+    providers: KnowledgeProviderConfig[];
+    /** Phase 77: lifecycle block. Optional on the type so old configs parse;
+     * backend supplies defaults. */
+    lifecycle?: KnowledgeLifecycleConfig;
+  };
   docFirst: { enforce: boolean };
   cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
   // Phase 67: global Harness conventions, injected into every reviewer
@@ -215,6 +232,15 @@ export interface RoleChunk {
    * the v12 clean-slate wipe, but the field stays optional defensively). */
   sourceId?: string;
   createdAt: string;
+  /** Phase 77 — number of search hits returned for this chunk. Drives the
+   * "accessed N times" label on each chunk card. */
+  accessCount: number;
+  /** Phase 77 — ISO timestamp of the most recent search hit; undefined when
+   * the chunk has never been queried. */
+  lastAccessedAt?: string;
+  /** Phase 77 — soft-archive flag. Archived chunks render in a folded
+   * "Archived (N)" section with an "unarchive" button. */
+  archived: boolean;
 }
 
 /** Phase 73: one row in the Sources block of the Role detail page. */

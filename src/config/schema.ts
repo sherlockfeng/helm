@@ -31,8 +31,36 @@ const KnowledgeProviderConfigSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
+/**
+ * Phase 77 (knowledge lifecycle): user-tunable thresholds for the background
+ * archival sweep and the in-search decay re-rank. All optional with sensible
+ * defaults — zero-config users get the same behavior as if the block were
+ * absent. Each field can be edited via Settings → Knowledge lifecycle.
+ *
+ * - `archiveAfterDays` — minimum age (since createdAt) before a chunk is
+ *   eligible for archive. Default 90.
+ * - `archiveBelowAccessCount` — max access_count for a chunk to still be
+ *   considered "cold". 0/1/2 hits in 90+ days → archive. Default 3.
+ * - `decayTauDays` — time constant for the `exp(-Δt/τ)` decay applied during
+ *   the fusion re-rank. Smaller τ = sharper drop. Default 30.
+ * - `decayAlpha` — max boost / penalty the decay multiplier can apply to
+ *   the RRF score. `final = rrf * (1 + α * decay)`; α=0.3 caps influence
+ *   at ±30%. Default 0.3.
+ */
+const KnowledgeLifecycleConfigSchema = z.object({
+  archiveAfterDays: z.number().int().positive().default(90),
+  archiveBelowAccessCount: z.number().int().nonnegative().default(3),
+  decayTauDays: z.number().positive().default(30),
+  decayAlpha: z.number().min(0).max(1).default(0.3),
+}).strict();
+
 const KnowledgeConfigSchema = z.object({
   providers: z.array(KnowledgeProviderConfigSchema).default([]),
+  // Phase 77: optional so existing saved configs (without a `lifecycle`
+  // key) parse cleanly and the orchestrator's `liveConfig.knowledge?.lifecycle`
+  // read keeps the same null-safety. When the field is present, defaults
+  // for individual sub-fields are still filled by the inner schema.
+  lifecycle: KnowledgeLifecycleConfigSchema.optional(),
 }).strict();
 
 const ServerConfigSchema = z.object({
@@ -112,6 +140,7 @@ export type HelmConfig = z.infer<typeof HelmConfigSchema>;
 export type LarkConfig = z.infer<typeof LarkConfigSchema>;
 export type KnowledgeProviderConfig = z.infer<typeof KnowledgeProviderConfigSchema>;
 export type DepscopeMapping = z.infer<typeof DepscopeMappingSchema>;
+export type KnowledgeLifecycleConfig = z.infer<typeof KnowledgeLifecycleConfigSchema>;
 
 /**
  * Schema slice for the per-provider `config` blob when id === 'depscope'.

@@ -46,6 +46,25 @@ function KindBadge({ kind }: { kind: KnowledgeChunkKind }) {
 
 const KIND_OPTIONS: KnowledgeChunkKind[] = ['other', 'spec', 'example', 'warning', 'runbook', 'glossary'];
 
+/**
+ * Phase 77 — compact relative-time formatter for chunk access stats.
+ * Returns "Nm ago" / "Nh ago" / "Nd ago" — keep cards visually tight.
+ * Falls back to the raw ISO string for unparseable input rather than
+ * throwing; this is decoration, not data.
+ */
+function formatRelative(iso: string): string {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return iso;
+  const deltaMs = Date.now() - ts;
+  if (deltaMs < 60_000) return 'just now';
+  const mins = Math.floor(deltaMs / 60_000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
 function shortId(id: string, len = 12): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
@@ -68,6 +87,8 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
   const [trainKind, setTrainKind] = useState<KnowledgeChunkKind>('other');
   // Phase 73: in-flight drop on a knowledge source.
   const [droppingSourceId, setDroppingSourceId] = useState<string | null>(null);
+  // Phase 77: per-chunk pending state for the unarchive button.
+  const [unarchivingChunkId, setUnarchivingChunkId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Pre-fill form once detail loads
@@ -120,6 +141,21 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       setTrainError(msg);
     } finally {
       setTraining(false);
+    }
+  }
+
+  /** Phase 77: restore a single archived chunk. Best-effort; reloads the
+   * role detail on success so the chunk pops back into the live list. */
+  async function unarchiveChunk(chunkId: string): Promise<void> {
+    setUnarchivingChunkId(chunkId);
+    try {
+      await helmApi.unarchiveChunk(chunkId);
+      detail.reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setTrainError(`Unarchive failed: ${msg}`);
+    } finally {
+      setUnarchivingChunkId(null);
     }
   }
 
@@ -200,31 +236,92 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
         </>
       )}
 
-      <div className="label">Knowledge chunks ({chunks.length})</div>
-      {chunks.length === 0 ? (
-        <p className="muted" style={{ marginTop: 4, marginBottom: 14 }}>
-          No documents trained yet.
-        </p>
-      ) : (
-        <ul style={{ margin: '6px 0 14px', paddingLeft: 0, listStyle: 'none' }}>
-          {chunks.slice(0, 8).map((c) => (
-            <li key={c.id} style={{ marginBottom: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <KindBadge kind={c.kind} />
-                <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
-              </div>
-              <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
-                {summarizePrompt(c.chunkText, 200)}
-              </div>
-            </li>
-          ))}
-          {chunks.length > 8 && (
-            <li className="muted" style={{ fontSize: 12 }}>
-              … {chunks.length - 8} more chunk{chunks.length - 8 === 1 ? '' : 's'}.
-            </li>
-          )}
-        </ul>
-      )}
+      {/* Phase 77: split chunks into live + archived. Live chunks render
+          first (limited to 8 for the preview); archived chunks live in a
+          folded `<details>` so they don't clutter the main view. Each
+          archived row gets an "Unarchive" button driven by the new
+          unarchive endpoint. */}
+      {(() => {
+        const liveChunks = chunks.filter((c) => !c.archived);
+        const archivedChunks = chunks.filter((c) => c.archived);
+        return (
+          <>
+            <div className="label">Knowledge chunks ({liveChunks.length})</div>
+            {liveChunks.length === 0 ? (
+              <p className="muted" style={{ marginTop: 4, marginBottom: 14 }}>
+                No documents trained yet.
+              </p>
+            ) : (
+              <ul style={{ margin: '6px 0 14px', paddingLeft: 0, listStyle: 'none' }}>
+                {liveChunks.slice(0, 8).map((c) => (
+                  <li key={c.id} style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <KindBadge kind={c.kind} />
+                      <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
+                    </div>
+                    <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
+                      {summarizePrompt(c.chunkText, 200)}
+                    </div>
+                    <div className="muted" style={{ marginTop: 2, fontSize: 11 }}>
+                      accessed {c.accessCount} time{c.accessCount === 1 ? '' : 's'}
+                      {c.lastAccessedAt
+                        ? ` · last ${formatRelative(c.lastAccessedAt)}`
+                        : ' · never queried'}
+                    </div>
+                  </li>
+                ))}
+                {liveChunks.length > 8 && (
+                  <li className="muted" style={{ fontSize: 12 }}>
+                    … {liveChunks.length - 8} more chunk{liveChunks.length - 8 === 1 ? '' : 's'}.
+                  </li>
+                )}
+              </ul>
+            )}
+
+            {archivedChunks.length > 0 && (
+              <details style={{ marginBottom: 14 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12 }}>
+                  Archived chunks ({archivedChunks.length}) — cold + old; default-hidden from search
+                </summary>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 0, listStyle: 'none' }}>
+                  {archivedChunks.map((c) => (
+                    <li key={c.id} style={{
+                      marginBottom: 8,
+                      opacity: 0.7,
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'flex-start',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <KindBadge kind={c.kind} />
+                          <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
+                        </div>
+                        <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
+                          {summarizePrompt(c.chunkText, 200)}
+                        </div>
+                        <div className="muted" style={{ marginTop: 2, fontSize: 11 }}>
+                          accessed {c.accessCount} time{c.accessCount === 1 ? '' : 's'}
+                          {c.lastAccessedAt ? ` · last ${formatRelative(c.lastAccessedAt)}` : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={unarchivingChunkId === c.id}
+                        aria-busy={unarchivingChunkId === c.id}
+                        onClick={() => { void unarchiveChunk(c.id); }}
+                        title="Restore this chunk into the live search pool"
+                      >
+                        {unarchivingChunkId === c.id ? 'Restoring…' : 'Unarchive'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </>
+        );
+      })()}
 
       <div className="label">Train / re-train</div>
       <p className="muted" style={{ fontSize: 11, margin: '4px 0 8px' }}>

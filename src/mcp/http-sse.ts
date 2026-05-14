@@ -35,6 +35,23 @@ export const MCP_SSE_PATH = '/mcp/sse';
 /** Path the helm HTTP server uses for client→server JSON-RPC POSTs. */
 export const MCP_MESSAGES_PATH = '/mcp/messages';
 
+/**
+ * Phase 77 (sidecar fix): SSE keepalive comment frame.
+ *
+ * Chrome / Electron close idle TCP connections after ~30s. When that
+ * happens to Cursor's `/mcp/sse` stream, Cursor reconnects but its
+ * internal tool-list cache occasionally desyncs ("Tool not found" until
+ * the user ⌘R reloads). Pushing a keepalive comment (`: keepalive\n\n`)
+ * every 25s holds the socket open without inserting fake JSON-RPC
+ * traffic — the leading colon makes it a comment per the SSE spec,
+ * which all conforming clients (browser EventSource, MCP SDK, etc.)
+ * silently discard.
+ *
+ * Cost per session: ~14 bytes / 25s = 0.56 bytes/s. Negligible.
+ */
+export const KEEPALIVE_INTERVAL_MS = 25_000;
+export const KEEPALIVE_FRAME = ': keepalive\n\n';
+
 export interface McpHttpSseDeps {
   /**
    * Build a fresh McpServer for each new SSE connection. The factory should
@@ -48,11 +65,19 @@ export interface McpHttpSseDeps {
   factory: () => McpServer;
   /** Optional logger for connection lifecycle + errors. */
   logger?: Logger;
+  /**
+   * Phase 77: override the keepalive interval in ms. Defaults to
+   * `KEEPALIVE_INTERVAL_MS` (25s). Tests dial it down to ~100ms so the
+   * keepalive frame is observable in well under a second.
+   */
+  keepaliveIntervalMs?: number;
 }
 
 interface ActiveSession {
   transport: SSEServerTransport;
   server: McpServer;
+  /** Phase 77: keepalive interval handle, cleared on transport close. */
+  keepalive: NodeJS.Timeout;
 }
 
 /**
@@ -89,6 +114,12 @@ export class McpHttpSseHub {
     const transport = new SSEServerTransport(MCP_MESSAGES_PATH, res);
     const server = this.deps.factory();
 
+    // Phase 77: keepalive timer started AFTER server.connect succeeds (see
+    // below). Declared here so transport.onclose can clear it on any close
+    // path (transport-first, server-first, socket-drop). `unref` so an
+    // orphaned timer never blocks process exit during tests.
+    let keepalive: NodeJS.Timeout | null = null;
+
     // Guard against the close-cascade: McpServer.close() closes its
     // transport, transport.close() fires onclose, and our onclose used to
     // call server.close() again — infinite recursion. Latch this once so
@@ -97,6 +128,10 @@ export class McpHttpSseHub {
     transport.onclose = () => {
       if (closing) return;
       closing = true;
+      if (keepalive) {
+        clearInterval(keepalive);
+        keepalive = null;
+      }
       const sid = transport.sessionId;
       const had = this.sessions.delete(sid);
       if (had) {
@@ -125,7 +160,37 @@ export class McpHttpSseHub {
       return;
     }
 
-    this.sessions.set(transport.sessionId, { transport, server });
+    // Phase 77: start the keepalive interval now that the transport has
+    // written its initial headers + endpoint event. We write directly to
+    // `res` (the underlying Node response) rather than through the SDK's
+    // transport.send, because send() formats JSON-RPC payloads — a comment
+    // frame isn't valid JSON-RPC and would confuse the client.
+    // Errors here mean the socket is already dead; clearing the interval
+    // immediately is the right move (transport.onclose will also fire,
+    // but it's idempotent).
+    keepalive = setInterval(() => {
+      try {
+        if (res.writableEnded || res.destroyed) {
+          if (keepalive) {
+            clearInterval(keepalive);
+            keepalive = null;
+          }
+          return;
+        }
+        res.write(KEEPALIVE_FRAME);
+      } catch (err) {
+        this.deps.logger?.info('mcp_sse_keepalive_write_failed', {
+          data: { error: (err as Error).message, sessionId: transport.sessionId },
+        });
+        if (keepalive) {
+          clearInterval(keepalive);
+          keepalive = null;
+        }
+      }
+    }, this.deps.keepaliveIntervalMs ?? KEEPALIVE_INTERVAL_MS);
+    keepalive.unref?.();
+
+    this.sessions.set(transport.sessionId, { transport, server, keepalive });
     this.deps.logger?.info('mcp_sse_session_opened', { data: { sessionId: transport.sessionId } });
 
     // When the underlying socket dies (Cursor restart, network drop), the
@@ -180,6 +245,9 @@ export class McpHttpSseHub {
     this.closed = true;
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
+    // Phase 77: stop the keepalive intervals first so they don't try to
+    // write to a half-closed response while transport.close() is in flight.
+    for (const s of sessions) clearInterval(s.keepalive);
     await Promise.allSettled(sessions.map((s) => s.transport.close()));
   }
 

@@ -222,6 +222,16 @@ export const helmApi = {
     request<{ removed: boolean; chunksDeleted: number; source: import('./types.js').KnowledgeSource }>(
       'DELETE', `/api/knowledge-sources/${encodeURIComponent(sourceId)}`,
     ),
+  /**
+   * Phase 77: rescue a single soft-archived chunk. Drives the "unarchive"
+   * button inside the Roles page's "Archived (N)" folded section.
+   * Re-bumps `last_accessed_at` so the freshly-rescued chunk doesn't get
+   * re-archived on the very next sweep.
+   */
+  unarchiveChunk: (chunkId: string) =>
+    request<{ chunkId: string; restored: boolean }>(
+      'POST', `/api/knowledge-chunks/${encodeURIComponent(chunkId)}/unarchive`,
+    ),
 
   // Phase 60b: conversational role training. Each turn POSTs the full
   // transcript; helm spawns `claude -p` with helm's MCP injected so the

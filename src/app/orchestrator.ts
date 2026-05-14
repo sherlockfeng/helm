@@ -43,7 +43,8 @@ import { LarkChannel } from '../channel/lark/adapter.js';
 import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
-import { seedBuiltinRoles, trainRole } from '../roles/library.js';
+import { seedBuiltinRoles, setLifecycleSweepTrigger, trainRole } from '../roles/library.js';
+import { runArchivalSweep } from '../roles/lifecycle.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -199,6 +200,60 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // ahead of provider wiring (Phase 27 / D4) so reconfigureProviders can read
   // it on every saveConfig.
   let liveConfig = deps.config ?? HelmConfigSchema.parse({});
+
+  // Phase 77: knowledge-lifecycle wiring.
+  //
+  //   - On boot: one immediate sweep so a long-idle install catches up.
+  //   - Every 24h: cron-style sweep across every role with chunks.
+  //   - On mutation (trainRole / updateRole / drop_knowledge_source): a
+  //     fire-and-forget per-role sweep, via the library + MCP triggers.
+  //
+  // The sweep reads thresholds from `liveConfig.knowledge.lifecycle`
+  // through a closure so a Settings edit takes effect on the NEXT sweep
+  // — no orchestrator restart needed. `unref` on the interval so test
+  // suites that forget to call `.stop()` don't deadlock the event loop.
+  const lifecycleLog = deps.loggers.module('knowledge.lifecycle');
+  function runSweepWithLogging(roleId?: string): void {
+    try {
+      const result = runArchivalSweep(deps.db, {
+        ...(roleId ? { roleId } : {}),
+        thresholds: liveConfig.knowledge?.lifecycle,
+      });
+      // Decision §11: log-only reporting, no UI. Skip noisy empty sweeps
+      // (no candidates anywhere) — only log when at least one role had
+      // candidates to consider OR at least one chunk got archived.
+      if (result.archived > 0 || result.scanned > 0) {
+        lifecycleLog.info('archival_sweep_completed', {
+          data: {
+            ...(roleId ? { roleId } : { scope: 'all_roles' }),
+            scanned: result.scanned,
+            archived: result.archived,
+            skipped: result.skipped,
+            durationMs: result.durationMs,
+            byRole: result.byRole.filter((r) => r.scanned > 0),
+          },
+        });
+      }
+    } catch (err) {
+      lifecycleLog.warn('archival_sweep_failed', {
+        data: { error: (err as Error).message, ...(roleId ? { roleId } : {}) },
+      });
+    }
+  }
+  // Mutation-driven sweep: library + MCP fire this fire-and-forget. We
+  // do the actual SQL on a microtask so the caller's promise resolves
+  // before the sweep starts hitting the DB.
+  setLifecycleSweepTrigger((roleId) => {
+    queueMicrotask(() => runSweepWithLogging(roleId));
+  });
+  // Boot sweep — synchronous so failures show up in the boot log.
+  runSweepWithLogging();
+  // 24h cron tick.
+  const LIFECYCLE_CRON_MS = 24 * 60 * 60 * 1000;
+  const lifecycleCron: NodeJS.Timeout = setInterval(() => {
+    runSweepWithLogging();
+  }, LIFECYCLE_CRON_MS);
+  lifecycleCron.unref?.();
 
   // Knowledge — LocalRolesProvider + RequirementsArchiveProvider always on
   // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
@@ -1049,6 +1104,11 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     async stop(): Promise<void> {
       if (!started) return;
       log.info('shutdown_start');
+      // Phase 77: stop the lifecycle cron + unhook the mutation trigger
+      // first so a stray train/update/drop call during shutdown doesn't
+      // schedule new sweep work onto a tearing-down DB connection.
+      clearInterval(lifecycleCron);
+      setLifecycleSweepTrigger(null);
       await httpApi.stop();
       if (larkWiring) larkWiring.detach();
       if (larkChannel) await larkChannel.stop();

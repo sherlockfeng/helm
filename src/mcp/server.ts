@@ -458,21 +458,34 @@ export function createMcpServer(
   server.registerTool('search_knowledge', {
     description:
       "RAG search against a role's knowledge base. "
+      + 'Phase 76: defaults to multipath FUSION — BM25 (lexical) + cosine (semantic) + entity-match '
+      + '(rule-extracted acronyms / camelCase / URLs / filenames) combined via Reciprocal Rank Fusion. '
+      + 'Each leg returns top candidates; the fused ranking surfaces chunks that score well on '
+      + 'multiple dimensions while letting any single leg "rescue" a chunk the others missed. '
+      + 'Returned hits include per-leg raw scores (`bm25Score` / `cosineScore` / `entityScore`) for '
+      + 'introspection. '
+      + '\n\n'
       + 'Phase 73: optional `kind` narrows the candidate pool to chunks of a single type '
-      + '(spec / example / warning / runbook / glossary / other) BEFORE cosine ranking. '
-      + 'Use it when you want a specific content shape — e.g. "give me the runbook for X" '
-      + 'instead of letting cosine pick across all chunk kinds.',
+      + '(spec / example / warning / runbook / glossary / other) BEFORE ranking, in every leg. '
+      + '\n\n'
+      + 'Override `strategy` only when debugging or benchmarking a single leg — production callers '
+      + 'should leave it at the default. `bm25` / `cosine` / `entity` run just that leg.',
     inputSchema: {
       roleId: z.string(),
       query: z.string(),
       topK: z.number().min(1).max(20).optional(),
       kind: z.enum(['spec', 'example', 'warning', 'runbook', 'glossary', 'other']).optional(),
+      strategy: z.enum(['fusion', 'bm25', 'cosine', 'entity']).optional().describe(
+        'Retrieval strategy. Default `fusion` runs BM25 + cosine + entity-match and combines via RRF. '
+        + 'Single-leg modes are for debug / benchmark comparison.',
+      ),
     },
-  }, async ({ roleId, query, topK, kind }) => {
-    const opts: { topK?: number; kind?: 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other' } = {
+  }, async ({ roleId, query, topK, kind, strategy }) => {
+    const opts: import('../roles/library.js').SearchKnowledgeOptions = {
       topK: topK ?? 5,
     };
     if (kind) opts.kind = kind;
+    if (strategy) opts.strategy = strategy;
     const results = await searchKnowledge(deps.db, roleId, query, embedFn, opts);
     return jsonResult(results);
   });

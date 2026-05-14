@@ -249,3 +249,148 @@ export function getAgentSession(
 export function deleteAgentSessionsForRole(db: Database.Database, roleId: string): void {
   db.prepare(`DELETE FROM agent_sessions WHERE role_id = ?`).run(roleId);
 }
+
+// ── ChunkEntity (Phase 76) ────────────────────────────────────────────────
+
+/**
+ * Phase 76: idempotent entity row insert. `INSERT OR IGNORE` because the
+ * primary key is (chunk_id, entity) and the same caller (trainRole) may
+ * try to add the same entity twice if the extractor's tiers overlap
+ * (e.g. whitelist + caps both match `API`).
+ */
+export function insertChunkEntity(
+  db: Database.Database,
+  row: { chunkId: string; roleId: string; entity: string; weight?: number; createdAt: string },
+): void {
+  db.prepare(`
+    INSERT OR IGNORE INTO knowledge_chunk_entities (chunk_id, role_id, entity, weight, created_at)
+    VALUES (@chunk_id, @role_id, @entity, @weight, @created_at)
+  `).run({
+    chunk_id: row.chunkId, role_id: row.roleId, entity: row.entity,
+    weight: row.weight ?? 1.0, created_at: row.createdAt,
+  });
+}
+
+export function deleteChunkEntitiesForRole(db: Database.Database, roleId: string): void {
+  db.prepare(`DELETE FROM knowledge_chunk_entities WHERE role_id = ?`).run(roleId);
+}
+
+export function listChunkEntities(
+  db: Database.Database,
+  chunkId: string,
+): Array<{ entity: string; weight: number }> {
+  return (db.prepare(
+    `SELECT entity, weight FROM knowledge_chunk_entities WHERE chunk_id = ?`,
+  ).all(chunkId) as Array<{ entity: string; weight: number }>).map((r) => ({
+    entity: String(r.entity), weight: Number(r.weight),
+  }));
+}
+
+/**
+ * Phase 76: entity-match leg of multipath retrieval. Returns chunks where
+ * ANY of the supplied entities match (case-insensitive). Score = sum of
+ * (weight) for distinct matching entities — so a chunk that hits two of
+ * the query's entities outscores one that hits a single high-weight one.
+ *
+ * `limit` is applied post-aggregation. Pass query entities lowercased OR
+ * mixed; comparison is `LOWER(entity) = LOWER(?)`.
+ *
+ * Returns empty when entities is empty (rather than "all chunks") —
+ * caller checks length and drops this leg from RRF fusion.
+ */
+export function searchChunksByEntity(
+  db: Database.Database,
+  roleId: string,
+  entities: readonly string[],
+  limit: number,
+): Array<{ chunkId: string; score: number; hitCount: number }> {
+  if (entities.length === 0) return [];
+  // Build a parameterized `IN (...)` clause case-insensitively.
+  const placeholders = entities.map(() => 'LOWER(?)').join(',');
+  const sql = `
+    SELECT chunk_id AS chunkId,
+           SUM(weight) AS score,
+           COUNT(DISTINCT entity) AS hitCount
+    FROM knowledge_chunk_entities
+    WHERE role_id = ?
+      AND LOWER(entity) IN (${placeholders})
+    GROUP BY chunk_id
+    ORDER BY score DESC, hitCount DESC
+    LIMIT ?
+  `;
+  const params: unknown[] = [roleId, ...entities.map((e) => e.toLowerCase()), limit];
+  return (db.prepare(sql).all(...params) as Array<{ chunkId: string; score: number; hitCount: number }>)
+    .map((r) => ({ chunkId: String(r.chunkId), score: Number(r.score), hitCount: Number(r.hitCount) }));
+}
+
+/**
+ * Phase 76: BM25 leg. Thin wrapper around the FTS5 virtual table joined
+ * back to knowledge_chunks so we can filter by role_id (FTS5 itself
+ * doesn't store the role_id column).
+ *
+ * `query` is passed through FTS5's MATCH syntax verbatim — callers can
+ * use prefix terms (`tce*`), boolean ops (`tce AND rollback`), or
+ * phrases (`"incident response"`). Unsupported syntax raises a sqlite
+ * error; for forgiving behavior we sanitize: strip FTS5 control chars
+ * and wrap each surviving token with a prefix asterisk for partial
+ * matches.
+ *
+ * Score is the BM25 rank (lower = better in raw FTS5; we negate so
+ * caller can sort DESC consistently with other legs).
+ */
+export function searchChunksByBm25(
+  db: Database.Database,
+  roleId: string,
+  query: string,
+  limit: number,
+): Array<{ chunkId: string; score: number }> {
+  const ftsQuery = sanitizeBm25Query(query);
+  if (!ftsQuery) return [];
+  try {
+    return (db.prepare(`
+      SELECT kc.id AS chunkId, -bm25(knowledge_chunks_fts) AS score
+      FROM knowledge_chunks_fts
+      JOIN knowledge_chunks kc ON kc.rowid = knowledge_chunks_fts.rowid
+      WHERE knowledge_chunks_fts MATCH ?
+        AND kc.role_id = ?
+      ORDER BY bm25(knowledge_chunks_fts) ASC
+      LIMIT ?
+    `).all(ftsQuery, roleId, limit) as Array<{ chunkId: string; score: number }>)
+      .map((r) => ({ chunkId: String(r.chunkId), score: Number(r.score) }));
+  } catch {
+    // FTS5 syntax errors degrade to "this leg returned nothing" so the
+    // fusion path drops the BM25 weight rather than crashing the whole
+    // search. The cosine leg still has the user's intent.
+    return [];
+  }
+}
+
+/**
+ * Sanitize a free-form user query into a safe FTS5 MATCH expression.
+ *
+ *   - Strip FTS5 operators (`AND` / `OR` / `NOT` / `NEAR` / parens / colon)
+ *     so a query like "AND rollback" doesn't confuse the parser.
+ *   - Split on whitespace, lowercase, and append `*` for prefix recall
+ *     (matches partial words and CJK substring runs).
+ *   - Quote each token with double quotes so punctuation inside the token
+ *     can't trigger operators (e.g. token `c++` becomes `"c++"*`).
+ *   - Drop tokens shorter than 1 char.
+ *
+ * Tokens are AND'd implicitly by FTS5 default; we don't insert explicit
+ * AND because that requires the operator-uppercase form which the strip
+ * step would have removed.
+ */
+function sanitizeBm25Query(query: string): string | null {
+  // Remove FTS5 control characters / operator words anywhere in the input.
+  const cleaned = query
+    .replace(/[():"]/g, ' ')
+    .replace(/\b(AND|OR|NOT|NEAR)\b/g, ' ');
+  const tokens = cleaned
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return null;
+  // Wrap each token; prefix-star outside the quote so FTS5 recognizes it
+  // as the prefix operator.
+  return tokens.map((t) => `"${t.replace(/"/g, '')}"*`).join(' ');
+}

@@ -363,6 +363,69 @@ export const MIGRATIONS: Migration[] = [
       DELETE FROM knowledge_chunks WHERE source_id IS NULL;
     `,
   },
+  {
+    version: 13,
+    description:
+      'Multipath retrieval (Phase 76) — adds two structures alongside the existing cosine index:'
+      + ' (1) a SQLite FTS5 virtual table mirroring `knowledge_chunks.chunk_text` for BM25 ranking,'
+      + ' kept in sync by triggers on the main table;'
+      + ' (2) a `knowledge_chunk_entities` table holding rule-extracted entities (whitelist short-acronyms,'
+      + ' >=3 caps, camelCase, URL host/path tail, filename basename) so an "entity match" leg can'
+      + ' contribute to RRF fusion. Both structures are populated forward by trainRole/updateRole;'
+      + ' the migration backfills BM25 for existing chunks (cheap) but NOT entities (the extractor'
+      + ' code lives in TS and migrations only run SQL — the orchestrator runs a one-shot entity'
+      + ' backfill at boot when it detects an entity-less role with chunks).',
+    up: `
+      -- (1) FTS5 virtual table — external-content mode bound to knowledge_chunks.rowid.
+      -- unicode61 with remove_diacritics=2 covers ascii + accent stripping; for CJK
+      -- the tokenizer falls back to per-character which gives literal-substring
+      -- recall but no word segmentation. jieba integration is a follow-up.
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+        chunk_text,
+        content = 'knowledge_chunks',
+        content_rowid = 'rowid',
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+
+      -- Triggers — FTS5 external-content does NOT auto-sync on writes to the
+      -- backing table, so we mirror INSERT/UPDATE/DELETE manually. Note that
+      -- ON DELETE CASCADE on knowledge_chunks (via knowledge_sources or roles
+      -- being dropped) also fires the AFTER DELETE trigger here, so cascading
+      -- still cleans the FTS index.
+      CREATE TRIGGER IF NOT EXISTS kc_fts_ai AFTER INSERT ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(rowid, chunk_text) VALUES (new.rowid, new.chunk_text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS kc_fts_ad AFTER DELETE ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, chunk_text)
+        VALUES ('delete', old.rowid, old.chunk_text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS kc_fts_au AFTER UPDATE ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, chunk_text)
+        VALUES ('delete', old.rowid, old.chunk_text);
+        INSERT INTO knowledge_chunks_fts(rowid, chunk_text) VALUES (new.rowid, new.chunk_text);
+      END;
+
+      -- Backfill the FTS5 index for any chunks that survived v12. After this
+      -- migration runs once, the triggers maintain consistency going forward.
+      INSERT INTO knowledge_chunks_fts(rowid, chunk_text)
+        SELECT rowid, chunk_text FROM knowledge_chunks;
+
+      -- (2) Entity index. One row per (chunk, entity) pair; same entity may
+      -- repeat across chunks. role_id is denormalized so the query path can
+      -- filter without joining knowledge_chunks. PK on (chunk_id, entity)
+      -- dedups same-entity-twice-in-one-chunk; SELECT DISTINCT not needed.
+      CREATE TABLE IF NOT EXISTS knowledge_chunk_entities (
+        chunk_id   TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        role_id    TEXT NOT NULL REFERENCES roles(id)            ON DELETE CASCADE,
+        entity     TEXT NOT NULL,
+        weight     REAL NOT NULL DEFAULT 1.0,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (chunk_id, entity)
+      );
+      CREATE INDEX IF NOT EXISTS idx_chunk_entities_role   ON knowledge_chunk_entities(role_id, entity);
+      CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity ON knowledge_chunk_entities(entity);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

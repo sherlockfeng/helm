@@ -14,10 +14,18 @@ import {
   getRole as getRoleRow,
   getSourceByFingerprint,
   insertChunk,
+  insertChunkEntity,
   insertSource,
   listRoles as listRoleRows,
   upsertRole,
 } from '../storage/repos/roles.js';
+import { cosineSimilarity as _cosineSimilarity } from './library-math.js';
+import { extractEntities } from './entity-extract.js';
+import {
+  hybridSearch,
+  type HybridSearchHit,
+  type SearchStrategy,
+} from './hybrid-search.js';
 import type {
   KnowledgeChunk,
   KnowledgeChunkKind,
@@ -165,12 +173,39 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
         createdAt: now,
       };
       insertChunk(db, row);
+      // Phase 76: also index extracted entities so the entity-match leg
+      // of multipath retrieval can find this chunk later. Same `now`
+      // timestamp; dedup is handled by the PK on (chunk_id, entity).
+      indexEntitiesForChunk(db, row, doc.filename, now);
     }
   }
 
   const refreshed = getRoleRow(db, input.roleId);
   if (!refreshed) throw new Error(`trainRole: role disappeared after upsert: ${input.roleId}`);
   return refreshed;
+}
+
+/**
+ * Phase 76: run the rule-based extractor over a chunk's text + filename
+ * and write the resulting entity rows. Idempotent — `insertChunkEntity`
+ * uses INSERT OR IGNORE on the (chunk_id, entity) primary key, so the
+ * same chunk being indexed twice (e.g. in tests) doesn't double-count.
+ */
+function indexEntitiesForChunk(
+  db: Database.Database,
+  chunk: KnowledgeChunk,
+  filename: string,
+  now: string,
+): void {
+  const entities = extractEntities(chunk.chunkText, filename);
+  for (const e of entities) {
+    insertChunkEntity(db, {
+      chunkId: chunk.id,
+      roleId: chunk.roleId,
+      entity: e.entity,
+      createdAt: now,
+    });
+  }
 }
 
 /**
@@ -346,6 +381,8 @@ export async function updateRole(
       createdAt: now,
     };
     insertChunk(db, row);
+    // Phase 76: same entity-extraction as trainRole.
+    indexEntitiesForChunk(db, row, c.filename, now);
     chunksAdded += 1;
   }
 
@@ -382,7 +419,7 @@ export function findConflictingChunks(
   for (const nc of newChunks) {
     let best: { chunk: KnowledgeChunk; score: number } | null = null;
     for (const ec of existing) {
-      const score = cosineSimilarity(nc.embedding, ec.embedding!);
+      const score = _cosineSimilarity(nc.embedding, ec.embedding!);
       if (score >= CONFLICT_THRESHOLD && (!best || score > best.score)) {
         best = { chunk: ec, score };
       }
@@ -409,13 +446,29 @@ export interface KnowledgeSearchResult {
   kind: KnowledgeChunkKind;
   /** Phase 73: which `knowledge_sources` row produced this chunk. */
   sourceId?: string;
+  /** Final score from the active strategy (fused or single-leg). */
   score: number;
+  /**
+   * Phase 76: per-leg raw scores when the active strategy ran multiple
+   * legs. Useful for debugging / explaining ranking. Absent fields mean
+   * the leg didn't contribute a rank for this hit.
+   */
+  bm25Score?: number;
+  cosineScore?: number;
+  entityScore?: number;
 }
 
 export interface SearchKnowledgeOptions {
   topK?: number;
   /** Phase 73: when provided, restrict the candidate pool to chunks of this kind. */
   kind?: KnowledgeChunkKind;
+  /**
+   * Phase 76: pick the retrieval strategy. Defaults to `'fusion'` —
+   * BM25 + cosine + entity match combined via RRF. Single-leg modes
+   * (`'bm25'` / `'cosine'` / `'entity'`) are for debug + benchmark
+   * comparison; callers shouldn't use them in production paths.
+   */
+  strategy?: SearchStrategy;
 }
 
 export async function searchKnowledge(
@@ -430,28 +483,28 @@ export async function searchKnowledge(
     ? { topK: optsOrTopK }
     : optsOrTopK;
   const topK = opts.topK ?? 5;
+  const strategy = opts.strategy ?? 'fusion';
 
-  // Phase 73: push the kind filter into the DB query so we don't load the
-  // whole chunk table just to discard most of it. cosine ranking happens in
-  // JS over whatever survives the WHERE clause.
-  const chunks = getChunksForRole(db, roleId, opts.kind ? { kind: opts.kind } : {});
-  if (chunks.length === 0) return [];
-
-  const queryVec = await embedFn(query);
-  return chunks
-    .filter((c) => c.embedding != null)
-    .map((c) => {
-      const r: KnowledgeSearchResult = {
-        chunkText: c.chunkText,
-        kind: c.kind,
-        score: cosineSimilarity(queryVec, c.embedding!),
-      };
-      if (c.sourceFile !== undefined) r.sourceFile = c.sourceFile;
-      if (c.sourceId !== undefined) r.sourceId = c.sourceId;
-      return r;
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+  // Phase 76: dispatch via hybridSearch. Single-leg strategies still flow
+  // through the same module so all the diversification / kind-filter /
+  // result-shape logic stays in one place.
+  const hits: HybridSearchHit[] = await hybridSearch({
+    db, roleId, query, embedFn, topK, strategy,
+    ...(opts.kind ? { kind: opts.kind } : {}),
+  });
+  return hits.map((h) => {
+    const r: KnowledgeSearchResult = {
+      chunkText: h.chunkText,
+      kind: h.kind,
+      score: h.score,
+    };
+    if (h.sourceFile !== undefined) r.sourceFile = h.sourceFile;
+    if (h.sourceId !== undefined) r.sourceId = h.sourceId;
+    if (h.bm25Score !== undefined) r.bm25Score = h.bm25Score;
+    if (h.cosineScore !== undefined) r.cosineScore = h.cosineScore;
+    if (h.entityScore !== undefined) r.entityScore = h.entityScore;
+    return r;
+  });
 }
 
 export function chunkDocument(content: string, filename: string): Array<{ text: string }> {
@@ -483,16 +536,8 @@ export function chunkDocument(content: string, filename: string): Array<{ text: 
   return chunks;
 }
 
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0, normA = 0, normB = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const ai = a[i]!;
-    const bi = b[i]!;
-    dot += ai * bi;
-    normA += ai * ai;
-    normB += bi * bi;
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
+// Phase 76: cosineSimilarity moved to ./library-math.ts to break a cycle
+// with ./hybrid-search.ts (which library.ts now imports). The re-export
+// here preserves the original public surface — external callers can keep
+// importing from `roles/library`.
+export { cosineSimilarity } from './library-math.js';

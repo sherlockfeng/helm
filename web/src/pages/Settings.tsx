@@ -299,6 +299,107 @@ export function SettingsPage() {
         </label>
       </article>
 
+      {/* Phase 77: knowledge lifecycle thresholds. Background sweep + decay
+          re-rank read these on every tick / search. Defaults preserved when
+          fields are blank (backend zod schema fills them in). */}
+      <h3>Knowledge lifecycle</h3>
+      <article className="helm-card">
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          Controls when stale role-knowledge chunks get soft-archived (hidden
+          from search by default) and how strongly recent access biases the
+          retrieval ranking. Changes apply to the next sweep / next search —
+          no restart needed.
+        </p>
+        <label className="helm-form-row">
+          <div className="muted">Archive after (days)</div>
+          <input
+            type="number"
+            min={1}
+            value={draft.knowledge.lifecycle?.archiveAfterDays ?? 90}
+            onChange={(e) => update((c) => {
+              if (!c.knowledge.lifecycle) {
+                c.knowledge.lifecycle = {
+                  archiveAfterDays: 90,
+                  archiveBelowAccessCount: 3,
+                  decayTauDays: 30,
+                  decayAlpha: 0.3,
+                };
+              }
+              c.knowledge.lifecycle.archiveAfterDays = Math.max(1, Number(e.target.value) || 90);
+            })}
+            style={{ width: 120 }}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Archive below access count</div>
+          <input
+            type="number"
+            min={0}
+            value={draft.knowledge.lifecycle?.archiveBelowAccessCount ?? 3}
+            onChange={(e) => update((c) => {
+              if (!c.knowledge.lifecycle) {
+                c.knowledge.lifecycle = {
+                  archiveAfterDays: 90,
+                  archiveBelowAccessCount: 3,
+                  decayTauDays: 30,
+                  decayAlpha: 0.3,
+                };
+              }
+              c.knowledge.lifecycle.archiveBelowAccessCount = Math.max(0, Number(e.target.value) || 0);
+            })}
+            style={{ width: 120 }}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Decay τ (days)</div>
+          <input
+            type="number"
+            min={1}
+            value={draft.knowledge.lifecycle?.decayTauDays ?? 30}
+            onChange={(e) => update((c) => {
+              if (!c.knowledge.lifecycle) {
+                c.knowledge.lifecycle = {
+                  archiveAfterDays: 90,
+                  archiveBelowAccessCount: 3,
+                  decayTauDays: 30,
+                  decayAlpha: 0.3,
+                };
+              }
+              c.knowledge.lifecycle.decayTauDays = Math.max(1, Number(e.target.value) || 30);
+            })}
+            style={{ width: 120 }}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Decay α (boost cap)</div>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={draft.knowledge.lifecycle?.decayAlpha ?? 0.3}
+            onChange={(e) => update((c) => {
+              if (!c.knowledge.lifecycle) {
+                c.knowledge.lifecycle = {
+                  archiveAfterDays: 90,
+                  archiveBelowAccessCount: 3,
+                  decayTauDays: 30,
+                  decayAlpha: 0.3,
+                };
+              }
+              c.knowledge.lifecycle.decayAlpha = Math.min(1, Math.max(0, Number(e.target.value) || 0));
+            })}
+            style={{ width: 120 }}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+          Defaults: 90d / access&lt;3 / τ=30d / α=0.3. A chunk is archived only
+          when BOTH "older than archive-after" AND "fewer accesses than
+          threshold" are true. α=0 disables the decay re-rank entirely
+          (Phase 76 fusion runs unchanged).
+        </p>
+      </article>
+
       <h3>Depscope (knowledge provider)</h3>
       <article className="helm-card">
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

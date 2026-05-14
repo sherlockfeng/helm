@@ -52,11 +52,13 @@ import {
 } from '../storage/repos/channel-bindings.js';
 import {
   deleteSource,
+  getChunkById as getChunkByIdRepo,
   getChunksForRole,
   getRole as getRoleRow,
   getSource,
   listRoles as listRolesRepo,
   listSourcesForRole,
+  unarchiveChunk as unarchiveChunkRepo,
 } from '../storage/repos/roles.js';
 import { recallRequirements } from '../requirements/recall.js';
 import { getRequirement } from '../storage/repos/requirements.js';
@@ -191,6 +193,12 @@ export interface HttpApiDeps {
    */
   mcpFactory?: () => McpServer;
   /**
+   * Phase 77: override the SSE keepalive interval in ms. Tests use this
+   * to verify the keepalive frame in deterministic time. Production
+   * leaves it undefined → the McpHttpSseHub defaults to 25s.
+   */
+  mcpKeepaliveIntervalMs?: number;
+  /**
    * Phase 57: factory for the conversational role-trainer LLM client. Built
    * lazily so a Settings save updates the next call without restart. Returns
    * `null` when no provider is configured (no anthropic.apiKey AND no
@@ -320,7 +328,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
   // an empty Map) so route handlers can dispatch even when no factory was
   // supplied; without one, the routes 501.
   const mcpHub = deps.mcpFactory
-    ? new McpHttpSseHub({ factory: deps.mcpFactory, ...(deps.logger ? { logger: deps.logger } : {}) })
+    ? new McpHttpSseHub({
+        factory: deps.mcpFactory,
+        ...(deps.logger ? { logger: deps.logger } : {}),
+        ...(deps.mcpKeepaliveIntervalMs !== undefined
+          ? { keepaliveIntervalMs: deps.mcpKeepaliveIntervalMs }
+          : {}),
+      })
     : null;
 
   if (deps.events) {
@@ -536,7 +550,11 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (req.method !== 'GET') return methodNotAllowed(res);
         const role = getRoleRow(deps.db, roleMatch[1]!);
         if (!role) return notFound(res);
-        const chunks = getChunksForRole(deps.db, role.id).map((c) => ({
+        // Phase 77: also load archived chunks so the Roles page can render
+        // them in a folded "Archived (N)" section. The repo's
+        // includeArchived flag is what the search path uses too, so both
+        // surfaces stay aligned on what counts as archived.
+        const chunks = getChunksForRole(deps.db, role.id, { includeArchived: true }).map((c) => ({
           // Strip the embedding Float32Array — it's binary + huge + not
           // useful in the UI; the renderer just needs sourceFile + chunkText.
           id: c.id,
@@ -546,12 +564,36 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           kind: c.kind,
           sourceId: c.sourceId,
           createdAt: c.createdAt,
+          // Phase 77: lifecycle fields. accessCount / lastAccessedAt drive
+          // the "accessed N times · last <reltime>" stat strip; archived
+          // bucket determines which section the card lands in.
+          accessCount: c.accessCount,
+          lastAccessedAt: c.lastAccessedAt,
+          archived: c.archived,
         }));
         // Phase 73: include every knowledge_source row for this role with
         // chunk counts. The Roles page renders a "Sources" block driven by
         // this list — each entry has a "Drop" button hitting DELETE below.
         const sources = listSourcesForRole(deps.db, role.id);
         return send(res, 200, { role, chunks, sources });
+      }
+
+      // Phase 77: POST /api/knowledge-chunks/:id/unarchive — restore a
+      // single archived chunk. Driven by the Roles UI's "unarchive" button
+      // inside the Archived (N) folded section. We do NOT expose an
+      // archive endpoint — archive happens via the background sweep only
+      // (Decision §4).
+      const unarchiveMatch = url.pathname.match(/^\/api\/knowledge-chunks\/([^/]+)\/unarchive$/);
+      if (unarchiveMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const chunkId = unarchiveMatch[1]!;
+        const before = getChunkByIdRepo(deps.db, chunkId);
+        if (!before) return notFound(res);
+        const restored = unarchiveChunkRepo(deps.db, chunkId, new Date().toISOString());
+        deps.logger?.info('knowledge_chunk_unarchived', {
+          data: { chunkId, roleId: before.roleId, wasArchived: before.archived, restored },
+        });
+        return send(res, 200, { chunkId, restored });
       }
 
       // Phase 73: explicit drop endpoint. DELETE /api/knowledge-sources/:id

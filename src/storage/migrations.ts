@@ -426,6 +426,32 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity ON knowledge_chunk_entities(entity);
     `,
   },
+  {
+    version: 14,
+    description:
+      'Knowledge lifecycle (Phase 77) — adds three columns to knowledge_chunks so'
+      + ' the retrieval path can track per-chunk usage and the background sweep can'
+      + ' soft-archive cold knowledge:'
+      + ' (a) access_count INTEGER — incremented (fire-and-forget) every time the'
+      + '     chunk appears in a search result;'
+      + ' (b) last_accessed_at TEXT — ISO timestamp of the most recent access (NULL'
+      + '     for never-accessed chunks; the decay function treats NULL as createdAt'
+      + '     so freshly-trained chunks are not unfairly demoted);'
+      + ' (c) archived INTEGER (0/1) — soft-archive flag; archived chunks default'
+      + '     OUT of all three retrieval legs (BM25, cosine, entity) but can be'
+      + '     opted back in via includeArchived=true on the reader path.'
+      + ' Index (role_id, archived) accelerates the "live chunks for this role"'
+      + ' read path which is the default for every search call.'
+      + ' Decision §10 in the task doc: NO backfill — last_accessed_at stays NULL'
+      + ' on existing rows. The decay function handles NULL by substituting'
+      + ' createdAt, so existing roles do not see a sudden weight cliff.',
+    up: `
+      ALTER TABLE knowledge_chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE knowledge_chunks ADD COLUMN last_accessed_at TEXT;
+      ALTER TABLE knowledge_chunks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_chunks_role_archived ON knowledge_chunks(role_id, archived);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

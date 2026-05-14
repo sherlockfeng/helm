@@ -28,6 +28,7 @@ import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { WorkflowEngine } from '../workflow/engine.js';
 import { updateDocFirst } from '../workflow/doc-first.js';
 import {
+  fireLifecycleSweep,
   getRole,
   listRoles,
   searchKnowledge,
@@ -479,13 +480,22 @@ export function createMcpServer(
         'Retrieval strategy. Default `fusion` runs BM25 + cosine + entity-match and combines via RRF. '
         + 'Single-leg modes are for debug / benchmark comparison.',
       ),
+      includeArchived: z.boolean().optional().describe(
+        'Phase 77: include soft-archived chunks in the candidate pool. Default false. Archived '
+        + 'chunks are knowledge the background sweep classed as "cold + old" (rarely accessed for '
+        + '90+ days). Set to true ONLY when the agent has reason to surface older notes — e.g. '
+        + 'the user explicitly asks "do you remember anything older about X?". A search that '
+        + 'returns archived hits does NOT bump their access stats, so reading them does not '
+        + 'auto-rescue them from the next sweep.',
+      ),
     },
-  }, async ({ roleId, query, topK, kind, strategy }) => {
+  }, async ({ roleId, query, topK, kind, strategy, includeArchived }) => {
     const opts: import('../roles/library.js').SearchKnowledgeOptions = {
       topK: topK ?? 5,
     };
     if (kind) opts.kind = kind;
     if (strategy) opts.strategy = strategy;
+    if (includeArchived) opts.includeArchived = true;
     const results = await searchKnowledge(deps.db, roleId, query, embedFn, opts);
     return jsonResult(results);
   });
@@ -514,6 +524,14 @@ export function createMcpServer(
   }, async ({ sourceId }) => {
     const sourceBefore = getSource(deps.db, sourceId);
     const result = deleteSource(deps.db, sourceId);
+    // Phase 77: dropping a source is a knowledge mutation — kick the
+    // lifecycle sweep for the affected role so any newly-orphaned
+    // archived stats stay coherent. Fire-and-forget; no-op when no
+    // trigger has been installed (e.g. in unit tests using createMcpServer
+    // directly).
+    if (result.removed && sourceBefore) {
+      fireLifecycleSweep(sourceBefore.roleId);
+    }
     return jsonResult({
       sourceId,
       removed: result.removed,

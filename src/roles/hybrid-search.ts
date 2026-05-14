@@ -27,6 +27,7 @@
 
 import type Database from 'better-sqlite3';
 import {
+  bumpChunkAccess,
   getChunksForRole,
   searchChunksByBm25,
   searchChunksByEntity,
@@ -37,6 +38,12 @@ import type {
 } from '../storage/types.js';
 import { extractEntitiesFromQuery } from './entity-extract.js';
 import { cosineSimilarity } from './library-math.js';
+import {
+  DEFAULT_DECAY_ALPHA,
+  DEFAULT_DECAY_TAU_DAYS,
+  applyDecayBoost,
+  scoreDecay,
+} from './lifecycle.js';
 
 /** Standard RRF constant. Adjust only with benchmark evidence. */
 export const RRF_K = 60;
@@ -56,6 +63,10 @@ export const MAX_HITS_PER_SOURCE = 3;
 export type SearchStrategy = 'fusion' | 'bm25' | 'cosine' | 'entity';
 
 export interface HybridSearchHit {
+  /** Phase 77: id of the chunk row this hit came from. Used by the
+   * post-search access-bump path; also useful for the renderer to point
+   * an "unarchive" or "see source" action at a specific row. */
+  chunkId: string;
   chunkText: string;
   kind: KnowledgeChunkKind;
   sourceFile?: string;
@@ -90,6 +101,27 @@ export interface HybridSearchInput {
    * verify the formula with smaller K values for clarity.
    */
   rrfK?: number;
+  /**
+   * Phase 77: when true, archived chunks are included in every retrieval
+   * leg AND skip the async access-bump after returning. Defaults to
+   * false (live-corpus search). Search callers should leave this off —
+   * the only legitimate `true` case is "agent has explicitly opted in via
+   * `includeArchived: true` on the search_knowledge MCP tool".
+   */
+  includeArchived?: boolean;
+  /**
+   * Phase 77: decay re-rank knobs. Sourced from helm Settings in
+   * production; defaults to the module constants for tests / benchmarks.
+   * decayAlpha=0 disables the re-rank cleanly (formula collapses to
+   * final = rrf * 1).
+   */
+  decayTauDays?: number;
+  decayAlpha?: number;
+  /**
+   * Phase 77: inject a clock for testing the decay re-rank deterministically.
+   * Production callers leave this undefined — search uses `new Date()`.
+   */
+  now?: Date;
 }
 
 /**
@@ -117,20 +149,26 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const { db, roleId, query, embedFn, topK, kind } = input;
   const weights = input.weights ?? DEFAULT_RRF_WEIGHTS;
   const k = input.rrfK ?? RRF_K;
+  const includeArchived = input.includeArchived ?? false;
+  const decayTau = input.decayTauDays ?? DEFAULT_DECAY_TAU_DAYS;
+  const decayAlpha = input.decayAlpha ?? DEFAULT_DECAY_ALPHA;
+  const now = input.now ?? new Date();
   // Each leg fetches more candidates than `topK` so RRF has overlap to
   // work with. agentmemory uses 2x; for small role corpora (< 200 chunks
   // typical) that's already most of the table — cheap.
   const candidateDepth = Math.max(topK * 2, 20);
 
   // -- Leg 1: BM25 ----------------------------------------------------
-  const bm25Raw = searchChunksByBm25(db, roleId, query, candidateDepth);
+  const bm25Raw = searchChunksByBm25(db, roleId, query, candidateDepth, { includeArchived });
   const bm25Ranks = ranksFromOrderedList(bm25Raw.map((r) => r.chunkId));
 
   // -- Leg 2: Cosine --------------------------------------------------
   // For cosine we still need to load the chunks (we need the embedding
   // blob). Apply kind filter at the SQL layer to avoid loading the
   // whole table when only a slice is searchable.
-  const chunks = getChunksForRole(db, roleId, kind ? { kind } : {});
+  const chunkOpts: Parameters<typeof getChunksForRole>[2] = { includeArchived };
+  if (kind) chunkOpts.kind = kind;
+  const chunks = getChunksForRole(db, roleId, chunkOpts);
   const queryVec = chunks.length > 0 ? await embedFn(query) : null;
   const cosineRanked: Array<{ chunkId: string; score: number }> = [];
   if (queryVec) {
@@ -145,7 +183,7 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
 
   // -- Leg 3: Entity --------------------------------------------------
   const queryEntities = extractEntitiesFromQuery(query);
-  const entityRaw = searchChunksByEntity(db, roleId, queryEntities, candidateDepth);
+  const entityRaw = searchChunksByEntity(db, roleId, queryEntities, candidateDepth, { includeArchived });
   const entityRanks = ranksFromOrderedList(entityRaw.map((r) => r.chunkId));
 
   // -- Effective weights — drop empty legs and renormalize -----------
@@ -185,7 +223,9 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     // We don't have a getChunkById bulk repo function; fall back to
     // loading the role's chunks again WITHOUT the kind filter. That's a
     // small over-read but keeps the surface area minimal for v1.
-    const allForRole = getChunksForRole(db, roleId);
+    // Phase 77: preserve the includeArchived bit so we don't accidentally
+    // skip archived chunks the BM25 leg surfaced under includeArchived=true.
+    const allForRole = getChunksForRole(db, roleId, { includeArchived });
     for (const c of allForRole) {
       if (missingIds.includes(c.id)) chunkById.set(c.id, c);
     }
@@ -204,10 +244,18 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     const rCos  = cosineRanks.get(chunkId);
     const rEnt  = entityRanks.get(chunkId);
 
-    const fusedScore =
+    const rrfScore =
       (rBm25 != null ? effective.bm25 / (k + rBm25) : 0) +
       (rCos  != null ? effective.cosine / (k + rCos)  : 0) +
       (rEnt  != null ? effective.entity / (k + rEnt)  : 0);
+
+    // Phase 77: decay re-rank. Multiply the RRF score by a (1 + α·decay)
+    // factor so freshly-used chunks get a small boost and dormant ones
+    // sit on the unaltered RRF floor. With α=0 (or chunks all equally
+    // fresh) the formula collapses to `final = rrf`, leaving Phase 76
+    // ranking identical when lifecycle is opted out.
+    const decayFactor = scoreDecay(chunk.lastAccessedAt, chunk.createdAt, now, decayTau);
+    const fusedScore = applyDecayBoost(rrfScore, decayFactor, decayAlpha);
 
     const contributing: Array<'bm25' | 'cosine' | 'entity'> = [];
     if (rBm25 != null) contributing.push('bm25');
@@ -215,6 +263,7 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     if (rEnt  != null) contributing.push('entity');
 
     const hit: HybridSearchHit = {
+      chunkId,
       chunkText: chunk.chunkText,
       kind: chunk.kind,
       score: fusedScore,
@@ -233,21 +282,30 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   }
 
   fused.sort((a, b) => b.fusedScore - a.fusedScore);
-  return diversifyBySource(fused.map((f) => f.hit), topK);
+  const diversified = diversifyBySource(fused.map((f) => f.hit), topK);
+  // Phase 77: fire-and-forget access bump after we've decided what we're
+  // returning. Skipped when includeArchived=true so the agent reviewing
+  // archived content doesn't "rescue" cold chunks just by reading them.
+  scheduleAccessBump(db, diversified, includeArchived);
+  return diversified;
 }
 
 // ── Single-leg fallbacks (debug / benchmark) ────────────────────────────
 
 async function runBm25Only(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const { db, roleId, query, topK, kind } = input;
-  const raw = searchChunksByBm25(db, roleId, query, topK * 2);
-  const chunkById = new Map(getChunksForRole(db, roleId).map((c) => [c.id, c]));
+  const includeArchived = input.includeArchived ?? false;
+  const raw = searchChunksByBm25(db, roleId, query, topK * 2, { includeArchived });
+  const chunkById = new Map(
+    getChunksForRole(db, roleId, { includeArchived }).map((c) => [c.id, c]),
+  );
   const hits: HybridSearchHit[] = [];
   for (const r of raw) {
     const chunk = chunkById.get(r.chunkId);
     if (!chunk) continue;
     if (kind && chunk.kind !== kind) continue;
     const hit: HybridSearchHit = {
+      chunkId: chunk.id,
       chunkText: chunk.chunkText,
       kind: chunk.kind,
       score: r.score,
@@ -258,12 +316,17 @@ async function runBm25Only(input: HybridSearchInput): Promise<HybridSearchHit[]>
     if (chunk.sourceId !== undefined) hit.sourceId = chunk.sourceId;
     hits.push(hit);
   }
-  return diversifyBySource(hits, topK);
+  const diversified = diversifyBySource(hits, topK);
+  scheduleAccessBump(db, diversified, includeArchived);
+  return diversified;
 }
 
 async function runCosineOnly(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const { db, roleId, query, embedFn, topK, kind } = input;
-  const chunks = getChunksForRole(db, roleId, kind ? { kind } : {});
+  const includeArchived = input.includeArchived ?? false;
+  const chunkOpts: Parameters<typeof getChunksForRole>[2] = { includeArchived };
+  if (kind) chunkOpts.kind = kind;
+  const chunks = getChunksForRole(db, roleId, chunkOpts);
   if (chunks.length === 0) return [];
   const queryVec = await embedFn(query);
   const scored = chunks
@@ -272,6 +335,7 @@ async function runCosineOnly(input: HybridSearchInput): Promise<HybridSearchHit[
     .sort((a, b) => b.score - a.score);
   const hits: HybridSearchHit[] = scored.map(({ chunk, score }) => {
     const h: HybridSearchHit = {
+      chunkId: chunk.id,
       chunkText: chunk.chunkText,
       kind: chunk.kind,
       score,
@@ -282,20 +346,26 @@ async function runCosineOnly(input: HybridSearchInput): Promise<HybridSearchHit[
     if (chunk.sourceId !== undefined) h.sourceId = chunk.sourceId;
     return h;
   });
-  return diversifyBySource(hits, topK);
+  const diversified = diversifyBySource(hits, topK);
+  scheduleAccessBump(db, diversified, includeArchived);
+  return diversified;
 }
 
 async function runEntityOnly(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const { db, roleId, query, topK, kind } = input;
+  const includeArchived = input.includeArchived ?? false;
   const entities = extractEntitiesFromQuery(query);
-  const raw = searchChunksByEntity(db, roleId, entities, topK * 2);
-  const chunkById = new Map(getChunksForRole(db, roleId).map((c) => [c.id, c]));
+  const raw = searchChunksByEntity(db, roleId, entities, topK * 2, { includeArchived });
+  const chunkById = new Map(
+    getChunksForRole(db, roleId, { includeArchived }).map((c) => [c.id, c]),
+  );
   const hits: HybridSearchHit[] = [];
   for (const r of raw) {
     const chunk = chunkById.get(r.chunkId);
     if (!chunk) continue;
     if (kind && chunk.kind !== kind) continue;
     const hit: HybridSearchHit = {
+      chunkId: chunk.id,
       chunkText: chunk.chunkText,
       kind: chunk.kind,
       score: r.score,
@@ -306,7 +376,41 @@ async function runEntityOnly(input: HybridSearchInput): Promise<HybridSearchHit[
     if (chunk.sourceId !== undefined) hit.sourceId = chunk.sourceId;
     hits.push(hit);
   }
-  return diversifyBySource(hits, topK);
+  const diversified = diversifyBySource(hits, topK);
+  scheduleAccessBump(db, diversified, includeArchived);
+  return diversified;
+}
+
+/**
+ * Phase 77: fire-and-forget access bump. Scheduled on the microtask queue
+ * via `queueMicrotask` so the caller's `await searchKnowledge(...)`
+ * resolves before the DB write. Failures are swallowed (just warned via
+ * console) — a stale access_count is not worth crashing search over.
+ *
+ * Skipped entirely when `includeArchived` is true: an agent paging
+ * through archived chunks shouldn't accidentally rescue them from the
+ * sweep just by reading.
+ */
+function scheduleAccessBump(
+  db: Database.Database,
+  hits: readonly HybridSearchHit[],
+  includeArchived: boolean,
+): void {
+  if (includeArchived) return;
+  if (hits.length === 0) return;
+  const ids = hits.map((h) => h.chunkId);
+  const now = new Date().toISOString();
+  queueMicrotask(() => {
+    try {
+      bumpChunkAccess(db, ids, now);
+    } catch (err) {
+      // No logger injected here; this is a best-effort write. Surfacing
+      // via console.warn matches how the orchestrator logs other low-
+      // priority warnings from leaf code paths.
+      // eslint-disable-next-line no-console
+      console.warn('[hybrid-search] access-bump failed:', (err as Error).message);
+    }
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

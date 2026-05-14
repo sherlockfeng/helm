@@ -113,6 +113,35 @@ export interface KnowledgeChunk {
    * the v12 clean-slate migration, every chunk has a non-null source_id. */
   sourceId?: string;
   createdAt: string;
+  /**
+   * Phase 77 (lifecycle): how many times this chunk has been returned by
+   * `searchKnowledge`. Fire-and-forget incremented after each search; cold
+   * chunks (access_count < N) become candidates for the archival sweep.
+   *
+   * Optional on the type so callers constructing `KnowledgeChunk` for
+   * `insertChunk` don't need to pre-fill it — the SQL DEFAULT (0) covers
+   * the insert path. Readers (`getChunksForRole`, etc.) ALWAYS populate
+   * it, so search-side / UI-side code can treat it as definitely-present.
+   */
+  accessCount?: number;
+  /**
+   * Phase 77: ISO timestamp of the most recent search hit. NULL for chunks
+   * that have never been accessed. The decay function (`scoreDecay`)
+   * substitutes `createdAt` when this is undefined so newly-trained chunks
+   * are not unfairly demoted before they have a chance to be queried.
+   */
+  lastAccessedAt?: string;
+  /**
+   * Phase 77: soft-archived flag. Archived chunks default OUT of every
+   * retrieval leg (BM25 / cosine / entity). Set by the background sweep
+   * when the chunk is both old and rarely accessed; cleared by the Roles
+   * UI's "unarchive" button. NEVER hard-deleted — hard deletion goes
+   * through `drop_knowledge_source` (user-explicit).
+   *
+   * Optional on the type for the same reason as `accessCount` — SQL
+   * DEFAULT (0 = false) covers the insert path; readers always populate.
+   */
+  archived?: boolean;
 }
 
 export interface AgentSession {

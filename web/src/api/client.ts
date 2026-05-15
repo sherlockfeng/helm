@@ -232,6 +232,36 @@ export const helmApi = {
     request<{ chunkId: string; restored: boolean }>(
       'POST', `/api/knowledge-chunks/${encodeURIComponent(chunkId)}/unarchive`,
     ),
+  /**
+   * Phase 78 — list knowledge-capture candidates for a role.
+   * Status defaults to `pending`; pass `'all'` to also see accepted /
+   * rejected / expired rows (audit trail).
+   */
+  listCandidates: (
+    roleId: string,
+    status: import('./types.js').CandidateStatus | 'all' = 'pending',
+  ) =>
+    request<{ candidates: import('./types.js').KnowledgeCandidate[] }>(
+      'GET',
+      `/api/roles/${encodeURIComponent(roleId)}/candidates?status=${encodeURIComponent(status)}`,
+    ),
+  /** Phase 78 — accept a pending candidate (creates a chunk via updateRole). */
+  acceptCandidate: (candidateId: string) =>
+    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number }>(
+      'POST', `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/accept`,
+    ),
+  /** Phase 78 — reject a pending candidate (terminal state). */
+  rejectCandidate: (candidateId: string) =>
+    request<{ candidateId: string; status: 'rejected'; flipped: boolean }>(
+      'POST', `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/reject`,
+    ),
+  /** Phase 78 — update candidate text + then accept in one round-trip. */
+  editAndAcceptCandidate: (candidateId: string, chunkText: string) =>
+    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number }>(
+      'POST',
+      `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/edit-and-accept`,
+      { chunkText },
+    ),
 
   // Phase 60b: conversational role training. Each turn POSTs the full
   // transcript; helm spawns `claude -p` with helm's MCP injected so the

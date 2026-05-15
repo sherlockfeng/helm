@@ -10,7 +10,7 @@
  * the rest down or crash the publisher.
  */
 
-import type { ApprovalRequest, ChannelBinding, HostSession } from '../storage/types.js';
+import type { ApprovalRequest, ChannelBinding, HostSession, KnowledgeCandidate } from '../storage/types.js';
 import type { ApprovalDecision } from '../channel/types.js';
 
 export type AppEvent =
@@ -29,7 +29,11 @@ export type AppEvent =
   // Phase 70: fired when a `host_stop` drain pulls one or more messages
   // off the queue. Listeners (notably the Active Chats UI) use it to
   // clear the "📨 N queued" badge without waiting for the 30s reconcile.
-  | { type: 'channel.message_consumed'; hostSessionId: string; count: number };
+  | { type: 'channel.message_consumed'; hostSessionId: string; count: number }
+  // Phase 78: fired once per candidate row inserted from a host_agent_response
+  // capture pass. Renderer subscribes via the /api/events SSE stream and
+  // increments the Roles "Candidates (N)" badge in real time.
+  | { type: 'knowledge_candidate.created'; candidate: KnowledgeCandidate };
 
 export type AppEventType = AppEvent['type'];
 export type AppEventOf<T extends AppEventType> = Extract<AppEvent, { type: T }>;

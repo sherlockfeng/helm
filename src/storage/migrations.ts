@@ -452,6 +452,63 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_chunks_role_archived ON knowledge_chunks(role_id, archived);
     `,
   },
+  {
+    version: 15,
+    description:
+      'Knowledge-capture candidates (Phase 78) — adds a `knowledge_candidates` table that'
+      + ' holds agent-response segments which scored above the capture thresholds against a'
+      + ' bound role\'s knowledge base. Each row has its OWN lifecycle (pending → accepted /'
+      + ' rejected / expired) independent of `knowledge_chunks`, so the Roles UI can show a'
+      + ' "Candidates (N)" tab where the user batches Accept / Reject without ever touching'
+      + ' the trained chunks until they decide.'
+      + '\n\n'
+      + 'Columns:'
+      + ' - id: TEXT PK'
+      + ' - role_id: FK → roles(id) CASCADE (role gone → candidates gone, audit lost; acceptable)'
+      + ' - host_session_id: FK → host_sessions(id) SET NULL (chat closed but candidate survives)'
+      + ' - chunk_text: TEXT NOT NULL — the segment we\'d insert on accept'
+      + ' - source_segment_index: INTEGER NOT NULL — splitter index within the response'
+      + ' - kind: TEXT NOT NULL DEFAULT \'other\' — heuristic kind (fenced → example, else other)'
+      + ' - score_entity: REAL NOT NULL — # of entity-overlap hits (≥2 to qualify; stored for UI)'
+      + ' - score_cosine: REAL NOT NULL — max cosine vs existing chunks (≥0.6 to qualify)'
+      + ' - text_hash: TEXT NOT NULL — sha256(chunk_text) for the dedup gate'
+      + ' - status: TEXT NOT NULL DEFAULT \'pending\' — state machine'
+      + ' - created_at / decided_at: ISO timestamps; decided_at NULL while pending'
+      + '\n\n'
+      + 'Indexes:'
+      + ' - (role_id, status) — drives Roles tab list query'
+      + ' - (host_session_id) — chat-detail back-reference'
+      + ' - UNIQUE(role_id, text_hash) WHERE status IN (pending, rejected) — partial unique'
+      + '   enforces the §7 dedup rule at the DB layer; a re-insert of the same chunk_text +'
+      + '   same role while a pending OR rejected row exists fails with SQLITE_CONSTRAINT,'
+      + '   which `writeCandidateIfNew` catches as "already known, skip". Accepted rows are'
+      + '   excluded from the partial index so the same text can be re-suggested after the'
+      + '   accepted chunk has been deleted from the role.',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_candidates (
+        id                   TEXT PRIMARY KEY,
+        role_id              TEXT NOT NULL REFERENCES roles(id)         ON DELETE CASCADE,
+        host_session_id      TEXT          REFERENCES host_sessions(id) ON DELETE SET NULL,
+        chunk_text           TEXT NOT NULL,
+        source_segment_index INTEGER NOT NULL,
+        kind                 TEXT NOT NULL DEFAULT 'other',
+        score_entity         REAL NOT NULL,
+        score_cosine         REAL NOT NULL,
+        text_hash            TEXT NOT NULL,
+        status               TEXT NOT NULL DEFAULT 'pending',
+        created_at           TEXT NOT NULL,
+        decided_at           TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_candidates_role_status ON knowledge_candidates(role_id, status);
+      CREATE INDEX IF NOT EXISTS idx_candidates_session     ON knowledge_candidates(host_session_id);
+      -- Partial unique index: one PENDING-or-REJECTED row per (role, text_hash).
+      -- Accepted rows are excluded so a deleted accepted chunk could conceivably
+      -- be re-suggested by a future chat (rare; intentional safety valve).
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_candidates_role_hash_pending
+        ON knowledge_candidates(role_id, text_hash)
+        WHERE status = 'pending' OR status = 'rejected';
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

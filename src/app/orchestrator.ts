@@ -45,6 +45,7 @@ import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { seedBuiltinRoles, setLifecycleSweepTrigger, trainRole } from '../roles/library.js';
 import { runArchivalSweep } from '../roles/lifecycle.js';
+import { captureFromAgentResponse } from '../capture/index.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -627,6 +628,59 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     return { continue: true };
   });
 
+  // Phase 78: capture orchestration helper. Hoisted out of the bridge
+  // handler so the registration block stays readable. Fire-and-forget
+  // semantics — never awaits, never throws back into the handler.
+  //
+  // Pre-flight: the chat must be bound to ≥1 role (capture is meaningless
+  // otherwise). All errors collapse to a warn log; a slow embedder must
+  // never block the RPC that triggered us.
+  const captureLog = deps.loggers.module('knowledge.capture');
+  function scheduleCaptureFromResponse(hostSessionId: string, responseText: string): void {
+    const session = getHostSession(deps.db, hostSessionId);
+    const roleIds = session?.roleIds ?? [];
+    if (roleIds.length === 0) return;
+    void (async () => {
+      try {
+        const result = await captureFromAgentResponse({
+          db: deps.db,
+          hostSessionId,
+          roleIds,
+          responseText,
+          embedFn: makePseudoEmbedFn(),
+        });
+        // Emit one event per actually-inserted candidate so the renderer
+        // can increment the Roles "Candidates (N)" badge precisely.
+        for (const candidate of result.inserted) {
+          events.emit({ type: 'knowledge_candidate.created', candidate });
+        }
+        if (result.candidatesCreated > 0 || result.segments > 0) {
+          captureLog.info('capture_sweep_completed', {
+            data: {
+              hostSessionId,
+              segments: result.segments,
+              candidatesCreated: result.candidatesCreated,
+              byRole: result.byRole,
+            },
+          });
+        }
+        // Reviewer #3: explicit log when a role disappeared mid-sweep, so
+        // the user can correlate "I deleted role X" with the silent skip.
+        for (const r of result.byRole) {
+          if (r.skippedRoleGone) {
+            captureLog.warn('capture_role_gone', {
+              data: { hostSessionId, roleId: r.roleId },
+            });
+          }
+        }
+      } catch (err) {
+        captureLog.warn('capture_sweep_failed', {
+          data: { hostSessionId, error: (err as Error).message },
+        });
+      }
+    })();
+  }
+
   // host_agent_response — Phase 38. After Cursor's agent finishes its reply,
   // mirror the response text back to every Lark binding for this session so
   // the user sees the bidirectional conversation in their Lark thread without
@@ -641,6 +695,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     autoUpsertSession(deps.db, events, log, req.host_session_id);
     const text = (req.response_text ?? '').trim();
     if (!text) return { ok: true, suppressed: true };
+
+    // Phase 78: fire-and-forget capture pass. Independent of the Lark
+    // mirror — we run capture whenever the chat is bound to ≥1 role,
+    // regardless of remote-channel state. Errors are logged and swallowed
+    // so a slow embedder / broken FTS doesn't block the RPC.
+    scheduleCaptureFromResponse(req.host_session_id, text);
 
     const allBindings = listBindingsForSession(deps.db, req.host_session_id);
     const larkBindings = allBindings.filter((b) => b.channel === 'lark');

@@ -89,6 +89,12 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
   const [droppingSourceId, setDroppingSourceId] = useState<string | null>(null);
   // Phase 77: per-chunk pending state for the unarchive button.
   const [unarchivingChunkId, setUnarchivingChunkId] = useState<string | null>(null);
+  // Phase 78: tab selector for the role detail panel. Three tabs:
+  //   'chunks'      — trained knowledge + sources + train/retrain form
+  //   'candidates'  — agent-response segments awaiting Accept / Reject
+  // Sources is rendered inside 'chunks' since it's directly tied to chunks.
+  // 'chunks' stays the default so users land on the same view as pre-Phase 78.
+  const [activeTab, setActiveTab] = useState<'chunks' | 'candidates'>('chunks');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Pre-fill form once detail loads
@@ -188,6 +194,38 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       <div className="label">System prompt</div>
       <pre style={{ marginBottom: 14 }}>{role.systemPrompt}</pre>
 
+      {/* Phase 78: tab strip — Chunks (default, holds sources + chunks +
+          train form) vs Candidates (knowledge-capture pending review). */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
+        <button
+          type="button"
+          onClick={() => setActiveTab('chunks')}
+          aria-pressed={activeTab === 'chunks'}
+          style={{
+            background: activeTab === 'chunks' ? 'var(--accent)' : 'transparent',
+            color: activeTab === 'chunks' ? '#fff' : 'inherit',
+          }}
+        >
+          Chunks
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('candidates')}
+          aria-pressed={activeTab === 'candidates'}
+          style={{
+            background: activeTab === 'candidates' ? 'var(--accent)' : 'transparent',
+            color: activeTab === 'candidates' ? '#fff' : 'inherit',
+          }}
+        >
+          Candidates
+        </button>
+      </div>
+
+      {activeTab === 'candidates' && (
+        <RoleCandidates roleId={roleId} onChange={() => { detail.reload(); onTrained(); }} />
+      )}
+
+      {activeTab === 'chunks' && (<>
       {/* Phase 73: Sources block. Each knowledge_source row corresponds to
           one raw-doc ingestion event; the Drop button cascade-deletes every
           chunk derived from that source. */}
@@ -388,7 +426,168 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
           {training ? 'Training…' : 'Train'}
         </button>
       </div>
+      </>)}
     </div>
+  );
+}
+
+/**
+ * Phase 78 — Candidates tab body for one role. Lives outside RoleDetail
+ * so its state (which candidate is being edited / busy state) doesn't
+ * rerender the whole detail panel on every button click.
+ */
+function RoleCandidates({
+  roleId,
+  onChange,
+}: {
+  roleId: string;
+  onChange: () => void;
+}) {
+  const list = useApi(() => helmApi.listCandidates(roleId, 'pending'), [roleId]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
+
+  async function accept(id: string): Promise<void> {
+    setBusyId(id); setErr(null);
+    try {
+      await helmApi.acceptCandidate(id);
+      list.reload();
+      onChange();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setErr(`Accept failed: ${msg}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function reject(id: string): Promise<void> {
+    setBusyId(id); setErr(null);
+    try {
+      await helmApi.rejectCandidate(id);
+      list.reload();
+      onChange();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setErr(`Reject failed: ${msg}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function saveEdit(id: string): Promise<void> {
+    if (!editingText.trim()) { setErr('Edited text cannot be empty.'); return; }
+    setBusyId(id); setErr(null);
+    try {
+      await helmApi.editAndAcceptCandidate(id, editingText);
+      setEditingId(null);
+      setEditingText('');
+      list.reload();
+      onChange();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setErr(`Edit+accept failed: ${msg}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (list.loading) return <p className="muted">Loading candidates…</p>;
+  if (list.error) return <p className="muted" style={{ color: 'var(--danger)' }}>{list.error.message}</p>;
+  const candidates = list.data?.candidates ?? [];
+  if (candidates.length === 0) {
+    return (
+      <p className="muted" style={{ marginTop: 4, marginBottom: 14 }}>
+        No pending candidates. New ones arrive automatically when this role is
+        bound to a chat and the agent's responses contain segments that match
+        existing knowledge (entity overlap ≥ 2 OR cosine ≥ 0.6).
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {err && (
+        <p className="muted" style={{ color: 'var(--danger)', marginBottom: 8 }}>{err}</p>
+      )}
+      <ul style={{ margin: '6px 0 14px', paddingLeft: 0, listStyle: 'none' }}>
+        {candidates.map((c) => {
+          const isEditing = editingId === c.id;
+          const isBusy = busyId === c.id;
+          return (
+            <li key={c.id} style={{ marginBottom: 14, padding: 10, border: '1px solid var(--border)', borderRadius: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <KindBadge kind={c.kind} />
+                <span className="muted" style={{ fontSize: 11 }}>
+                  entity={c.scoreEntity} · cosine={c.scoreCosine.toFixed(2)}
+                </span>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  · from chat <code title={c.hostSessionId ?? '(orphaned)'}>
+                    {c.hostSessionId ? shortId(c.hostSessionId, 8) : '?'}
+                  </code>
+                </span>
+                <span className="muted" style={{ fontSize: 11, marginLeft: 'auto' }}>
+                  {c.createdAt.slice(0, 19).replace('T', ' ')}
+                </span>
+              </div>
+              {isEditing ? (
+                <textarea
+                  value={editingText}
+                  rows={6}
+                  style={{ width: '100%', fontFamily: 'inherit', fontSize: 12 }}
+                  onChange={(e) => setEditingText(e.target.value)}
+                />
+              ) : (
+                <pre style={{ marginBottom: 6, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  {c.chunkText}
+                </pre>
+              )}
+              <div style={{ display: 'flex', gap: 6 }}>
+                {isEditing ? (
+                  <>
+                    <button
+                      className="primary"
+                      disabled={isBusy}
+                      aria-busy={isBusy}
+                      onClick={() => { void saveEdit(c.id); }}
+                    >
+                      {isBusy ? 'Saving…' : 'Save & Accept'}
+                    </button>
+                    <button onClick={() => { setEditingId(null); setEditingText(''); }}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="primary"
+                      disabled={isBusy}
+                      aria-busy={isBusy}
+                      onClick={() => { void accept(c.id); }}
+                      title="Add this segment as a new chunk on the role."
+                    >
+                      {isBusy ? 'Accepting…' : 'Accept'}
+                    </button>
+                    <button
+                      disabled={isBusy}
+                      onClick={() => { setEditingId(c.id); setEditingText(c.chunkText); }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      disabled={isBusy}
+                      onClick={() => { void reject(c.id); }}
+                      style={{ color: 'var(--danger)' }}
+                      title="Reject — won't be re-suggested for this role."
+                    >
+                      {isBusy ? 'Rejecting…' : 'Reject'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 
@@ -423,6 +622,20 @@ function RoleCard({
             <span className="dot" />
             {role.chunkCount} chunk{role.chunkCount === 1 ? '' : 's'}
           </span>
+          {/* Phase 78: pending knowledge-capture candidates badge. Surfaces
+              new agent-response segments that scored above the capture
+              thresholds against this role — user reviews via the Candidates
+              tab inside the role detail. Hidden when zero so existing
+              roles don't show a useless `(0)`. */}
+          {role.pendingCandidateCount > 0 && (
+            <span
+              className="helm-status"
+              style={{ background: 'var(--accent)', color: '#fff' }}
+              title={`${role.pendingCandidateCount} pending knowledge-capture candidate${role.pendingCandidateCount === 1 ? '' : 's'}`}
+            >
+              {role.pendingCandidateCount} new
+            </span>
+          )}
           {/* Phase 65: per-role "Update via chat" — opens the train modal
               in update mode, telling the agent to call update_role (not
               train_role) so existing chunks survive. Hidden on built-ins

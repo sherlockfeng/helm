@@ -60,6 +60,16 @@ import {
   listSourcesForRole,
   unarchiveChunk as unarchiveChunkRepo,
 } from '../storage/repos/roles.js';
+import {
+  getCandidateById,
+  listCandidatesForRole,
+  pendingCountsByRole,
+  setCandidateStatus,
+  updateCandidateText,
+} from '../storage/repos/knowledge-candidates.js';
+import { updateRole as updateRoleLibrary } from '../roles/library.js';
+import { makePseudoEmbedFn } from '../mcp/embed.js';
+import { createHash } from 'node:crypto';
 import { recallRequirements } from '../requirements/recall.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
@@ -527,9 +537,14 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // ── Roles (B3) ──────────────────────────────────────────────────
       if (url.pathname === '/api/roles') {
         if (req.method !== 'GET') return methodNotAllowed(res);
+        // Phase 78: include pending candidate counts so the Roles list
+        // can render a `(N)` badge without N+1 round-trips. One COUNT GROUP
+        // BY across the whole table; the per-role lookup is O(1).
+        const pendingByRole = pendingCountsByRole(deps.db);
         const roles = listRolesRepo(deps.db).map((r) => ({
           ...r,
           chunkCount: getChunksForRole(deps.db, r.id).length,
+          pendingCandidateCount: pendingByRole.get(r.id) ?? 0,
         }));
         return send(res, 200, { roles });
       }
@@ -594,6 +609,145 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           data: { chunkId, roleId: before.roleId, wasArchived: before.archived, restored },
         });
         return send(res, 200, { chunkId, restored });
+      }
+
+      // Phase 78: list candidates for a role.
+      //   GET /api/roles/:id/candidates?status=pending     (default pending)
+      //   GET /api/roles/:id/candidates?status=all         (accepted + rejected + pending)
+      // Drives the Roles UI's Candidates tab. status filter mirrors the
+      // repo's ListCandidatesOptions.
+      const candidatesListMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/candidates$/);
+      if (candidatesListMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const roleId = candidatesListMatch[1]!;
+        const role = getRoleRow(deps.db, roleId);
+        if (!role) return notFound(res);
+        // Reviewer #4: validate status against the documented set —
+        // unknown values (typo / curl misuse) used to silently fall
+        // through to the SQL filter and return [], which the UI would
+        // render as "no candidates" indistinguishable from the real
+        // empty case. 400 forces the caller to fix the param.
+        const VALID_STATUSES = ['pending', 'accepted', 'rejected', 'expired', 'all'] as const;
+        type ValidStatus = typeof VALID_STATUSES[number];
+        const statusParam = url.searchParams.get('status') ?? 'pending';
+        if (!(VALID_STATUSES as readonly string[]).includes(statusParam)) {
+          return badRequest(res, `invalid status: '${statusParam}'. Expected one of ${VALID_STATUSES.join(', ')}.`);
+        }
+        const candidates = listCandidatesForRole(deps.db, roleId, { status: statusParam as ValidStatus });
+        return send(res, 200, { candidates });
+      }
+
+      // Phase 78: candidate lifecycle endpoints. All three POST verbs work
+      // on a single candidate id.
+      //   POST /api/knowledge-candidates/:id/accept
+      //     — flips status to accepted + invokes updateRole.appendDocuments
+      //       (Phase 66 conflict-detection runs unchanged; if it returns
+      //       'conflicts', we leave the candidate as 'pending' and surface
+      //       the conflict payload to the renderer for confirmation).
+      //   POST /api/knowledge-candidates/:id/reject
+      //     — flips status to rejected (terminal; the dedup index will
+      //       then prevent the same text from being re-suggested).
+      //   POST /api/knowledge-candidates/:id/edit-and-accept
+      //     — body { chunkText: string } updates the candidate text (+
+      //       recomputes hash) THEN runs accept.
+      const candidateActionMatch = url.pathname.match(
+        /^\/api\/knowledge-candidates\/([^/]+)\/(accept|reject|edit-and-accept)$/,
+      );
+      if (candidateActionMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const candidateId = candidateActionMatch[1]!;
+        const action = candidateActionMatch[2] as 'accept' | 'reject' | 'edit-and-accept';
+        const before = getCandidateById(deps.db, candidateId);
+        if (!before) return notFound(res);
+        if (before.status !== 'pending') {
+          return send(res, 409, {
+            error: 'not_pending',
+            message: `Candidate is already ${before.status}; only pending candidates can transition.`,
+            currentStatus: before.status,
+          });
+        }
+
+        const now = new Date().toISOString();
+
+        if (action === 'reject') {
+          const flipped = setCandidateStatus(deps.db, candidateId, 'rejected', now);
+          deps.logger?.info('knowledge_candidate_rejected', {
+            data: { candidateId, roleId: before.roleId, flipped },
+          });
+          return send(res, 200, { candidateId, status: 'rejected', flipped });
+        }
+
+        // For edit-and-accept, parse + apply the edit BEFORE the accept
+        // flow runs. We require chunkText in the body and re-validate via
+        // updateCandidateText so the partial-unique-index catches dupes.
+        let finalText = before.chunkText;
+        if (action === 'edit-and-accept') {
+          let body: { chunkText?: unknown };
+          try { body = JSON.parse(ctx.body); }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          if (typeof body.chunkText !== 'string' || body.chunkText.trim().length === 0) {
+            return badRequest(res, 'chunkText must be a non-empty string');
+          }
+          finalText = body.chunkText;
+          const newHash = createHash('sha256').update(finalText).digest('hex');
+          try {
+            const ok = updateCandidateText(deps.db, candidateId, finalText, newHash);
+            if (!ok) return notFound(res);
+          } catch (err) {
+            const code = (err as { code?: string }).code;
+            if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT') {
+              return send(res, 409, {
+                error: 'edit_collides',
+                message: 'Edited text collides with another pending or rejected candidate for this role.',
+              });
+            }
+            throw err;
+          }
+        }
+
+        // Accept path: run updateRole with the candidate text as a single
+        // appended document. Phase 66's conflict detection still applies —
+        // if it returns 'conflicts', we leave the candidate pending and
+        // surface the conflicts so the user resolves before retrying.
+        try {
+          const result = await updateRoleLibrary(deps.db, {
+            roleId: before.roleId,
+            appendDocuments: [{
+              filename: `capture-${candidateId}`,
+              content: finalText,
+              kind: before.kind,
+              sourceKind: 'inline',
+              origin: `capture-${candidateId}`,
+              sourceLabel: `Captured from chat ${before.hostSessionId?.slice(0, 8) ?? 'unknown'}`,
+            }],
+            embedFn: makePseudoEmbedFn(),
+          });
+          if (result.status === 'conflicts') {
+            // Phase 66: report conflicts to the caller; candidate stays
+            // pending so the user can either Edit-and-Accept with a
+            // different phrasing, or call accept again with `force=true`
+            // (not yet exposed here — TODO if the user hits this often).
+            return send(res, 409, {
+              error: 'conflicts',
+              message: 'Accepting this candidate would create near-duplicate chunks. Resolve via the existing chunks UI then retry.',
+              conflicts: result.conflicts,
+            });
+          }
+          const flipped = setCandidateStatus(deps.db, candidateId, 'accepted', now);
+          deps.logger?.info('knowledge_candidate_accepted', {
+            data: {
+              candidateId, roleId: before.roleId,
+              edited: action === 'edit-and-accept',
+              chunksAdded: result.chunksAdded, flipped,
+            },
+          });
+          return send(res, 200, {
+            candidateId, status: 'accepted', flipped,
+            chunksAdded: result.chunksAdded,
+          });
+        } catch (err) {
+          return internalError(res, err);
+        }
       }
 
       // Phase 73: explicit drop endpoint. DELETE /api/knowledge-sources/:id

@@ -52,6 +52,7 @@ import {
   listSourcesForRole,
 } from '../storage/repos/roles.js';
 import { listCampaigns } from '../storage/repos/campaigns.js';
+import { listCandidatesForRole } from '../storage/repos/knowledge-candidates.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 import {
   advanceStage,
@@ -538,6 +539,31 @@ export function createMcpServer(
       chunksDeleted: result.chunksDeleted,
       ...(sourceBefore ? { source: sourceBefore } : {}),
     });
+  });
+
+  // ── Phase 78: knowledge-capture candidates (read-only over MCP) ────────
+
+  server.registerTool('list_role_candidates', {
+    description:
+      'List knowledge-capture candidate rows for a role. Candidates are '
+      + 'segments of past agent responses that scored above the capture thresholds '
+      + '(entity-overlap >= 2 OR cosine >= 0.6 vs the role\'s existing chunks) and '
+      + 'are waiting for the user to Accept / Reject in the Roles UI. '
+      + 'Default status filter is `pending`; pass `status: "all"` to also include '
+      + 'accepted / rejected / expired (audit trail). '
+      + '\n\n'
+      + 'MUTATING the candidate state (accept / reject / edit) is intentionally NOT '
+      + 'exposed as an MCP tool — those actions must come from the user via the helm '
+      + 'UI, to prevent an agent from auto-approving the knowledge it itself produced.',
+    inputSchema: {
+      roleId: z.string(),
+      status: z.enum(['pending', 'accepted', 'rejected', 'expired', 'all']).optional(),
+    },
+  }, async ({ roleId, status }) => {
+    const candidates = listCandidatesForRole(deps.db, roleId, {
+      ...(status ? { status } : {}),
+    });
+    return jsonResult({ roleId, status: status ?? 'pending', candidates });
   });
 
   // ── Requirements (Phase 7) ──────────────────────────────────────────────

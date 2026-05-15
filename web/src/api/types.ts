@@ -213,6 +213,33 @@ export interface Role {
 
 export interface RoleSummary extends Role {
   chunkCount: number;
+  /** Phase 78 — # of pending knowledge-capture candidates for this role.
+   * Drives the `(N)` badge next to the role name in the Roles list. */
+  pendingCandidateCount: number;
+}
+
+/** Phase 78 — candidate row from the Roles UI's Candidates tab. */
+export type CandidateStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+
+export interface KnowledgeCandidate {
+  id: string;
+  roleId: string;
+  /** ID of the chat the agent response came from; absent when the chat row
+   * was deleted but the candidate survives for audit. */
+  hostSessionId?: string;
+  chunkText: string;
+  sourceSegmentIndex: number;
+  /** Heuristic kind: code-fenced segments → 'example', else 'other'. The
+   * Edit-then-Accept modal lets the user change this before saving. */
+  kind: KnowledgeChunkKind;
+  /** Phase 78 — entity overlap count vs the role's entity index. */
+  scoreEntity: number;
+  /** Phase 78 — max cosine vs the role's existing chunks at write time. */
+  scoreCosine: number;
+  textHash: string;
+  status: CandidateStatus;
+  createdAt: string;
+  decidedAt?: string;
 }
 
 /** Phase 73: chunk type discriminator — surfaced as a badge in the UI. */

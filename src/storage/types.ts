@@ -144,6 +144,57 @@ export interface KnowledgeChunk {
   archived?: boolean;
 }
 
+/**
+ * Phase 78: knowledge-capture candidate. Lifecycle is independent of the
+ * underlying knowledge_chunks table — a candidate represents
+ * "agent said something in chat X that looks like role Y's knowledge".
+ * The user reviews via the Roles UI's Candidates tab and Accept (→ becomes
+ * a real chunk via updateRole) / Reject (terminal, won't be re-suggested) /
+ * Edit-then-Accept (trim before accept).
+ *
+ * Status machine:
+ *   pending → accepted | rejected | expired   (terminal: all three)
+ *   accepted is the only state that drives a side effect (updateRole call);
+ *   the other two flip a flag + populate decided_at and stop.
+ */
+export type CandidateStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+
+export const CANDIDATE_STATUSES: readonly CandidateStatus[] = [
+  'pending', 'accepted', 'rejected', 'expired',
+];
+
+export interface KnowledgeCandidate {
+  id: string;
+  roleId: string;
+  /** Chat the agent response was emitted in. Nullable when the chat row is
+   * deleted — candidate survives so the audit trail isn't lost. */
+  hostSessionId?: string;
+  chunkText: string;
+  /** 0-based index of this segment within the splitter's output for the
+   * original agent response. Useful when debugging why one chunk became a
+   * candidate and an adjacent one didn't. */
+  sourceSegmentIndex: number;
+  /** Heuristic kind: fenced code blocks → `'example'`, everything else
+   * → `'other'`. Decision §11 — keep guessing conservative; the user can
+   * change kind in the Edit-then-Accept modal. */
+  kind: KnowledgeChunkKind;
+  /** # of entity-overlap hits (≥2 required to qualify; stored so the UI
+   * can render "5 entities matched" badge). */
+  scoreEntity: number;
+  /** Max cosine vs the role's non-archived chunks at write time
+   * (≥0.6 required to qualify; stored for the UI + so future retunes can
+   * back-test thresholds). */
+  scoreCosine: number;
+  /** SHA-256 of chunkText. Drives the dedup unique index — a re-suggest of
+   * the same text within the same role's pending/rejected pool is rejected
+   * by SQLite, which `writeCandidateIfNew` turns into "skip, no error". */
+  textHash: string;
+  status: CandidateStatus;
+  createdAt: string;
+  /** Populated when status transitions away from `pending`. */
+  decidedAt?: string;
+}
+
 export interface AgentSession {
   provider: string;
   roleId: string;

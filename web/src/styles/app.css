@@ -1,7 +1,55 @@
 /* Helm renderer styles — Mac-feel desktop app.
    Tokens: --bg / --bg-elev / --bg-sidebar surfaces, --text / --text-secondary
    foregrounds, --accent / --danger / --warn / --success semantic.
-   See docs/design/2026-05-06-polish-pass.md + 2026-05-06-a11y-audit.md. */
+   See docs/design/2026-05-06-polish-pass.md + 2026-05-06-a11y-audit.md.
+
+   Phase 79 follow-up: Tailwind v4 wired here. We import the THEME and
+   UTILITIES layers but skip PREFLIGHT (helm has its own form-control /
+   button resets that would clash). The `@theme inline` block maps helm's
+   existing CSS variables to Tailwind token names so utilities like
+   `bg-surface`, `text-secondary`, `border-border` resolve to helm's
+   Mac-native palette in BOTH light and dark mode automatically. */
+
+/* Layer order — declared before any rules so cascade is predictable. */
+@layer theme, base, components, utilities;
+
+/* Tailwind v4 — pull only theme + utilities. Skipping `tailwindcss/preflight`
+   keeps helm's existing resets authoritative. */
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* Theme tokens — `inline` means Tailwind reads `var(--foo)` references
+   at runtime instead of inlining the resolved value, so dark-mode
+   media-query overrides on the underlying vars propagate through. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--bg-elev);
+  --color-sidebar: var(--bg-sidebar);
+  --color-input: var(--bg-input);
+  --color-pre: var(--bg-pre);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-secondary: var(--text-secondary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-success: var(--success);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-selected-text: var(--selected-text);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+
+  --font-sans: var(--font-system);
+  --font-mono: var(--font-mono);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-card: var(--shadow-card);
+}
 
 :root {
   --bg: #f5f5f7;

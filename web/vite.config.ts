@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   // Phase 48: Electron loads the bundled SPA via `file://` in production
@@ -9,7 +10,14 @@ export default defineConfig({
   // relative to index.html so the same build works under both file:// and
   // any future http hosting.
   base: './',
-  plugins: [react()],
+  // Phase 79 follow-up: Tailwind v4 via the official Vite plugin. CSS
+  // entry (`src/styles/app.css`) imports `tailwindcss/utilities` and
+  // declares the theme tokens that map to helm's existing CSS vars.
+  // Tailwind's preflight is intentionally NOT imported — helm has its
+  // own form-control / button resets and the preflight would clash.
+  // New code uses utility classes; existing code keeps named .helm-*
+  // classes until migrated component-by-component.
+  plugins: [tailwindcss(), react()],
   server: {
     port: 5173,
     strictPort: true,

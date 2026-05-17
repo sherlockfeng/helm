@@ -15,14 +15,36 @@ interface NavItem {
   label: string;
 }
 
-const NAV: NavItem[] = [
-  { to: '/approvals', label: 'Approvals' },
-  { to: '/chats', label: 'Active Chats' },
-  { to: '/bindings', label: 'Bindings' },
-  { to: '/campaigns', label: 'Campaigns' },
+interface NavGroup {
+  /** Group header label rendered uppercase. */
+  label: string;
+  /** Items render indented under the header. */
+  items: NavItem[];
+}
+
+type NavEntry = NavItem | NavGroup;
+
+function isGroup(entry: NavEntry): entry is NavGroup {
+  return 'items' in entry;
+}
+
+// Phase 79 follow-up: chat-adjacent surfaces (Active / Bindings / Approvals)
+// nest under a "Chats" group header — they're all "this Cursor chat I'm
+// observing" viewed from a different angle. Roles / Harness / Settings stay
+// top-level because they don't share that subject.
+// Campaigns + Requirements removed from the nav entirely; routes still
+// resolve at /campaigns and /requirements for anyone with a direct link.
+const NAV: NavEntry[] = [
+  {
+    label: 'Chats',
+    items: [
+      { to: '/chats', label: 'Active' },
+      { to: '/bindings', label: 'Bindings' },
+      { to: '/approvals', label: 'Approvals' },
+    ],
+  },
   { to: '/roles', label: 'Roles' },
-  { to: '/requirements', label: 'Requirements' },
-  { to: '/harness', label: 'Harness' }, // Phase 67
+  { to: '/harness', label: 'Harness' },
   { to: '/settings', label: 'Settings' },
 ];
 
@@ -92,19 +114,32 @@ export function Layout() {
       <aside className="helm-sidebar">
         <h1>Helm</h1>
         <nav className="helm-nav" aria-label="Main">
-          {NAV.map((item) => (
+          {NAV.map((entry) => isGroup(entry) ? (
+            <div key={entry.label} className="helm-nav-group">
+              <div className="helm-nav-group-label">{entry.label}</div>
+              {entry.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) => isActive ? 'active nested' : 'nested'}
+                >
+                  <span>{item.label}</span>
+                  {item.to === '/approvals' && pendingCount > 0 && (
+                    <span
+                      className="badge"
+                      aria-label={`${pendingCount} pending`}
+                    >{pendingCount}</span>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          ) : (
             <NavLink
-              key={item.to}
-              to={item.to}
+              key={entry.to}
+              to={entry.to}
               className={({ isActive }) => isActive ? 'active' : undefined}
             >
-              <span>{item.label}</span>
-              {item.to === '/approvals' && pendingCount > 0 && (
-                <span
-                  className="badge"
-                  aria-label={`${pendingCount} pending`}
-                >{pendingCount}</span>
-              )}
+              <span>{entry.label}</span>
             </NavLink>
           ))}
         </nav>

@@ -58,6 +58,11 @@ export function ChatsPage() {
   // Phase 62: pull bindings so we can show Lark status per chat. Refreshes
   // on the same SSE events the Bindings page listens for.
   const { data: bindingsData, reload: reloadBindings } = useApi(() => helmApi.bindings());
+  // Phase 79 follow-up — AKM-inspired rail+detail layout. Tracks which
+  // chat is currently focused in the detail pane; defaults to the first
+  // one on load and follows newly-arrived chats only when nothing is
+  // selected (otherwise an SSE-triggered reload would steal focus).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   useEventStream(() => { reload(); reloadBindings(); }, {
     types: [
       'session.started', 'session.closed',
@@ -72,6 +77,19 @@ export function ChatsPage() {
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
   // Phase 62: which chat (if any) currently has the Mirror-to-Lark modal open.
   const [bindModalFor, setBindModalFor] = useState<string | null>(null);
+
+  // Phase 79 follow-up: seed selection on first load + when the selected
+  // chat disappears (close / delete). Don't auto-jump on every reload —
+  // SSE bursts shouldn't yank focus from what the user is reading.
+  useEffect(() => {
+    const chats = data?.chats ?? [];
+    if (chats.length === 0) {
+      if (selectedId !== null) setSelectedId(null);
+      return;
+    }
+    const stillExists = selectedId !== null && chats.some((c) => c.id === selectedId);
+    if (!stillExists) setSelectedId(chats[0]!.id);
+  }, [data, selectedId]);
   // Phase 55: which row's title is currently being edited. Only one at a
   // time so escape-from-edit doesn't accidentally cancel another row.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,14 +161,33 @@ export function ChatsPage() {
 
   const roles = rolesData?.roles ?? [];
 
+  // Phase 79 follow-up: stats summary — # chats, total queued msgs,
+  // # chats with a Lark binding. Stays cheap (one pass over local data).
+  const chats = data?.chats ?? [];
+  const bindings = bindingsData?.bindings ?? [];
+  const totalQueued = chats.reduce((acc, c) => acc + (c.queuedMessageCount ?? 0), 0);
+  const larkBoundChatIds = new Set(
+    bindings.filter((b) => b.channel === 'lark').map((b) => b.hostSessionId),
+  );
+
   return (
     <>
-      <h2>Active Chats</h2>
-      <p className="muted">
-        Cursor sessions Helm is currently observing. Bind a role to a chat and
-        Helm injects that role's system prompt + knowledge on the next
-        session_start.
-      </p>
+      {/* Phase 79 follow-up: stat strip at top — chats / queued / Lark
+          mirrored, AKM Sessions-page style. Cheap, derived from data
+          already in memory. */}
+      <header className="helm-rail-header">
+        <div>
+          <h2 style={{ margin: 0 }}>Active Chats</h2>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            Cursor sessions Helm is observing. Bind a role to inject its prompt + knowledge.
+          </p>
+        </div>
+        <div className="helm-rail-stats" role="status" aria-label="Chat stats">
+          <Stat label="Chats" value={chats.length} tone={chats.length > 0 ? 'live' : 'muted'} />
+          <Stat label="Queued msgs" value={totalQueued} tone={totalQueued > 0 ? 'warn' : 'muted'} />
+          <Stat label="Lark mirrored" value={larkBoundChatIds.size} tone={larkBoundChatIds.size > 0 ? 'info' : 'muted'} />
+        </div>
+      </header>
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
@@ -162,7 +199,27 @@ export function ChatsPage() {
         />
       )}
 
-      {data && data.chats.map((chat) => (
+      {/* 2-col rail+detail layout — rail lists every chat with tone
+          colors driven by status (queued > 0 → warn, has Lark → info).
+          Detail pane renders the full existing chat card for the
+          selected row. Single-chat install still works fine — the rail
+          shows one item and the pane is the same as before. */}
+      {data && data.chats.length > 0 && (
+      <div className="helm-rail-layout">
+        <aside className="helm-rail" aria-label="Chats list">
+          {data.chats.map((chat) => (
+            <ChatRailRow
+              key={chat.id}
+              chat={chat}
+              hasLark={larkBoundChatIds.has(chat.id)}
+              selected={selectedId === chat.id}
+              onClick={() => setSelectedId(chat.id)}
+            />
+          ))}
+        </aside>
+
+        <section className="helm-rail-content">
+      {data && data.chats.filter((chat) => chat.id === selectedId).map((chat) => (
         <article key={chat.id} className="helm-card">
           <div className="row">
             <div>
@@ -321,6 +378,10 @@ export function ChatsPage() {
         </article>
       ))}
 
+        </section>
+      </div>
+      )}
+
       {bindModalFor && (
         <MirrorToLarkModal
           hostSessionId={bindModalFor}
@@ -337,6 +398,65 @@ export function ChatsPage() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Phase 79 follow-up: one row in the chat rail. Tone driven by status:
+ *   - warn  (orange): queued messages waiting for Cursor drain
+ *   - info  (blue):   has at least one Lark binding mirroring this chat
+ *   - default: idle
+ * Active row gets a left border + raised background to anchor the eye.
+ */
+function ChatRailRow({
+  chat,
+  hasLark,
+  selected,
+  onClick,
+}: {
+  chat: ActiveChat;
+  hasLark: boolean;
+  selected: boolean;
+  onClick: () => void;
+}): ReactElement {
+  const queued = chat.queuedMessageCount ?? 0;
+  const tone: 'warn' | 'info' | 'default' = queued > 0 ? 'warn' : hasLark ? 'info' : 'default';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`helm-rail-row tone-${tone}${selected ? ' selected' : ''}`}
+      aria-current={selected ? 'page' : undefined}
+      title={chat.cwd ?? chat.id}
+    >
+      <div className="helm-rail-row-label">{chatLabel(chat)}</div>
+      <div className="helm-rail-row-meta">
+        <span className="muted">{formatRelative(chat.lastSeenAt)}</span>
+        {queued > 0 && <span className="helm-rail-badge warn">📨 {queued}</span>}
+        {hasLark && queued === 0 && <span className="helm-rail-badge info">L</span>}
+        {chat.roleIds.length > 0 && (
+          <span className="muted" style={{ fontSize: 10 }}>{chat.roleIds.length}r</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Compact stat tile for the header strip. Tone:
+ *   - live (green): non-zero count of healthy items
+ *   - warn (amber): non-zero count of things needing attention
+ *   - info (blue):  non-zero informational count
+ *   - muted (gray): zero or n/a
+ */
+function Stat({
+  label, value, tone,
+}: { label: string; value: number; tone: 'live' | 'warn' | 'info' | 'muted' }): ReactElement {
+  return (
+    <div className={`helm-rail-stat tone-${tone}`}>
+      <div className="helm-rail-stat-value">{value}</div>
+      <div className="helm-rail-stat-label">{label}</div>
+    </div>
   );
 }
 

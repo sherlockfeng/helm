@@ -112,7 +112,7 @@ export function Layout() {
   return (
     <div className="helm-app">
       <aside className="helm-sidebar">
-        <h1>Helm</h1>
+        <h1 className="font-semibold tracking-tight">Helm</h1>
         <nav className="helm-nav" aria-label="Main">
           {NAV.map((entry) => isGroup(entry) ? (
             <div key={entry.label} className="helm-nav-group">

@@ -236,6 +236,148 @@ code, pre {
   text-align: center;
 }
 
+/* Phase 79 follow-up: grouped nav. Group header is uppercase, muted;
+   nested items indent under it via a left padding bump on .nested. */
+.helm-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+.helm-nav-group:first-child { margin-top: 0; }
+
+.helm-nav-group-label {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.helm-nav a.nested {
+  padding-left: 24px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Phase 79 follow-up: rail+detail layout (AKM-inspired).
+   Used by Active Chats; other pages can opt in by wrapping content in
+   .helm-rail-layout with .helm-rail + .helm-rail-content children.
+   ──────────────────────────────────────────────────────────────────── */
+
+.helm-rail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.helm-rail-stats {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.helm-rail-stat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  min-width: 70px;
+  text-align: center;
+  background: var(--surface);
+}
+.helm-rail-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.helm-rail-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.helm-rail-stat.tone-live  { border-color: var(--success); }
+.helm-rail-stat.tone-live  .helm-rail-stat-value  { color: var(--success); }
+.helm-rail-stat.tone-warn  { border-color: var(--accent, #f59e0b); }
+.helm-rail-stat.tone-warn  .helm-rail-stat-value  { color: var(--accent, #f59e0b); }
+.helm-rail-stat.tone-info  { border-color: #3b82f6; }
+.helm-rail-stat.tone-info  .helm-rail-stat-value  { color: #3b82f6; }
+.helm-rail-stat.tone-muted { opacity: 0.55; }
+
+.helm-rail-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.helm-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 6px;
+  /* Allow the rail to scroll independently when many chats are open. */
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
+}
+
+.helm-rail-row {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-left: 3px solid transparent;
+  transition: background-color 0.1s, border-color 0.1s;
+}
+.helm-rail-row:hover { background: var(--hover); }
+.helm-rail-row.selected {
+  background: var(--selected);
+  color: var(--selected-text);
+  border-left-color: var(--primary, #3b82f6);
+}
+.helm-rail-row.tone-warn:not(.selected) { border-left-color: var(--accent, #f59e0b); }
+.helm-rail-row.tone-info:not(.selected) { border-left-color: #3b82f6; }
+
+.helm-rail-row-label {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.helm-rail-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.helm-rail-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 8px;
+  color: #fff;
+  line-height: 16px;
+}
+.helm-rail-badge.warn { background: var(--accent, #f59e0b); }
+.helm-rail-badge.info { background: #3b82f6; }
+
+.helm-rail-content {
+  min-width: 0;
+}
+
 /* P1-4: sidebar footer — visible separation + pulsing dot when broken */
 .helm-sidebar-footer {
   margin-top: auto;

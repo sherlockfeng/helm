@@ -54,6 +54,8 @@ function makeCandidate(overrides: Partial<KnowledgeCandidate> = {}): KnowledgeCa
     textHash: overrides.textHash ?? createHash('sha256').update(chunkText).digest('hex'),
     status: overrides.status ?? 'pending',
     createdAt: overrides.createdAt ?? '2026-05-14T12:00:00.000Z',
+    // Phase 79: provenance — defaults to chat_capture to match existing semantics.
+    provenance: overrides.provenance ?? 'chat_capture',
     ...(overrides.hostSessionId ? { hostSessionId: overrides.hostSessionId } : {}),
     ...(overrides.decidedAt ? { decidedAt: overrides.decidedAt } : {}),
   };

@@ -69,7 +69,18 @@ import {
 } from '../storage/repos/knowledge-candidates.js';
 import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import type { PluginRegistry } from '../plugins/index.js';
+import { bundleToBytes, packRole } from '../roles/bundle.js';
+import {
+  deleteSubscription,
+  getSubscription,
+  getSubscriptionByRole,
+  insertSubscription,
+  listSubscriptions,
+  setSubscriptionStatus,
+} from '../storage/repos/role-subscriptions.js';
+import type { RoleSubscription, SubscriptionStatus } from '../storage/types.js';
 import { recallRequirements } from '../requirements/recall.js';
 import { getRequirement } from '../storage/repos/requirements.js';
 import type { ApprovalRegistry } from '../approval/registry.js';
@@ -258,6 +269,25 @@ export interface HttpApiDeps {
    * `/api/harness/tasks/:id/review` returns 501.
    */
   runHarnessReview?: (taskId: string) => Promise<HarnessReview>;
+  /**
+   * Phase 79: registered storage plugins. Drives `/api/plugins` (read-only
+   * surface for the Settings UI) and is consulted by the subscription
+   * "Sync now" endpoint (via `runSubscriptionSync` below). When undefined,
+   * `/api/plugins` returns an empty list and subscription endpoints 501.
+   */
+  pluginRegistry?: PluginRegistry;
+  /**
+   * Phase 79: trigger an on-demand subscription sync. The orchestrator
+   * wraps `runSubscriptionSync` with logging; tests can inject a stub.
+   * When undefined, the "Sync now" endpoint returns 501.
+   */
+  runSubscriptionSyncOnce?: (subscriptionId?: string) => Promise<void>;
+  /**
+   * Phase 79: stamp on the role bundle export. helm's own version (from
+   * package.json) — purely for cross-version debugging. Defaults to
+   * `"unknown"` when omitted.
+   */
+  helmVersion?: string;
 }
 
 export interface HttpApiOptions {
@@ -765,6 +795,159 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           data: { sourceId: sourceMatch[1]!, roleId: before.roleId, chunksDeleted: result.chunksDeleted },
         });
         return send(res, 200, { ...result, source: before });
+      }
+
+      // ── Phase 79: storage plugins (read-only) ───────────────────────
+      // GET /api/plugins → list every plugin helm tried to load (OK +
+      //   failed). Drives the Settings → Storage plugins section.
+      if (url.pathname === '/api/plugins') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        if (!deps.pluginRegistry) return send(res, 200, { plugins: [] });
+        const plugins = deps.pluginRegistry.listAll().map((p) =>
+          p.ok
+            ? { ok: true, id: p.plugin.id, scheme: p.plugin.scheme, version: p.plugin.version, apiVersion: p.plugin.apiVersion, loadedFrom: p.loadedFrom }
+            : { ok: false, id: p.id, reason: p.reason },
+        );
+        return send(res, 200, { plugins });
+      }
+
+      // ── Phase 79: role subscriptions ────────────────────────────────
+      // GET    /api/role-subscriptions                  → list all
+      // POST   /api/role-subscriptions                  → create (body: { roleId, sourceUrl, autoApply?, syncIntervalMinutes? })
+      // POST   /api/role-subscriptions/:id/sync-now     → trigger sync immediately
+      // POST   /api/role-subscriptions/:id/pause        → flip status to 'paused' (cron skips)
+      // POST   /api/role-subscriptions/:id/resume       → flip status back to 'active'
+      // DELETE /api/role-subscriptions/:id              → remove subscription (chunks preserved — Decision #8A)
+      if (url.pathname === '/api/role-subscriptions') {
+        if (req.method === 'GET') {
+          return send(res, 200, { subscriptions: listSubscriptions(deps.db) });
+        }
+        if (req.method === 'POST') {
+          let body: { roleId?: unknown; sourceUrl?: unknown; autoApply?: unknown; syncIntervalMinutes?: unknown };
+          try { body = JSON.parse(ctx.body); }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          if (typeof body.roleId !== 'string') return badRequest(res, 'roleId required');
+          if (typeof body.sourceUrl !== 'string') return badRequest(res, 'sourceUrl required');
+          const schemeMatch = body.sourceUrl.match(/^([a-z][a-z0-9+.-]*):\/\//);
+          if (!schemeMatch) return badRequest(res, `sourceUrl must include a URL scheme (got: ${body.sourceUrl})`);
+          if (!getRoleRow(deps.db, body.roleId)) return notFound(res);
+          // Reviewer blocker #2: sync interval must be a positive integer.
+          // 0 → cron-tight-loop hammers the storage backend.
+          // Negative / NaN / fractional → undefined SQL behavior.
+          // Min 1 — finer than the 15-min cron tick doesn't help anyway.
+          let syncIntervalMinutes = 24 * 60;
+          if (body.syncIntervalMinutes !== undefined) {
+            if (typeof body.syncIntervalMinutes !== 'number'
+                || !Number.isInteger(body.syncIntervalMinutes)
+                || body.syncIntervalMinutes < 1) {
+              return badRequest(res, `syncIntervalMinutes must be a positive integer (got: ${String(body.syncIntervalMinutes)})`);
+            }
+            syncIntervalMinutes = body.syncIntervalMinutes;
+          }
+          // Reject double-subscription per Decision (v1: one source per role).
+          if (getSubscriptionByRole(deps.db, body.roleId)) {
+            return send(res, 409, {
+              error: 'already_subscribed',
+              message: `role ${body.roleId} already has a subscription; remove it first`,
+            });
+          }
+          const sub: RoleSubscription = {
+            id: randomUUID(),
+            roleId: body.roleId,
+            sourceType: schemeMatch[1]!,
+            sourceUrl: body.sourceUrl,
+            syncIntervalMinutes,
+            autoApply: body.autoApply === true,
+            status: 'active',
+            createdAt: new Date().toISOString(),
+          };
+          insertSubscription(deps.db, sub);
+          deps.logger?.info('role_subscription_created', {
+            data: { id: sub.id, roleId: sub.roleId, sourceType: sub.sourceType },
+          });
+          return send(res, 201, { subscription: sub });
+        }
+        return methodNotAllowed(res);
+      }
+
+      const subSyncMatch = url.pathname.match(/^\/api\/role-subscriptions\/([^/]+)\/sync-now$/);
+      if (subSyncMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.runSubscriptionSyncOnce) {
+          return send(res, 501, { error: 'not_implemented', message: 'subscription sync not wired' });
+        }
+        const subId = subSyncMatch[1]!;
+        if (!getSubscription(deps.db, subId)) return notFound(res);
+        try {
+          await deps.runSubscriptionSyncOnce(subId);
+          const fresh = getSubscription(deps.db, subId);
+          return send(res, 200, { subscription: fresh });
+        } catch (err) { return internalError(res, err); }
+      }
+
+      const subPauseResumeMatch = url.pathname.match(/^\/api\/role-subscriptions\/([^/]+)\/(pause|resume)$/);
+      if (subPauseResumeMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const subId = subPauseResumeMatch[1]!;
+        const action = subPauseResumeMatch[2] as 'pause' | 'resume';
+        if (!getSubscription(deps.db, subId)) return notFound(res);
+        const newStatus: SubscriptionStatus = action === 'pause' ? 'paused' : 'active';
+        const flipped = setSubscriptionStatus(deps.db, subId, newStatus);
+        return send(res, 200, { subscriptionId: subId, status: newStatus, flipped });
+      }
+
+      const subDeleteMatch = url.pathname.match(/^\/api\/role-subscriptions\/([^/]+)$/);
+      if (subDeleteMatch) {
+        if (req.method !== 'DELETE') return methodNotAllowed(res);
+        const subId = subDeleteMatch[1]!;
+        const before = getSubscription(deps.db, subId);
+        if (!before) return notFound(res);
+        deleteSubscription(deps.db, subId);
+        deps.logger?.info('role_subscription_deleted', {
+          data: { id: subId, roleId: before.roleId },
+        });
+        // Decision #8A: leave the role's chunks alone — user owns what
+        // they accepted; unsubscribing is just stopping further pulls.
+        return send(res, 200, { id: subId, deleted: true, chunksAffected: 0 });
+      }
+
+      // POST /api/roles/:id/export → returns the .helmrole bundle JSON
+      // verbatim (browser saves as file). Optional `?upload=tos://…`
+      // routes through the matching storage plugin instead — useful
+      // when the user has push access to a remote and wants to skip
+      // the manual download + re-upload step.
+      const roleExportMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/export$/);
+      if (roleExportMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const roleId = roleExportMatch[1]!;
+        const role = getRoleRow(deps.db, roleId);
+        if (!role) return notFound(res);
+        try {
+          const bundle = packRole(deps.db, roleId, { helmVersion: deps.helmVersion ?? 'unknown' });
+          const bytes = bundleToBytes(bundle);
+          const uploadTarget = url.searchParams.get('upload');
+          if (uploadTarget) {
+            if (!deps.pluginRegistry) {
+              return send(res, 501, { error: 'plugins_not_wired', message: 'upload requires storage plugin registry' });
+            }
+            const schemeMatch = uploadTarget.match(/^([a-z][a-z0-9+.-]*):\/\//);
+            if (!schemeMatch) return badRequest(res, `upload URL needs a scheme (got: ${uploadTarget})`);
+            const plugin = deps.pluginRegistry.getByScheme(schemeMatch[1]!);
+            if (!plugin) {
+              return send(res, 400, {
+                error: 'no_plugin_for_scheme',
+                message: `no storage plugin loaded for scheme '${schemeMatch[1]!}'`,
+              });
+            }
+            const { etag } = await plugin.upload(uploadTarget, bytes, { contentType: 'application/json' });
+            deps.logger?.info('role_bundle_uploaded', {
+              data: { roleId, url: uploadTarget, etag, bytes: bytes.length },
+            });
+            return send(res, 200, { roleId, uploadedTo: uploadTarget, etag, bundleVersion: bundle.bundleVersion, contentHash: bundle.contentHash });
+          }
+          // Default: stream JSON back; client decides how to handle.
+          return send(res, 200, bundle);
+        } catch (err) { return internalError(res, err); }
       }
 
       // ── Requirements (B3) ───────────────────────────────────────────

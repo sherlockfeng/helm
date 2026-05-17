@@ -159,6 +159,14 @@ export interface KnowledgeChunk {
  */
 export type CandidateStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 
+/**
+ * Phase 79: where did this candidate row come from? Drives the
+ * provenance badge in the Roles UI's Candidates tab and lets future
+ * analytics distinguish "agent-emitted in chat" vs "peer pushed via
+ * subscription".
+ */
+export type CandidateProvenance = 'chat_capture' | 'subscription';
+
 export const CANDIDATE_STATUSES: readonly CandidateStatus[] = [
   'pending', 'accepted', 'rejected', 'expired',
 ];
@@ -193,6 +201,46 @@ export interface KnowledgeCandidate {
   createdAt: string;
   /** Populated when status transitions away from `pending`. */
   decidedAt?: string;
+  /** Phase 79: chat_capture (Phase 78 default) vs subscription (peer push). */
+  provenance: CandidateProvenance;
+}
+
+/**
+ * Phase 79: a subscription is helm's promise to periodically poll a
+ * remote bundle URL, diff it against the local role, and surface
+ * additions / changes as knowledge_candidates the user can Accept.
+ *
+ * sourceType is parsed from sourceUrl's scheme (`tos://…` → `'tos'`).
+ * Stored as its own field because the URL string can change validly
+ * without changing the scheme (e.g., user fixes a typo in the bucket
+ * name); pinning the scheme prevents helm from accidentally re-routing
+ * an old subscription to a new plugin.
+ *
+ * autoApply=true means "trusted source": skip the candidates queue,
+ * write chunks directly. Use sparingly; almost always false.
+ */
+export type SubscriptionStatus = 'active' | 'paused' | 'error';
+
+export interface RoleSubscription {
+  id: string;
+  roleId: string;
+  sourceType: string;
+  sourceUrl: string;
+  /** Storage-backend opaque change-detection token (etag for HTTP-style;
+   * content hash for fs-style). Compared on each sync to decide whether
+   * to GET the full bundle. */
+  lastEtag?: string;
+  /** sha256(canonical JSON of last successfully-unpacked bundle's chunks).
+   * Defense-in-depth: even if the backend's etag is misleading or absent,
+   * a matching content hash means "no change". */
+  lastContentHash?: string;
+  lastSyncAt?: string;
+  /** Populated when status === 'error'; cleared on next successful sync. */
+  lastError?: string;
+  syncIntervalMinutes: number;
+  autoApply: boolean;
+  status: SubscriptionStatus;
+  createdAt: string;
 }
 
 export interface AgentSession {

@@ -46,6 +46,12 @@ import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { seedBuiltinRoles, setLifecycleSweepTrigger, trainRole } from '../roles/library.js';
 import { runArchivalSweep } from '../roles/lifecycle.js';
 import { captureFromAgentResponse } from '../capture/index.js';
+import {
+  fileStoragePlugin,
+  loadPlugins,
+  PluginRegistry,
+} from '../plugins/index.js';
+import { runSubscriptionSync } from '../subscriptions/sync.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -255,6 +261,73 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     runSweepWithLogging();
   }, LIFECYCLE_CRON_MS);
   lifecycleCron.unref?.();
+
+  // Phase 79: storage plugin registry + subscription cron.
+  //
+  // Registry is created SYNCHRONOUSLY here so it can be passed to the
+  // HTTP API factory below by reference. External plugin loading is
+  // async (init() can do IO) and happens inside start() — by then any
+  // HTTP request that arrives sees a fully-populated registry, and the
+  // boot subscription sync also runs from start() so all timing lines up.
+  //
+  // The subscription cron polls every CRON_TICK_MINUTES; each
+  // subscription tracks its OWN sync_interval_minutes (default 24h) so
+  // the cron tick rate is mostly a "wake up and check who's due" rate.
+  // 15min is responsive enough for "Sync now" race recovery without
+  // beating up the DB.
+  const pluginsLog = deps.loggers.module('plugins');
+  const subsLog = deps.loggers.module('subscriptions.sync');
+  const pluginRegistry: PluginRegistry = new PluginRegistry();
+  // file:// is always available, even when no external plugins loaded.
+  try {
+    pluginRegistry.registerOk(fileStoragePlugin, '<built-in>');
+  } catch {
+    // Should not happen at this point (registry is empty), but defensive
+    // against future built-ins competing for schemes.
+  }
+
+  // Reviewer should-fix: per-subscription in-flight mutex. The cron
+  // tick and a "Sync now" click can both race for the same id; without
+  // a guard, both call download + applyRoleBundle and the partial
+  // unique index is the only thing preventing duplicate candidate
+  // inserts. With the mutex, the second caller awaits the first's
+  // promise — single-pass semantics and clean logs.
+  const inFlight = new Map<string, Promise<void>>();
+  /** Sentinel for "all-due sweep is running" so we don't kick a second one. */
+  const ALL_DUE_KEY = '__all_due__';
+  async function runSubscriptionSyncWithLogging(subscriptionId?: string): Promise<void> {
+    const key = subscriptionId ?? ALL_DUE_KEY;
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    const promise = (async () => {
+      try {
+        const outcomes = await runSubscriptionSync(
+          { db: deps.db, registry: pluginRegistry, logger: subsLog },
+          subscriptionId !== undefined ? { subscriptionId } : {},
+        );
+        const totals = outcomes.reduce((acc, o) => {
+          acc[o.action] = (acc[o.action] ?? 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        if (outcomes.length > 0) {
+          subsLog.info('subscription_sweep_completed', {
+            data: { ...(subscriptionId ? { subscriptionId } : { scope: 'all_due' }), totals } as Record<string, unknown>,
+          });
+        }
+      } catch (err) {
+        subsLog.warn('subscription_sweep_failed', {
+          data: { error: (err as Error).message },
+        });
+      }
+    })();
+    inFlight.set(key, promise);
+    try { await promise; } finally { inFlight.delete(key); }
+  }
+  const SUBSCRIPTION_CRON_MS = 15 * 60 * 1000;
+  const subscriptionCron: NodeJS.Timeout = setInterval(() => {
+    void runSubscriptionSyncWithLogging();
+  }, SUBSCRIPTION_CRON_MS);
+  subscriptionCron.unref?.();
 
   // Knowledge — LocalRolesProvider + RequirementsArchiveProvider always on
   // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
@@ -1104,6 +1177,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           { taskId },
         );
       },
+      // Phase 79: plugin registry + subscription sync trigger for the
+      // role-bundle endpoints. helmVersion gets stamped on every export
+      // bundle so cross-version debugging is possible later.
+      pluginRegistry,
+      runSubscriptionSyncOnce: runSubscriptionSyncWithLogging,
+      helmVersion: process.env['npm_package_version'] ?? 'unknown',
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
@@ -1157,6 +1236,28 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       }
       await httpApi.start();
       log.info('http_api_started', { data: { port: httpApi.port() } });
+      // Phase 79: load external plugins now that core systems are up.
+      // Plugin init() can do IO (TOS SDK builds clients eagerly); we
+      // log + skip failures so a broken plugin doesn't block boot.
+      await loadPlugins(pluginRegistry, {
+        plugins: liveConfig.plugins ?? { enabled: [] },
+        storage: liveConfig.storage ?? {},
+        logger: {
+          info: (msg, ctx) => pluginsLog.info(msg, ctx as Record<string, unknown>),
+          warn: (msg, ctx) => pluginsLog.warn(msg, ctx as Record<string, unknown>),
+          error: (msg, ctx) => pluginsLog.error(msg, ctx as Record<string, unknown>),
+        },
+      });
+      pluginsLog.info('plugins_loaded', {
+        data: {
+          summary: pluginRegistry.listAll().map((p) =>
+            p.ok ? { id: p.plugin.id, scheme: p.plugin.scheme, ok: true }
+                 : { id: p.id, ok: false, reason: p.reason },
+          ),
+        },
+      });
+      // Catch up on any overdue subscriptions immediately.
+      void runSubscriptionSyncWithLogging();
       started = true;
       log.info('boot_complete');
     },
@@ -1169,6 +1270,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // schedule new sweep work onto a tearing-down DB connection.
       clearInterval(lifecycleCron);
       setLifecycleSweepTrigger(null);
+      // Phase 79: stop the subscription cron + shutdown loaded plugins.
+      // Order matters: clear the cron first so a tick doesn't fire while
+      // plugins are tearing down (TOS SDK destroy is not idempotent).
+      clearInterval(subscriptionCron);
+      await pluginRegistry.shutdownAll((id, err) => {
+        pluginsLog.warn('plugin_shutdown_failed', {
+          data: { id, error: err.message },
+        });
+      });
       await httpApi.stop();
       if (larkWiring) larkWiring.detach();
       if (larkChannel) await larkChannel.stop();

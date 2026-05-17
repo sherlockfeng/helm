@@ -221,6 +221,9 @@ export interface RoleSummary extends Role {
 /** Phase 78 — candidate row from the Roles UI's Candidates tab. */
 export type CandidateStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 
+/** Phase 79 — where a candidate came from (chat capture vs subscription pull). */
+export type CandidateProvenance = 'chat_capture' | 'subscription';
+
 export interface KnowledgeCandidate {
   id: string;
   roleId: string;
@@ -240,6 +243,31 @@ export interface KnowledgeCandidate {
   status: CandidateStatus;
   createdAt: string;
   decidedAt?: string;
+  /** Phase 79 — chat_capture (Phase 78 default) vs subscription (peer push). */
+  provenance: CandidateProvenance;
+}
+
+/** Phase 79 — one row in the Settings → Storage plugins list. */
+export type StoragePluginInfo =
+  | { ok: true; id: string; scheme: string; version: string; apiVersion: number; loadedFrom: string }
+  | { ok: false; id: string; reason: string };
+
+/** Phase 79 — subscription row. */
+export type SubscriptionStatus = 'active' | 'paused' | 'error';
+
+export interface RoleSubscription {
+  id: string;
+  roleId: string;
+  sourceType: string;
+  sourceUrl: string;
+  lastEtag?: string;
+  lastContentHash?: string;
+  lastSyncAt?: string;
+  lastError?: string;
+  syncIntervalMinutes: number;
+  autoApply: boolean;
+  status: SubscriptionStatus;
+  createdAt: string;
 }
 
 /** Phase 73: chunk type discriminator — surfaced as a badge in the UI. */

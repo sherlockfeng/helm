@@ -509,6 +509,45 @@ export const MIGRATIONS: Migration[] = [
         WHERE status = 'pending' OR status = 'rejected';
     `,
   },
+  {
+    version: 16,
+    description:
+      'Plugin-storage + role-subscription (Phase 79). Two additions:'
+      + ' (1) `role_subscriptions` — one row per "this role mirrors content from a remote URL".'
+      + '     sourceUrl scheme picks which storage plugin handles transport (file:// built-in;'
+      + '     tos:// / s3:// / git:// via external plugins). lastEtag is the storage backend\'s'
+      + '     opaque change-detection token; lastContentHash is the canonical-JSON sha256 of the'
+      + '     last successfully-unpacked bundle (defense-in-depth in case etag is misleading).'
+      + '     UNIQUE(role_id) enforces "one source per role" for v1 — multi-source merge is a'
+      + '     deliberate cut.'
+      + ' (2) `knowledge_candidates.provenance` — new column distinguishing chat-capture (Phase 78)'
+      + '     candidates from subscription-pull candidates. Existing rows default to'
+      + '     `\'chat_capture\'` (the only thing that wrote to this table before today).',
+    up: `
+      CREATE TABLE IF NOT EXISTS role_subscriptions (
+        id                     TEXT PRIMARY KEY,
+        role_id                TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+        source_type            TEXT NOT NULL,
+        source_url             TEXT NOT NULL,
+        last_etag              TEXT,
+        last_content_hash      TEXT,
+        last_sync_at           TEXT,
+        last_error             TEXT,
+        sync_interval_minutes  INTEGER NOT NULL DEFAULT 1440,
+        auto_apply             INTEGER NOT NULL DEFAULT 0,
+        status                 TEXT NOT NULL DEFAULT 'active',
+        created_at             TEXT NOT NULL
+      );
+      -- One subscription per role for v1 (multi-source merge would need
+      -- explicit conflict policy; Decision #8 / scope-out item).
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_role_subscriptions_role ON role_subscriptions(role_id);
+      -- Sync sweep uses (status, last_sync_at) to find "due" subscriptions.
+      CREATE INDEX IF NOT EXISTS idx_role_subscriptions_status_synced ON role_subscriptions(status, last_sync_at);
+
+      ALTER TABLE knowledge_candidates ADD COLUMN provenance TEXT NOT NULL DEFAULT 'chat_capture';
+      CREATE INDEX IF NOT EXISTS idx_candidates_provenance ON knowledge_candidates(role_id, provenance);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

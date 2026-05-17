@@ -60,6 +60,10 @@ export function writeCandidateIfNew(
     textHash,
     status: 'pending',
     createdAt: input.createdAt,
+    // Phase 79: chat-capture is the only writer of THIS module; the
+    // subscription path (src/roles/bundle.ts) constructs its own
+    // KnowledgeCandidate row directly with provenance='subscription'.
+    provenance: 'chat_capture',
   };
   if (input.hostSessionId !== undefined) candidate.hostSessionId = input.hostSessionId;
   const inserted = insertCandidateIfNew(db, candidate);

@@ -263,6 +263,56 @@ export const helmApi = {
       { chunkText },
     ),
 
+  // ── Phase 79: storage plugins (read) + role subscriptions ───────
+  /** List every storage plugin helm tried to load — OK + failed. */
+  listPlugins: () =>
+    request<{ plugins: import('./types.js').StoragePluginInfo[] }>(
+      'GET', '/api/plugins',
+    ),
+  /** List all role subscriptions. */
+  listSubscriptions: () =>
+    request<{ subscriptions: import('./types.js').RoleSubscription[] }>(
+      'GET', '/api/role-subscriptions',
+    ),
+  /** Create a subscription. `sourceUrl` must include a URL scheme that
+   *  matches some loaded storage plugin (or the built-in `file://`). */
+  createSubscription: (input: {
+    roleId: string;
+    sourceUrl: string;
+    autoApply?: boolean;
+    syncIntervalMinutes?: number;
+  }) =>
+    request<{ subscription: import('./types.js').RoleSubscription }>(
+      'POST', '/api/role-subscriptions', input,
+    ),
+  /** Trigger an immediate sync for one subscription (returns the
+   *  freshly-updated row). Useful for the "Sync now" button. */
+  syncSubscriptionNow: (subscriptionId: string) =>
+    request<{ subscription: import('./types.js').RoleSubscription }>(
+      'POST', `/api/role-subscriptions/${encodeURIComponent(subscriptionId)}/sync-now`,
+    ),
+  /** Pause / resume a subscription (cron skips paused ones). */
+  setSubscriptionPaused: (subscriptionId: string, paused: boolean) =>
+    request<{ subscriptionId: string; status: 'active' | 'paused' }>(
+      'POST', `/api/role-subscriptions/${encodeURIComponent(subscriptionId)}/${paused ? 'pause' : 'resume'}`,
+    ),
+  /** Delete a subscription — chunks the user already accepted are
+   *  preserved (Decision §8A: ownership transfers on accept). */
+  deleteSubscription: (subscriptionId: string) =>
+    request<{ id: string; deleted: boolean; chunksAffected: number }>(
+      'DELETE', `/api/role-subscriptions/${encodeURIComponent(subscriptionId)}`,
+    ),
+  /** Export a role as a `.helmrole` bundle. Returns the bundle JSON
+   *  when `uploadTo` is omitted; uploads through the matching storage
+   *  plugin when provided. */
+  exportRole: (roleId: string, uploadTo?: string) => {
+    const path = `/api/roles/${encodeURIComponent(roleId)}/export`
+      + (uploadTo ? `?upload=${encodeURIComponent(uploadTo)}` : '');
+    return uploadTo
+      ? request<{ roleId: string; uploadedTo: string; etag: string; bundleVersion: number; contentHash: string }>('POST', path)
+      : request<unknown>('POST', path); // raw bundle JSON
+  },
+
   // Phase 60b: conversational role training. Each turn POSTs the full
   // transcript; helm spawns `claude -p` with helm's MCP injected so the
   // agent can call `train_role` itself when the user is ready. The old

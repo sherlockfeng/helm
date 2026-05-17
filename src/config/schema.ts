@@ -125,6 +125,27 @@ const EngineConfigSchema = z.object({
   default: z.enum(['cursor', 'claude']).default('claude'),
 }).strict();
 
+// Phase 79: storage plugin system + role subscription. Two new top-level
+// blocks:
+//
+//   - `plugins.enabled` — allowlist of plugin ids to load from
+//     `~/.helm/plugins/<id>/` at boot. Empty by default (no plugins
+//     wired). The file:// built-in storage scheme is ALWAYS registered
+//     regardless of this list.
+//
+//   - `storage` — per-scheme config passed to that plugin's `init` as
+//     `deps.config`. Shape is opaque to helm (plugin-defined); helm just
+//     hands it through. Convention: secrets (AKSK / API keys) go in env
+//     vars, NOT here.
+//
+// We use `z.object({}).passthrough()` for `storage` because the schema
+// is plugin-defined; helm should NOT reject unknown keys here.
+const PluginsConfigSchema = z.object({
+  enabled: z.array(z.string()).default([]),
+}).strict();
+
+const StorageConfigSchema = z.record(z.string(), z.record(z.string(), z.unknown())).default({});
+
 export const HelmConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   approval: ApprovalConfigSchema.default({}),
@@ -134,6 +155,9 @@ export const HelmConfigSchema = z.object({
   cursor: CursorConfigSchema.default({}),
   harness: HarnessConfigSchema.default({}),
   engine: EngineConfigSchema.default({}),
+  // Phase 79
+  plugins: PluginsConfigSchema.default({}),
+  storage: StorageConfigSchema,
 }).strict();
 
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;

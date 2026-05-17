@@ -9,6 +9,7 @@
 
 import type Database from 'better-sqlite3';
 import type {
+  CandidateProvenance,
   CandidateStatus,
   KnowledgeCandidate,
   KnowledgeChunkKind,
@@ -26,6 +27,9 @@ function rowToCandidate(row: Record<string, unknown>): KnowledgeCandidate {
     textHash: String(row['text_hash']),
     status: String(row['status']) as CandidateStatus,
     createdAt: String(row['created_at']),
+    // Phase 79: provenance column. Default 'chat_capture' for legacy /
+    // missing values to match the migration default.
+    provenance: (String(row['provenance'] ?? 'chat_capture')) as CandidateProvenance,
   };
   if (row['host_session_id'] != null) c.hostSessionId = String(row['host_session_id']);
   if (row['decided_at'] != null) c.decidedAt = String(row['decided_at']);
@@ -49,10 +53,10 @@ export function insertCandidateIfNew(
     db.prepare(`
       INSERT INTO knowledge_candidates
         (id, role_id, host_session_id, chunk_text, source_segment_index,
-         kind, score_entity, score_cosine, text_hash, status, created_at, decided_at)
+         kind, score_entity, score_cosine, text_hash, status, created_at, decided_at, provenance)
       VALUES
         (@id, @role_id, @host_session_id, @chunk_text, @source_segment_index,
-         @kind, @score_entity, @score_cosine, @text_hash, @status, @created_at, @decided_at)
+         @kind, @score_entity, @score_cosine, @text_hash, @status, @created_at, @decided_at, @provenance)
     `).run({
       id: c.id,
       role_id: c.roleId,
@@ -66,6 +70,7 @@ export function insertCandidateIfNew(
       status: c.status,
       created_at: c.createdAt,
       decided_at: c.decidedAt ?? null,
+      provenance: c.provenance ?? 'chat_capture',
     });
     return true;
   } catch (err) {

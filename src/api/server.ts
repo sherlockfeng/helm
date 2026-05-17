@@ -71,7 +71,7 @@ import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginRegistry } from '../plugins/index.js';
-import { bundleToBytes, packRole } from '../roles/bundle.js';
+import { bundleToBytes, packRole, resolveBundleUploadUrl } from '../roles/bundle.js';
 import {
   deleteSubscription,
   getSubscription,
@@ -930,8 +930,19 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             if (!deps.pluginRegistry) {
               return send(res, 501, { error: 'plugins_not_wired', message: 'upload requires storage plugin registry' });
             }
-            const schemeMatch = uploadTarget.match(/^([a-z][a-z0-9+.-]*):\/\//);
-            if (!schemeMatch) return badRequest(res, `upload URL needs a scheme (got: ${uploadTarget})`);
+            // Resolve bucket-only / trailing-slash URLs into a full
+            // `<prefix>/<roleId>.helmrole` path so role bundles always
+            // land under the conventional `helm-role/` folder on the
+            // remote (TOS uses object key path as virtual folder).
+            // See resolveBundleUploadUrl for the three accepted shapes.
+            let resolvedUrl: string;
+            try {
+              resolvedUrl = resolveBundleUploadUrl(uploadTarget, roleId);
+            } catch (err) {
+              return badRequest(res, (err as Error).message);
+            }
+            const schemeMatch = resolvedUrl.match(/^([a-z][a-z0-9+.-]*):\/\//);
+            if (!schemeMatch) return badRequest(res, `upload URL needs a scheme (got: ${resolvedUrl})`);
             const plugin = deps.pluginRegistry.getByScheme(schemeMatch[1]!);
             if (!plugin) {
               return send(res, 400, {
@@ -939,11 +950,23 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
                 message: `no storage plugin loaded for scheme '${schemeMatch[1]!}'`,
               });
             }
-            const { etag } = await plugin.upload(uploadTarget, bytes, { contentType: 'application/json' });
+            const { etag } = await plugin.upload(resolvedUrl, bytes, { contentType: 'application/json' });
             deps.logger?.info('role_bundle_uploaded', {
-              data: { roleId, url: uploadTarget, etag, bytes: bytes.length },
+              data: {
+                roleId,
+                requestedUrl: uploadTarget,
+                resolvedUrl,
+                etag,
+                bytes: bytes.length,
+              },
             });
-            return send(res, 200, { roleId, uploadedTo: uploadTarget, etag, bundleVersion: bundle.bundleVersion, contentHash: bundle.contentHash });
+            return send(res, 200, {
+              roleId,
+              uploadedTo: resolvedUrl,
+              etag,
+              bundleVersion: bundle.bundleVersion,
+              contentHash: bundle.contentHash,
+            });
           }
           // Default: stream JSON back; client decides how to handle.
           return send(res, 200, bundle);

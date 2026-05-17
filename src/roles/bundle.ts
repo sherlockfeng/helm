@@ -54,6 +54,62 @@ export const SUPPORTED_BUNDLE_VERSIONS: readonly number[] = [1];
  */
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Convention prefix helm injects when the user supplies a bucket-only
+ * upload URL. TOS / S3 / GCS render this as a virtual folder, so all
+ * helm role bundles end up grouped under one tidy directory in the
+ * bucket — easy to list, easy to gitignore in retention policies,
+ * easy to give per-folder ACLs to a "helm-roles-readers" team.
+ *
+ * Hardcoded for v1; if multi-team setups need per-deployment prefixes,
+ * promote to `config.storage.bundlePrefix` later.
+ */
+export const DEFAULT_BUNDLE_PREFIX = 'helm-role';
+
+/**
+ * Decide the final upload URL given the user-supplied raw URL + the
+ * role id. Three input shapes are recognized:
+ *
+ *   1. Bucket only (no path) — `tos://my-bucket`
+ *      → `tos://my-bucket/helm-role/<roleId>.helmrole`
+ *
+ *   2. Trailing slash (custom prefix, helm picks filename) —
+ *      `tos://my-bucket/my-team/` → `tos://my-bucket/my-team/<roleId>.helmrole`
+ *
+ *   3. Full key with `.helmrole` extension — `tos://b/x/foo.helmrole`
+ *      → used verbatim. Power-user escape hatch.
+ *
+ * Anything else throws — ambiguous (e.g. `tos://b/path/no-extension`
+ * could be either a partial path or a misnamed file). Forces the user
+ * to be explicit rather than guess.
+ */
+export function resolveBundleUploadUrl(rawUrl: string, roleId: string): string {
+  // Allow empty authority for `file:///abs/path/` (a legal RFC-3986
+  // shape where the authority is empty and the path starts with `/`).
+  // Object-storage schemes (tos / s3 / gcs) always populate authority
+  // with the bucket name, so empty-authority + non-empty-path is fine.
+  const m = rawUrl.match(/^([a-z][a-z0-9+.-]*):\/\/([^/]*)(\/.*)?$/);
+  if (!m) {
+    throw new Error(`resolveBundleUploadUrl: bad URL '${rawUrl}' (expected scheme://authority[/...])`);
+  }
+  const scheme = m[1]!;
+  const authority = m[2]!;
+  const path = m[3] ?? '';
+  if (path === '' || path === '/') {
+    return `${scheme}://${authority}/${DEFAULT_BUNDLE_PREFIX}/${roleId}.helmrole`;
+  }
+  if (path.endsWith('/')) {
+    return `${scheme}://${authority}${path}${roleId}.helmrole`;
+  }
+  if (path.endsWith('.helmrole')) {
+    return rawUrl;
+  }
+  throw new Error(
+    `resolveBundleUploadUrl: ambiguous URL '${rawUrl}' — `
+    + `either end with '/' (helm picks filename) or '.helmrole' (use verbatim).`,
+  );
+}
+
 export interface BundleChunk {
   /** Original chunk id at export time. NOT used as PK on import — bundle
    *  consumers may already have a chunk with this id. */

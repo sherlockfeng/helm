@@ -101,6 +101,48 @@ describe('computeContentHash — canonical-form invariants', () => {
   });
 });
 
+describe('resolveBundleUploadUrl — convention prefix injection', () => {
+  it('bucket-only URL → prefixes with helm-role/<roleId>.helmrole', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    expect(resolveBundleUploadUrl('tos://my-bucket', 'goofy-expert'))
+      .toBe('tos://my-bucket/helm-role/goofy-expert.helmrole');
+    expect(resolveBundleUploadUrl('tos://my-bucket/', 'goofy-expert'))
+      .toBe('tos://my-bucket/helm-role/goofy-expert.helmrole');
+  });
+
+  it('custom prefix with trailing slash → helm appends <roleId>.helmrole', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    expect(resolveBundleUploadUrl('tos://my-bucket/my-team/', 'goofy-expert'))
+      .toBe('tos://my-bucket/my-team/goofy-expert.helmrole');
+    expect(resolveBundleUploadUrl('tos://my-bucket/nested/path/', 'role-x'))
+      .toBe('tos://my-bucket/nested/path/role-x.helmrole');
+  });
+
+  it('full path ending .helmrole → verbatim (power-user escape hatch)', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    const explicit = 'tos://my-bucket/some/place/specific-name.helmrole';
+    expect(resolveBundleUploadUrl(explicit, 'goofy-expert')).toBe(explicit);
+  });
+
+  it('ambiguous path (no trailing slash, no .helmrole extension) → throws', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    expect(() => resolveBundleUploadUrl('tos://my-bucket/no-extension', 'role')).toThrow(/ambiguous/);
+    expect(() => resolveBundleUploadUrl('tos://my-bucket/maybe-folder', 'role')).toThrow(/ambiguous/);
+  });
+
+  it('bad URL (no scheme) → throws with helpful message', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    expect(() => resolveBundleUploadUrl('just-a-string', 'role')).toThrow(/bad URL/);
+    expect(() => resolveBundleUploadUrl('://no-scheme', 'role')).toThrow(/bad URL/);
+  });
+
+  it('file:// URL also honored — convention applies to every storage scheme', async () => {
+    const { resolveBundleUploadUrl } = await import('../../../src/roles/bundle.js');
+    expect(resolveBundleUploadUrl('file:///abs/path/', 'goofy'))
+      .toBe('file:///abs/path/goofy.helmrole');
+  });
+});
+
 describe('unpackRole — size cap (reviewer blocker #3)', () => {
   it('rejects bundle exceeding MAX_BUNDLE_BYTES', async () => {
     // Build a bundle whose serialized form is > 16MB by stuffing chunks

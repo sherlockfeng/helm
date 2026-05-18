@@ -16,6 +16,7 @@
 
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 
@@ -39,7 +40,7 @@ export function PluginsPage() {
         </>}
       />
 
-      <article className="helm-card">
+      <Card>
         <div style={{ marginBottom: 8 }}>
           <button type="button" onClick={() => reload()} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
@@ -76,7 +77,7 @@ export function PluginsPage() {
             ))}
           </ul>
         )}
-      </article>
+      </Card>
     </>
   );
 }

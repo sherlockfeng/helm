@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Card } from '../components/Card.js';
 import type { Campaign, CampaignSummary } from '../api/types.js';
 
 export function CampaignsPage() {
@@ -57,7 +58,7 @@ function CampaignCard({
   onUpdated: () => void;
 }) {
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">{campaign.status}</div>
@@ -76,7 +77,7 @@ function CampaignCard({
           <CampaignSummarySection campaign={campaign} onUpdated={onUpdated} />
         </>
       )}
-    </article>
+    </Card>
   );
 }
 

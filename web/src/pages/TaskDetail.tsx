@@ -9,6 +9,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { Card } from '../components/Card.js';
 import type { Task } from '../api/types.js';
 
 const STATUS_TONE: Record<Task['status'], 'ok' | 'warn' | 'err' | ''> = {
@@ -50,39 +51,39 @@ export function TaskDetailPage() {
       </div>
 
       {task.description && (
-        <article className="helm-card">
+        <Card>
           <div className="label">Description</div>
           <pre>{task.description}</pre>
-        </article>
+        </Card>
       )}
 
       {task.acceptance && task.acceptance.length > 0 && (
-        <article className="helm-card">
+        <Card>
           <div className="label">Acceptance criteria</div>
           <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
             {task.acceptance.map((a, i) => <li key={i}>{a}</li>)}
           </ul>
-        </article>
+        </Card>
       )}
 
       {task.e2eScenarios && task.e2eScenarios.length > 0 && (
-        <article className="helm-card">
+        <Card>
           <div className="label">e2e scenarios</div>
           <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
             {task.e2eScenarios.map((s, i) => <li key={i}>{s}</li>)}
           </ul>
-        </article>
+        </Card>
       )}
 
       {task.result && (
-        <article className="helm-card">
+        <Card>
           <div className="label">Result</div>
           <pre>{task.result}</pre>
-        </article>
+        </Card>
       )}
 
       {task.role === 'dev' && (
-        <article className="helm-card">
+        <Card>
           <div className="label">doc-first audit log</div>
           {auditLog.length === 0 ? (
             <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
@@ -108,16 +109,16 @@ export function TaskDetailPage() {
               ))}
             </div>
           )}
-        </article>
+        </Card>
       )}
 
       {task.comments && task.comments.length > 0 && (
-        <article className="helm-card">
+        <Card>
           <div className="label">Comments</div>
           <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
             {task.comments.map((c, i) => <li key={i}>{c}</li>)}
           </ul>
-        </article>
+        </Card>
       )}
     </>
   );

@@ -12,13 +12,14 @@ import { useEffect, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Card } from '../components/Card.js';
 import type { Requirement } from '../api/types.js';
 
 function RequirementCard({ req }: { req: Requirement }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">
@@ -93,7 +94,7 @@ function RequirementCard({ req }: { req: Requirement }) {
           </p>
         </div>
       )}
-    </article>
+    </Card>
   );
 }
 

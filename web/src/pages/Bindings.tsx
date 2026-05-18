@@ -16,6 +16,7 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -118,7 +119,7 @@ function PendingRow({
   }
 
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">{pending.channel}</div>
@@ -204,7 +205,7 @@ function PendingRow({
         onConfirm={() => { void cancel(); }}
         busy={submitting}
       />
-    </article>
+    </Card>
   );
 }
 
@@ -235,7 +236,7 @@ function ActiveRow({
   }
 
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           {/* Phase 36: top line carries the user's annotation label (from
@@ -270,7 +271,7 @@ function ActiveRow({
         </Button>
       </div>
       {error && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p>}
-    </article>
+    </Card>
   );
 }
 

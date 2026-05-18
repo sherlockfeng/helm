@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -100,7 +101,7 @@ export function SubscriptionsPage() {
         </>}
       />
 
-      <article className="helm-card">
+      <Card>
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           <select
             value={roleId}
@@ -194,7 +195,7 @@ export function SubscriptionsPage() {
           onConfirm={() => { if (deleteConfirm) void del(deleteConfirm); }}
           busy={busyId !== null && busyId === deleteConfirm}
         />
-      </article>
+      </Card>
     </>
   );
 }

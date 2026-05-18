@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .row { gap: 20px; }
+  .col { align-items: center; gap: 8px; }
+  .card { width: 120px; height: 78px; background: var(--bg-elev); border-radius: 10px; }
+  .sm  { box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 0 0 1px rgba(0,0,0,.04); }
+  .cd  { box-shadow: 0 1px 3px rgba(0,0,0,.05), 0 0 0 1px rgba(0,0,0,.04); }
+  .pop { box-shadow: 0 8px 24px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.06); }
+  .mod { box-shadow: 0 24px 64px rgba(0,0,0,.18), 0 6px 16px rgba(0,0,0,.08); }
+  .lbl { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+  .px  { font-family: var(--font-mono); font-size: 10px; color: var(--text-tertiary); }
+</style></head>
+<body style="padding: 26px 20px 16px;">
+<div class="row">
+  <div class="col"><div class="card sm"></div><div class="lbl">--shadow-sm</div><div class="px">inputs</div></div>
+  <div class="col"><div class="card cd"></div><div class="lbl">--shadow-card</div><div class="px">cards</div></div>
+  <div class="col"><div class="card pop"></div><div class="lbl">--shadow-popover</div><div class="px">popovers · toasts</div></div>
+  <div class="col"><div class="card mod"></div><div class="lbl">--shadow-modal</div><div class="px">modals</div></div>
+</div>
+</body></html>

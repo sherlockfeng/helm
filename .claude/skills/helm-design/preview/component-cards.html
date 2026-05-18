@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .card {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 1px 1px rgba(0,0,0,.03);
+  }
+  .card.warn   { border-left: 3px solid var(--warn);    background: linear-gradient(to right, var(--surface-warn-tinted), var(--bg-elev) 80%); }
+  .card.danger { border-left: 3px solid var(--danger);  background: linear-gradient(to right, var(--surface-danger-tinted), var(--bg-elev) 80%); }
+  .card.success{ border-left: 3px solid var(--success); background: linear-gradient(to right, var(--surface-success-tinted), var(--bg-elev) 80%); }
+  .title { font: 600 13px/16px var(--font-sans); }
+  .body { font: 400 12px/16px var(--font-sans); color: var(--text-secondary); margin-top: 2px; }
+  .col { gap: 8px; }
+</style></head>
+<body>
+<div class="col">
+  <div class="card"><div class="title">default · role card</div><div class="body">12 chunks · 3 new · last used 4 h ago</div></div>
+  <div class="card warn"><div class="title">expiring in 26 s</div><div class="body">cursor → run_shell_command · auto-deny on timeout</div></div>
+  <div class="card success"><div class="title">role exported</div><div class="body">helm-goofy-v3.helmrole · 14.2 KB · TOS plugin</div></div>
+  <div class="card danger"><div class="title">Drop this source?</div><div class="body">14 chunks were trained from cursor-rules.md and will be removed.</div></div>
+</div>
+</body></html>

@@ -17,6 +17,8 @@ import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { ConfirmDialog } from '../components/Dialog.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -282,13 +284,20 @@ export function BindingsPage() {
     bindingsQuery.reload();
   }, { types: ['binding.created', 'binding.removed'] });
 
+  // helm-design PR 6: stats summarize the page's two lists.
+  const pendingCount = pendingQuery.data?.pending.length ?? 0;
+  const activeCount = bindingsQuery.data?.bindings.length ?? 0;
+
   return (
     <>
-      <h2>Bindings</h2>
-      <p className="muted">
-        Connect a Cursor chat to a remote channel thread. Send <code>@bot bind chat</code> in Lark
-        to generate a code, then pick the chat to mirror here.
-      </p>
+      <PageHeader
+        title="Bindings"
+        subtitle={<>Connect a Cursor chat to a remote channel thread. Send <code>@bot bind chat</code> in Lark to generate a code, then pick the chat to mirror here.</>}
+        stats={<>
+          <StatTile label="Pending" value={pendingCount} tone={pendingCount > 0 ? 'warn' : 'muted'} />
+          <StatTile label="Active" value={activeCount} tone={activeCount > 0 ? 'info' : 'muted'} />
+        </>}
+      />
 
       <h3>Pending</h3>
       {pendingQuery.loading && <p className="muted">Loading…</p>}

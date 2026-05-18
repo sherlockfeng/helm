@@ -26,6 +26,8 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 import type { PendingApproval } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -70,13 +72,24 @@ export function ApprovalsPage() {
     }
   };
 
+  // helm-design PR 6: 2 stat tiles. Total pending + expiring-soon
+  // (TTL < 30s) so the urgency is visible at a glance.
+  const approvals = data?.approvals ?? [];
+  const expiringSoon = approvals.filter((a) => {
+    const ms = new Date(a.expiresAt).getTime() - Date.now();
+    return ms > 0 && ms < 30_000;
+  }).length;
+
   return (
     <>
-      <h2>Approvals</h2>
-      <p className="muted">
-        Cursor pauses on Shell / Edit / MCP tool calls until you decide. Allow once, or
-        train a policy by adding a rule.
-      </p>
+      <PageHeader
+        title="Approvals"
+        subtitle="Cursor pauses on Shell / Edit / MCP tool calls until you decide. Allow once, or train a policy by adding a rule."
+        stats={<>
+          <StatTile label="Pending" value={approvals.length} tone={approvals.length > 0 ? 'warn' : 'muted'} />
+          <StatTile label="Expiring" value={expiringSoon} tone={expiringSoon > 0 ? 'warn' : 'muted'} />
+        </>}
+      />
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}

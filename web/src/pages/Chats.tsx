@@ -19,6 +19,8 @@ import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 import type { ActiveChat, ChannelBinding } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -176,20 +178,18 @@ export function ChatsPage() {
     <>
       {/* Phase 79 follow-up: stat strip at top — chats / queued / Lark
           mirrored, AKM Sessions-page style. Cheap, derived from data
-          already in memory. */}
-      <header className="helm-rail-header">
-        <div>
-          <h2 style={{ margin: 0 }}>Active Chats</h2>
-          <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-            Cursor sessions Helm is observing. Bind a role to inject its prompt + knowledge.
-          </p>
-        </div>
-        <div className="helm-rail-stats" role="status" aria-label="Chat stats">
-          <Stat label="Chats" value={chats.length} tone={chats.length > 0 ? 'live' : 'muted'} />
-          <Stat label="Queued msgs" value={totalQueued} tone={totalQueued > 0 ? 'warn' : 'muted'} />
-          <Stat label="Lark mirrored" value={larkBoundChatIds.size} tone={larkBoundChatIds.size > 0 ? 'info' : 'muted'} />
-        </div>
-      </header>
+          already in memory. helm-design PR 6 ports the bespoke header
+          to <PageHeader/> + <StatTile/>. */}
+      <PageHeader
+        title="Active Chats"
+        subtitle="Cursor sessions Helm is observing. Bind a role to inject its prompt + knowledge."
+        stats={<>
+          <StatTile label="Chats" value={chats.length} tone={chats.length > 0 ? 'live' : 'muted'} />
+          <StatTile label="Queued msgs" value={totalQueued} tone={totalQueued > 0 ? 'warn' : 'muted'} />
+          <StatTile label="Lark mirrored" value={larkBoundChatIds.size} tone={larkBoundChatIds.size > 0 ? 'info' : 'muted'} />
+        </>}
+      />
+
 
       {loading && <p className="muted">Loading…</p>}
       {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
@@ -460,23 +460,9 @@ function ChatRailRow({
   );
 }
 
-/**
- * Compact stat tile for the header strip. Tone:
- *   - live (green): non-zero count of healthy items
- *   - warn (amber): non-zero count of things needing attention
- *   - info (blue):  non-zero informational count
- *   - muted (gray): zero or n/a
- */
-function Stat({
-  label, value, tone,
-}: { label: string; value: number; tone: 'live' | 'warn' | 'info' | 'muted' }): ReactElement {
-  return (
-    <div className={`helm-rail-stat tone-${tone}`}>
-      <div className="helm-rail-stat-value">{value}</div>
-      <div className="helm-rail-stat-label">{label}</div>
-    </div>
-  );
-}
+// helm-design PR 6: the local Stat() helper moved to the shared
+// <StatTile/> primitive in components/StatTile.tsx so every page
+// can drop a stat strip into its PageHeader without copy-pasting.
 
 /**
  * Phase 55: editable chat title. Click-to-edit pencil icon when not editing;

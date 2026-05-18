@@ -651,6 +651,44 @@ code, pre {
   margin-bottom: 14px;
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   helm-design PR 6: PageHeader primitive.
+   Same layout shape as .helm-rail-header (left: titles, right: stats +
+   actions) — kept as a separate class so the rail-internal header in
+   workspace pages can diverge later without churning every page.
+   ──────────────────────────────────────────────────────────────────── */
+.helm-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.helm-page-header-titles {
+  /* Lets the title row shrink before the stat strip wraps under it. */
+  min-width: 0;
+}
+.helm-page-header-title {
+  margin: 0;
+  /* Matches the existing h2 rule (var(--text-h2) / weight 600). */
+}
+.helm-page-header-subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.helm-page-header-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.helm-page-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .helm-rail-stats {
   display: flex;
   gap: 8px;

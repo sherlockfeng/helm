@@ -14,6 +14,8 @@
  * + <StatTile/> — the title row now lives in the shared primitive.
  */
 
+import { useEffect } from 'react';
+import { toast } from 'sonner';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { Card } from '../components/Card.js';
@@ -22,6 +24,11 @@ import { StatTile } from '../components/StatTile.js';
 
 export function PluginsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.listPlugins());
+
+  // helm-design PR 9: load errors → toast.
+  useEffect(() => {
+    if (error) toast.error(`Plugins: ${error.message}`, { id: 'plugins-load' });
+  }, [error]);
 
   // helm-design PR 6: stats summarize the load result. A failed
   // plugin is a hot pointer the user should resolve.
@@ -46,7 +53,6 @@ export function PluginsPage() {
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
-        {error && <p style={{ color: 'var(--danger)' }}>{error.message}</p>}
         {data && data.plugins.length === 0 && (
           <p className="muted" style={{ fontSize: 12 }}>No plugins reported by helm.</p>
         )}

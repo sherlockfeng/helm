@@ -3,6 +3,7 @@
  */
 
 import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import { Layout } from './components/Layout.js';
 import { ApprovalsPage } from './pages/Approvals.js';
 import { ChatsPage } from './pages/Chats.js';
@@ -20,6 +21,15 @@ import { PluginsPage } from './pages/Plugins.js';
 export default function App() {
   return (
     <Router>
+      {/* helm-design PR 9: bottom-right toaster. Inherits CSS-var
+          theming from .helm-toaster rules in app.css so the toasts
+          match helm's elevated surface (light + dark). */}
+      <Toaster
+        position="bottom-right"
+        richColors
+        closeButton
+        duration={4500}
+      />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/approvals" replace />} />

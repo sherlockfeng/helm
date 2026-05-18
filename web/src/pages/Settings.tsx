@@ -21,10 +21,12 @@ import { Link } from 'react-router-dom';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { toast } from 'sonner';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -94,8 +96,12 @@ export function SettingsPage() {
     if (okTimerRef.current) clearTimeout(okTimerRef.current);
   }, []);
 
-  if (loading) return <p className="muted">Loading…</p>;
-  if (error) return <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>;
+  if (loading) return <CardSkeletonList n={4} />;
+  if (error) {
+    // helm-design PR 9: errors surface as toasts; the page renders nothing.
+    toast.error(`Settings: ${error.message}`, { id: 'settings-load' });
+    return null;
+  }
   if (!draft) return null;
 
   const depscope = findDepscope(draft);

@@ -17,11 +17,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { Button } from '../components/Button.js';
-import { ConfirmDialog } from '../components/Dialog.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -517,15 +517,21 @@ export function SettingsPage() {
         </button>
       </div>
 
-      {/* Phase 79: storage plugins (read-only) + role subscriptions.
-          Lives between Depscope (knowledge provider config) and
-          Diagnostics — logical grouping with "things that fetch
-          knowledge into helm". */}
-      <h3>Storage plugins</h3>
-      <StoragePluginsCard />
-
-      <h3>Role subscriptions</h3>
-      <RoleSubscriptionsCard />
+      {/* helm-design PR 5: Storage plugins + Role subscriptions moved
+          out into their own /plugins and /subscriptions routes (Knowledge
+          group). This breadcrumb keeps users with the old mental model
+          from going in circles. */}
+      <h3>Moved</h3>
+      <article className="helm-card">
+        <p style={{ marginTop: 0 }}>
+          <strong>Subscriptions</strong> and <strong>Plugins</strong> moved out of
+          Settings into the new <em>Knowledge</em> sidebar group.
+        </p>
+        <p className="muted" style={{ marginBottom: 0, fontSize: 12 }}>
+          → <Link to="/subscriptions">Subscriptions</Link>{' '}·{' '}
+          <Link to="/plugins">Plugins</Link>
+        </p>
+      </article>
 
       <h3>Diagnostics</h3>
       <article className="helm-card">
@@ -669,222 +675,7 @@ function DefaultEngineField({
   );
 }
 
-// ── Phase 79: Storage plugins + Role subscriptions ────────────────────
+// helm-design PR 5: StoragePluginsCard + RoleSubscriptionsCard moved to
+// pages/Plugins.tsx and pages/Subscriptions.tsx. The "Moved" breadcrumb
+// card above keeps users with the old mental model from getting lost.
 
-function StoragePluginsCard() {
-  const { data, loading, error, reload } = useApi(() => helmApi.listPlugins());
-  return (
-    <article className="helm-card">
-      <p className="muted" style={{ marginTop: 0 }}>
-        Loaded storage plugins back role-bundle subscriptions. The
-        built-in <code>file://</code> scheme is always available. External
-        plugins (e.g. <code>helm-storage-tos</code>) load from{' '}
-        <code>~/.helm/plugins/&lt;id&gt;/</code> when listed in{' '}
-        <code>config.plugins.enabled</code>.
-      </p>
-      <div style={{ marginBottom: 8 }}>
-        <button type="button" onClick={() => reload()} disabled={loading}>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </div>
-      {error && <p style={{ color: 'var(--danger)' }}>{error.message}</p>}
-      {data && data.plugins.length === 0 && (
-        <p className="muted" style={{ fontSize: 12 }}>No plugins reported by helm.</p>
-      )}
-      {data && (
-        <ul style={{ padding: 0, margin: 0, listStyle: 'none' }}>
-          {data.plugins.map((p) => (
-            <li key={p.id} style={{
-              marginBottom: 6,
-              padding: 6,
-              border: '1px solid var(--border)',
-              borderRadius: 4,
-            }}>
-              {p.ok ? (
-                <>
-                  <strong>{p.id}</strong>
-                  <span className="muted" style={{ marginLeft: 8, fontSize: 11 }}>
-                    scheme=<code>{p.scheme}</code> · v{p.version} · apiVersion={p.apiVersion}
-                  </span>
-                  <div className="muted" style={{ fontSize: 11 }}>{p.loadedFrom}</div>
-                </>
-              ) : (
-                <>
-                  <strong style={{ color: 'var(--danger)' }}>{p.id} — failed</strong>
-                  <div className="muted" style={{ fontSize: 11 }}>{p.reason}</div>
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </article>
-  );
-}
-
-function RoleSubscriptionsCard() {
-  const subs = useApi(() => helmApi.listSubscriptions());
-  const roles = useApi(() => helmApi.roles());
-  const [roleId, setRoleId] = useState('');
-  const [sourceUrl, setSourceUrl] = useState('');
-  const [autoApply, setAutoApply] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  // helm-design PR 3: replace window.confirm with themed ConfirmDialog.
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-
-  async function add(): Promise<void> {
-    if (!roleId || !sourceUrl) { setErr('Select role + paste URL'); return; }
-    setBusy(true); setErr(null);
-    try {
-      await helmApi.createSubscription({ roleId, sourceUrl, autoApply });
-      setRoleId(''); setSourceUrl(''); setAutoApply(false);
-      subs.reload();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function syncNow(id: string): Promise<void> {
-    setBusyId(id); setErr(null);
-    try {
-      await helmApi.syncSubscriptionNow(id);
-      subs.reload();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
-    } finally {
-      setBusyId(null);
-    }
-  }
-  async function togglePaused(id: string, currentlyPaused: boolean): Promise<void> {
-    setBusyId(id); setErr(null);
-    try {
-      await helmApi.setSubscriptionPaused(id, !currentlyPaused);
-      subs.reload();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
-    } finally {
-      setBusyId(null);
-    }
-  }
-  async function del(id: string): Promise<void> {
-    setBusyId(id); setErr(null);
-    try {
-      await helmApi.deleteSubscription(id);
-      subs.reload();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
-    } finally {
-      setBusyId(null);
-      setDeleteConfirm(null);
-    }
-  }
-
-  return (
-    <article className="helm-card">
-      <p className="muted" style={{ marginTop: 0 }}>
-        Subscribe a role to a remote <code>.helmrole</code> bundle URL.
-        Cron polls every 15 min; matching plugin handles the transport.
-        Diff lands as candidates in the Roles → Candidates tab unless
-        <em> auto-apply</em> is on (use sparingly — trusted sources only).
-      </p>
-
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-        <select
-          value={roleId}
-          onChange={(e) => setRoleId(e.target.value)}
-          style={{ minWidth: 180 }}
-        >
-          <option value="">— role —</option>
-          {(roles.data?.roles ?? []).map((r) => (
-            <option key={r.id} value={r.id}>{r.name}</option>
-          ))}
-        </select>
-        <input
-          type="text"
-          value={sourceUrl}
-          placeholder="tos://bucket/roles/goofy.helmrole or file:///abs/path/goofy.helmrole"
-          onChange={(e) => setSourceUrl(e.target.value)}
-          style={{ flex: 1 }}
-        />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-          <input
-            type="checkbox"
-            checked={autoApply}
-            onChange={(e) => setAutoApply(e.target.checked)}
-          />
-          auto-apply
-        </label>
-        <Button variant="primary" onClick={() => { void add(); }} disabled={busy}>
-          {busy ? 'Adding…' : 'Add'}
-        </Button>
-      </div>
-
-      {err && <p style={{ color: 'var(--danger)' }}>{err}</p>}
-
-      {subs.data && subs.data.subscriptions.length === 0 && (
-        <p className="muted" style={{ fontSize: 12 }}>No subscriptions yet.</p>
-      )}
-      {subs.data && (
-        <ul style={{ padding: 0, margin: 0, listStyle: 'none' }}>
-          {subs.data.subscriptions.map((s) => (
-            <li key={s.id} style={{
-              marginBottom: 8, padding: 8,
-              border: '1px solid var(--border)', borderRadius: 4,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <strong>{s.roleId}</strong>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  · {s.sourceType}://… · {s.status}
-                </span>
-                <span style={{ flex: 1 }} />
-                <button
-                  disabled={busyId === s.id}
-                  onClick={() => { void syncNow(s.id); }}
-                >
-                  {busyId === s.id ? '…' : 'Sync now'}
-                </button>
-                <button
-                  disabled={busyId === s.id}
-                  onClick={() => { void togglePaused(s.id, s.status === 'paused'); }}
-                >
-                  {s.status === 'paused' ? 'Resume' : 'Pause'}
-                </button>
-                <button
-                  disabled={busyId === s.id}
-                  onClick={() => setDeleteConfirm(s.id)}
-                  style={{ color: 'var(--danger)' }}
-                >
-                  Delete
-                </button>
-              </div>
-              <div className="muted" style={{ fontSize: 11, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                <code>{s.sourceUrl}</code>
-              </div>
-              <div className="muted" style={{ fontSize: 11 }}>
-                {s.autoApply ? 'auto-apply on · ' : ''}
-                {s.lastSyncAt ? `synced ${s.lastSyncAt}` : 'never synced'}
-                {s.lastError && (
-                  <span style={{ color: 'var(--danger)' }}> · error: {s.lastError}</span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <ConfirmDialog
-        open={deleteConfirm !== null}
-        onOpenChange={(o) => { if (!o) setDeleteConfirm(null); }}
-        title="Delete this subscription?"
-        description="Accepted chunks stay in the role; only the sync stops."
-        confirmLabel="Delete"
-        onConfirm={() => { if (deleteConfirm) void del(deleteConfirm); }}
-        busy={busyId !== null && busyId === deleteConfirm}
-      />
-    </article>
-  );
-}

@@ -26,6 +26,7 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import type { PendingApproval } from '../api/types.js';
@@ -145,9 +146,13 @@ function ApprovalCard({
   const checkboxId = `remember-${approval.id}`;
   const scopeId = `scope-${approval.id}`;
   const effectiveScope = scope.trim() || suggestScope(approval);
+  // helm-design PR 7: amber accent bar on cards expiring in < 30 s so
+  // the user's eye snaps to the urgent ones first.
+  const msUntilExpire = new Date(approval.expiresAt).getTime() - Date.now();
+  const variant = msUntilExpire > 0 && msUntilExpire < 30_000 ? 'warn' : 'default';
 
   return (
-    <article className="helm-card">
+    <Card variant={variant}>
       <div className="row">
         <div>
           <div className="label">{approval.tool}</div>
@@ -219,6 +224,6 @@ function ApprovalCard({
           Deny
         </Button>
       </div>
-    </article>
+    </Card>
   );
 }

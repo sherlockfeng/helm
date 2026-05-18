@@ -19,6 +19,7 @@ import { helmApi, type HarnessReviewView, type HarnessTaskView } from '../api/cl
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 
@@ -164,7 +165,7 @@ function TaskCard({ task, onChanged }: { task: HarnessTaskView; onChanged: () =>
   };
 
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">
@@ -232,7 +233,7 @@ function TaskCard({ task, onChanged }: { task: HarnessTaskView; onChanged: () =>
       )}
 
       {err && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{err}</p>}
-    </article>
+    </Card>
   );
 }
 
@@ -271,7 +272,7 @@ function CreateTaskForm({ onClose, onCreated }: { onClose: () => void; onCreated
   };
 
   return (
-    <article className="helm-card" style={{ marginBottom: 16 }}>
+    <Card style={{ marginBottom: 16 }}>
       <h3 style={{ marginTop: 0 }}>New Harness task</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <label>Title <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What feature is this?" style={{ width: '100%' }} /></label>
@@ -288,6 +289,6 @@ function CreateTaskForm({ onClose, onCreated }: { onClose: () => void; onCreated
           <button onClick={onClose} disabled={busy}>Cancel</button>
         </div>
       </div>
-    </article>
+    </Card>
   );
 }

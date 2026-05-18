@@ -16,6 +16,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import type { BugTaskInput, Task } from '../api/types.js';
 
 const STATUS_TONE: Record<Task['status'], 'ok' | 'warn' | 'err' | ''> = {
@@ -40,7 +41,10 @@ function TaskRow({ task }: { task: Task }) {
   return (
     <Link
       to={`/tasks/${task.id}`}
-      className="helm-card"
+      /* helm-design PR 7: this is a <Link>, not an <article>, so the
+         <Card> primitive doesn't fit. Apply the helm-card visuals
+         directly + the interactive variant for hover lift. */
+      className="helm-card helm-card--interactive"
       style={{ display: 'block', textDecoration: 'none', color: 'inherit', marginBottom: 10 }}
     >
       <div className="row">
@@ -305,14 +309,14 @@ export function CycleDetailPage() {
       </div>
 
       {data.cycle.productBrief && (
-        <article className="helm-card">
+        <Card>
           <div className="label">Product brief</div>
           <pre>{data.cycle.productBrief}</pre>
-        </article>
+        </Card>
       )}
 
       <h3>Cycle actions</h3>
-      <article className="helm-card">
+      <Card>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <CompleteCycleAction
             cycleId={data.cycle.id}
@@ -321,7 +325,7 @@ export function CycleDetailPage() {
           />
           <BugTaskAction cycleId={data.cycle.id} onCreated={() => reload()} />
         </div>
-      </article>
+      </Card>
 
       <h3>Dev tasks ({dev.length})</h3>
       {dev.length === 0

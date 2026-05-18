@@ -17,6 +17,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -624,7 +625,7 @@ function RoleCard({
   onTrained: () => void;
 }) {
   return (
-    <article className="helm-card">
+    <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">
@@ -671,7 +672,7 @@ function RoleCard({
         </div>
       </div>
       {expanded && <RoleDetail roleId={role.id} onTrained={onTrained} />}
-    </article>
+    </Card>
   );
 }
 

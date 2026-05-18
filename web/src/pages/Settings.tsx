@@ -22,6 +22,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
@@ -167,7 +168,7 @@ export function SettingsPage() {
           because the rest of the page mostly tunes engine-specific knobs
           (Cursor mode/key, Harness conventions). */}
       <h3>Default engine</h3>
-      <article className="helm-card">
+      <Card>
         <DefaultEngineField
           value={draft.engine?.default ?? 'claude'}
           onChange={(id) => update((c) => {
@@ -182,11 +183,11 @@ export function SettingsPage() {
           restart needed. Switching engines does NOT migrate already-saved
           summaries or review reports.
         </p>
-      </article>
+      </Card>
 
       {/* P1-3: section headings outside cards, max-width container */}
       <h3>HTTP API</h3>
-      <article className="helm-card">
+      <Card>
         <label className="helm-form-row">
           <div className="muted">Port</div>
           <input
@@ -201,10 +202,10 @@ export function SettingsPage() {
         <p className="muted" style={{ fontSize: 11, marginTop: 8, marginBottom: 0 }}>
           Bound to 127.0.0.1 only. Change requires a Helm restart.
         </p>
-      </article>
+      </Card>
 
       <h3>Lark integration</h3>
-      <article className="helm-card">
+      <Card>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
@@ -222,10 +223,10 @@ export function SettingsPage() {
             onChange={(e) => update((c) => { c.lark.cliCommand = e.target.value || undefined; })}
           />
         </label>
-      </article>
+      </Card>
 
       <h3>Doc-first workflow</h3>
-      <article className="helm-card">
+      <Card>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
@@ -240,10 +241,10 @@ export function SettingsPage() {
           worth the friction. Takes effect on the next task completion — no
           restart required.
         </p>
-      </article>
+      </Card>
 
       <h3>Cursor (campaign summarization)</h3>
-      <article className="helm-card">
+      <Card>
         <label className="helm-form-row">
           <div className="muted">Mode</div>
           <select
@@ -277,10 +278,10 @@ export function SettingsPage() {
           (here or via <code>CURSOR_API_KEY</code> env). Settings save takes
           effect on the next click; no restart needed.
         </p>
-      </article>
+      </Card>
 
       <h3>Harness Conventions</h3>
-      <article className="helm-card">
+      <Card>
         <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
           Free-form project conventions injected into every Harness review subprocess.
           The reviewer sees this text alongside Intent, Structure, and the diff —
@@ -299,13 +300,15 @@ export function SettingsPage() {
             })}
           />
         </label>
-      </article>
+      </Card>
 
       {/* Phase 77: knowledge lifecycle thresholds. Background sweep + decay
           re-rank read these on every tick / search. Defaults preserved when
-          fields are blank (backend zod schema fills them in). */}
+          fields are blank (backend zod schema fills them in). helm-design
+          PR 7 — tagged variant="danger" because lowering archive thresholds
+          hides existing chunks from search on the next sweep. */}
       <h3>Knowledge lifecycle</h3>
-      <article className="helm-card">
+      <Card variant="danger">
         <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
           Controls when stale role-knowledge chunks get soft-archived (hidden
           from search by default) and how strongly recent access biases the
@@ -400,10 +403,10 @@ export function SettingsPage() {
           threshold" are true. α=0 disables the decay re-rank entirely
           (Phase 76 fusion runs unchanged).
         </p>
-      </article>
+      </Card>
 
       <h3>Depscope (knowledge provider)</h3>
-      <article className="helm-card">
+      <Card>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
@@ -498,7 +501,7 @@ export function SettingsPage() {
             found.provider.config = cfg as Record<string, unknown>;
           })}
         >+ Add mapping</Button>
-      </article>
+      </Card>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
         <Button variant="primary" disabled={!dirty} onClick={() => { void save(); }}>
@@ -522,7 +525,7 @@ export function SettingsPage() {
           group). This breadcrumb keeps users with the old mental model
           from going in circles. */}
       <h3>Moved</h3>
-      <article className="helm-card">
+      <Card>
         <p style={{ marginTop: 0 }}>
           <strong>Subscriptions</strong> and <strong>Plugins</strong> moved out of
           Settings into the new <em>Knowledge</em> sidebar group.
@@ -531,10 +534,10 @@ export function SettingsPage() {
           → <Link to="/subscriptions">Subscriptions</Link>{' '}·{' '}
           <Link to="/plugins">Plugins</Link>
         </p>
-      </article>
+      </Card>
 
       <h3>Diagnostics</h3>
-      <article className="helm-card">
+      <Card>
         <p className="muted" style={{ marginTop: 0 }}>
           Export a bundle of recent logs + redacted config + schema version + bridge state to
           attach to a bug report. Saved under <code>~/.helm/</code>.
@@ -556,7 +559,7 @@ export function SettingsPage() {
             </span>
           </p>
         )}
-      </article>
+      </Card>
     </>
   );
 }

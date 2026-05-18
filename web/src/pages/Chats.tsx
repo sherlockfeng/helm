@@ -18,6 +18,7 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { Card } from '../components/Card.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -222,7 +223,7 @@ export function ChatsPage() {
 
         <section className="helm-rail-content">
       {data && data.chats.filter((chat) => chat.id === selectedId).map((chat) => (
-        <article key={chat.id} className="helm-card">
+        <Card key={chat.id}>
           <div className="row">
             <div>
               <div className="label">{chat.host}</div>
@@ -378,7 +379,7 @@ export function ChatsPage() {
               Delete
             </Button>
           </div>
-        </article>
+        </Card>
       ))}
 
         </section>

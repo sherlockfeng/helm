@@ -1,0 +1,214 @@
+/* ============================================================
+   helm — colors_and_type.css
+   Mirror of `helm/web/src/styles/app.css` token block, plus a
+   small set of derived tokens for the redesign (spacing scale,
+   motion durations, semantic tints, type scale).
+
+   The base token names match the codebase EXACTLY so the
+   implementer can copy/extend the existing `@theme inline` block
+   without renaming anything.
+   ============================================================ */
+
+:root {
+  /* ---------- Surfaces (exact match: app.css :root) ---------- */
+  --bg:             #f5f5f7;
+  --bg-elev:        #ffffff;
+  --bg-sidebar:     #f0f0f3;
+  --bg-input:       #ffffff;
+  --bg-pre:         #fafafc;
+  --bg-elev-rgb:    255, 255, 255;  /* for vibrancy alpha — derived */
+
+  /* ---------- Borders ---------- */
+  --border:         #d2d2d7;
+  --border-strong:  #b0b0b8;
+
+  /* ---------- Foreground ---------- */
+  --text:           #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary:  #8e8e93;       /* derived — for very-low-priority meta */
+  --selected-text:  #003d99;
+
+  /* ---------- States ---------- */
+  --hover:          #e5e5ea;
+  --selected:       #d8e4ff;
+  --focus-ring:     rgba(0, 122, 255, 0.4);
+
+  /* ---------- Semantic tones ---------- */
+  --accent:         #007aff;
+  --accent-hover:   #0066d6;
+  --accent-pressed: #0058b8;
+  --danger:         #ff3b30;
+  --warn:           #ff9500;
+  --success:        #34c759;
+
+  /* ---------- Semantic tints (NEW — for card accent bars + subtle row backgrounds) ---------- */
+  --surface-accent-tinted:  rgba(0, 122, 255, 0.08);
+  --surface-danger-tinted:  rgba(255, 59,  48, 0.08);
+  --surface-warn-tinted:    rgba(255, 149,  0, 0.10);
+  --surface-success-tinted: rgba(52, 199,  89, 0.10);
+  --border-accent-tinted:   rgba(0, 122, 255, 0.30);
+  --border-danger-tinted:   rgba(255, 59,  48, 0.30);
+  --border-warn-tinted:     rgba(255, 149,  0, 0.30);
+  --border-success-tinted:  rgba(52, 199,  89, 0.30);
+
+  /* ---------- Type stack (exact match: app.css :root) ---------- */
+  --font-system:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
+    Helvetica, Arial, sans-serif;
+  --font-mono:
+    'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* ---------- Type scale (NEW — 5-size scale, today helm has 2) ---------- */
+  --text-display:  28px;   --leading-display: 32px;   /* empty-state titles */
+  --text-h1:       22px;   --leading-h1:      28px;   /* page title (exists today) */
+  --text-h2:       17px;   --leading-h2:      22px;   /* section title in a page */
+  --text-h3:       13px;   --leading-h3:      16px;   /* uppercase, tracked (exists today) */
+  --text-body:     13px;   --leading-body:    18px;   /* default body */
+  --text-caption:  11px;   --leading-caption: 14px;   /* timestamps, helper text */
+  --text-mono:     12px;   --leading-mono:    16px;   /* paths, IDs, command lines */
+
+  --tracking-h3:   0.08em;
+  --tracking-meta: 0.04em;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  /* ---------- Radius (exact match — only 2 tokens; honoring code) ---------- */
+  --radius-sm:      6px;
+  --radius-md:     10px;
+  --radius-full: 9999px;                     /* derived — for chips/avatars */
+
+  /* ---------- Shadow (exact match — only 2 tokens; honoring code) ---------- */
+  --shadow-sm:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  --shadow-card:
+    0 1px 3px rgba(0, 0, 0, 0.05),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+
+  /* ---------- Shadow (NEW — popover/modal layer; needed for Dialog/Tooltip work) ---------- */
+  --shadow-popover:
+    0 8px 24px rgba(0, 0, 0, 0.10),
+    0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-modal:
+    0 24px 64px rgba(0, 0, 0, 0.18),
+    0 6px 16px rgba(0, 0, 0, 0.08);
+
+  /* ---------- Spacing (NEW — 4 px grid; today helm uses ad-hoc 6/8/12/16/24/28) ---------- */
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  28px;
+  --space-8:  40px;
+  --space-10: 56px;
+  --space-12: 80px;
+
+  /* ---------- Layout (--container-max exists; rest is derived) ---------- */
+  --container-max:   720px;
+  --sidebar-width:   220px;
+  --rail-width:      240px;                  /* matches existing .helm-rail-layout */
+  --inspector-width: 320px;
+
+  /* ---------- Motion (NEW — codify the 80ms transitions already in use) ---------- */
+  --motion-instant: 80ms;
+  --motion-fast:   160ms;
+  --motion-normal: 240ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ============================================================
+   Dark mode — exact match: app.css @media block
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:             #1c1c1e;
+    --bg-elev:        #2c2c2e;
+    --bg-sidebar:     #141416;
+    --bg-input:       #1c1c1e;
+    --bg-pre:         rgba(0, 0, 0, 0.30);
+    --bg-elev-rgb:    44, 44, 46;
+
+    --border:         #3a3a3c;
+    --border-strong:  #545458;
+
+    --text:           #f5f5f7;
+    --text-secondary: #a1a1a6;   /* a11y A1 — bumped from #8e8e93 for ≈4.8:1 */
+    --text-tertiary:  #8e8e93;
+    --selected-text:  #f5f5f7;
+
+    --hover:          rgba(255, 255, 255, 0.06);
+    --selected:       rgba(255, 255, 255, 0.08);   /* P0-3 — subtle elevation, not saturated */
+    --focus-ring:     rgba(10, 132, 255, 0.5);
+
+    --accent:         #007aff;   /* same hex; system tints render slightly different in dark */
+    --accent-hover:   #0066d6;
+    --accent-pressed: #0058b8;
+    --danger:         #ff3b30;
+    --warn:           #ff9500;
+    --success:        #34c759;
+
+    --surface-accent-tinted:  rgba(10, 132, 255, 0.14);
+    --surface-danger-tinted:  rgba(255,  69,  58, 0.14);
+    --surface-warn-tinted:    rgba(255, 159,  10, 0.14);
+    --surface-success-tinted: rgba( 48, 209,  88, 0.14);
+
+    --shadow-sm:
+      0 1px 2px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-card:
+      0 1px 3px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-popover:
+      0 8px 24px rgba(0, 0, 0, 0.45),
+      0 2px 6px rgba(0, 0, 0, 0.30);
+    --shadow-modal:
+      0 24px 64px rgba(0, 0, 0, 0.60),
+      0 6px 16px rgba(0, 0, 0, 0.40);
+  }
+}
+
+/* ============================================================
+   Semantic type "classes" — apply to elements, or re-declare on
+   h1/h2/p in app.css. The 5-size scale today helm doesn't have.
+   ============================================================ */
+
+.t-display {
+  font: var(--weight-semibold) var(--text-display)/var(--leading-display) var(--font-system);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.t-h1 {
+  font: var(--weight-semibold) var(--text-h1)/var(--leading-h1) var(--font-system);
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.t-h2 {
+  font: var(--weight-semibold) var(--text-h2)/var(--leading-h2) var(--font-system);
+  color: var(--text);
+}
+.t-h3 {
+  font: var(--weight-semibold) var(--text-h3)/var(--leading-h3) var(--font-system);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-h3);
+}
+.t-body {
+  font: var(--weight-regular) var(--text-body)/var(--leading-body) var(--font-system);
+  color: var(--text);
+}
+.t-caption {
+  font: var(--weight-regular) var(--text-caption)/var(--leading-caption) var(--font-system);
+  color: var(--text-secondary);
+}
+.t-mono {
+  font: var(--weight-regular) var(--text-mono)/var(--leading-mono) var(--font-mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.t-num {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 12px;
+    border-radius: 6px; border: 1px solid var(--border);
+    font: 500 13px/1 var(--font-sans); color: var(--text);
+    background: var(--bg-elev); cursor: pointer;
+    transition: background .08s var(--ease-standard, ease);
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .btn.primary:hover { background: var(--accent-hover); }
+  .btn.danger { background: var(--bg-elev); color: var(--danger); border-color: var(--border); }
+  .btn.danger:hover { background: var(--surface-danger-tinted); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
+  .btn.ghost:hover { background: var(--hover); color: var(--text); }
+  .btn[disabled] { opacity: .4; pointer-events: none; }
+  .row { gap: 10px; flex-wrap: wrap; }
+</style></head>
+<body>
+  <div class="row">
+    <button class="btn primary">Allow</button>
+    <button class="btn">Cancel</button>
+    <button class="btn danger">Deny</button>
+    <button class="btn ghost">Skip</button>
+    <button class="btn primary" disabled>Bind</button>
+  </div>
+  <div class="row" style="margin-top:12px;">
+    <button class="btn" style="height:24px;padding:0 8px;font-size:12px;">small</button>
+    <button class="btn">default</button>
+    <button class="btn" style="height:32px;padding:0 14px;font-size:13px;">large</button>
+  </div>
+</body></html>

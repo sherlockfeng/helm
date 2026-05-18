@@ -31,6 +31,7 @@
   --color-border-strong: var(--border-strong);
   --color-text: var(--text);
   --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-pressed: var(--accent-pressed);
@@ -41,14 +42,64 @@
   --color-selected: var(--selected);
   --color-selected-text: var(--selected-text);
 
+  /* helm-design tints — usable as bg-surface-accent-tinted etc. */
+  --color-surface-accent-tinted:  var(--surface-accent-tinted);
+  --color-surface-danger-tinted:  var(--surface-danger-tinted);
+  --color-surface-warn-tinted:    var(--surface-warn-tinted);
+  --color-surface-success-tinted: var(--surface-success-tinted);
+  --color-border-accent-tinted:   var(--border-accent-tinted);
+  --color-border-danger-tinted:   var(--border-danger-tinted);
+  --color-border-warn-tinted:     var(--border-warn-tinted);
+  --color-border-success-tinted:  var(--border-success-tinted);
+
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
+  --radius-full: var(--radius-full);
 
   --font-sans: var(--font-system);
   --font-mono: var(--font-mono);
 
+  /* helm-design type scale — exposed as text-display / text-h1 / etc.
+     Each pairs with the matching --leading-* line height. Today no
+     element uses these utilities; new code opts in. */
+  --text-display:  var(--text-display);   --text-display--line-height:  var(--leading-display);
+  --text-h1:       var(--text-h1);        --text-h1--line-height:       var(--leading-h1);
+  --text-h2:       var(--text-h2);        --text-h2--line-height:       var(--leading-h2);
+  --text-h3:       var(--text-h3);        --text-h3--line-height:       var(--leading-h3);
+  --text-body:     var(--text-body);      --text-body--line-height:     var(--leading-body);
+  --text-caption:  var(--text-caption);   --text-caption--line-height:  var(--leading-caption);
+  --text-mono:     var(--text-mono);      --text-mono--line-height:     var(--leading-mono);
+
+  --font-weight-regular:  var(--weight-regular);
+  --font-weight-medium:   var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+
+  --tracking-h3:   var(--tracking-h3);
+  --tracking-meta: var(--tracking-meta);
+
   --shadow-sm: var(--shadow-sm);
   --shadow-card: var(--shadow-card);
+  --shadow-popover: var(--shadow-popover);
+  --shadow-modal:   var(--shadow-modal);
+
+  /* helm-design spacing — usable as p-3 / gap-4 / mt-6 if author opts in.
+     v1 doesn't replace existing inline px values; long-tail cleanup. */
+  --spacing-1:   var(--space-1);
+  --spacing-2:   var(--space-2);
+  --spacing-3:   var(--space-3);
+  --spacing-4:   var(--space-4);
+  --spacing-5:   var(--space-5);
+  --spacing-6:   var(--space-6);
+  --spacing-8:   var(--space-8);
+  --spacing-10:  var(--space-10);
+  --spacing-12:  var(--space-12);
+
+  /* helm-design motion */
+  --duration-instant: var(--motion-instant);
+  --duration-fast:    var(--motion-fast);
+  --duration-normal:  var(--motion-normal);
+  --ease-standard:    var(--ease-standard);
+  --ease-emphasis:    var(--ease-emphasis);
 }
 
 :root {
@@ -57,10 +108,12 @@
   --bg-sidebar: #f0f0f3;
   --bg-input: #ffffff;
   --bg-pre: #fafafc;
+  --bg-elev-rgb: 255, 255, 255;   /* helm-design — vibrancy alpha derivation */
   --border: #d2d2d7;
   --border-strong: #b0b0b8;
   --text: #1d1d1f;
   --text-secondary: #6e6e73;
+  --text-tertiary: #8e8e93;        /* helm-design — very-low-priority meta */
   --accent: #007aff;
   --accent-hover: #0066d6;
   --accent-pressed: #0058b8;
@@ -72,11 +125,26 @@
   --selected-text: #003d99;
   --focus-ring: rgba(0, 122, 255, 0.4);
 
+  /* helm-design — semantic tints for card accent bars + subtle row backgrounds.
+     One semantic tone per screen, max. Use alongside a 3 px left accent bar. */
+  --surface-accent-tinted:  rgba(0, 122, 255, 0.08);
+  --surface-danger-tinted:  rgba(255, 59, 48, 0.08);
+  --surface-warn-tinted:    rgba(255, 149, 0, 0.10);
+  --surface-success-tinted: rgba(52, 199, 89, 0.10);
+  --border-accent-tinted:   rgba(0, 122, 255, 0.30);
+  --border-danger-tinted:   rgba(255, 59, 48, 0.30);
+  --border-warn-tinted:     rgba(255, 149, 0, 0.30);
+  --border-success-tinted:  rgba(52, 199, 89, 0.30);
+
   --radius-sm: 6px;
   --radius-md: 10px;
+  --radius-full: 9999px;            /* helm-design — chips / avatars */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  /* helm-design — popover + modal layers (Tooltip / Dialog primitives) */
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.10), 0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-modal:   0 24px 64px rgba(0, 0, 0, 0.18), 0 6px 16px rgba(0, 0, 0, 0.08);
 
   --font-system:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue',
@@ -84,7 +152,52 @@
   --font-mono:
     'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
 
-  --container-max: 720px;
+  /* helm-design — 5-size type scale. NOT applied to any element by default;
+     existing rules (h1/h2/p) keep their hard-coded sizes — opt-in via the
+     `.t-*` utility classes at the bottom of this file, or via Tailwind
+     utilities (text-display / text-h2 / etc.) once @theme exposes them. */
+  --text-display:  28px;   --leading-display: 32px;
+  --text-h1:       22px;   --leading-h1:      28px;
+  --text-h2:       17px;   --leading-h2:      22px;
+  --text-h3:       13px;   --leading-h3:      16px;
+  --text-body:     13px;   --leading-body:    18px;
+  --text-caption:  11px;   --leading-caption: 14px;
+  --text-mono:     12px;   --leading-mono:    16px;
+
+  --tracking-h3:   0.08em;
+  --tracking-meta: 0.04em;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+
+  /* helm-design — 4 px spacing grid. Today helm uses ad-hoc px in 302 inline
+     `style={{}}` spots — migration is long-tail cleanup, not a single PR. */
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  28px;
+  --space-8:  40px;
+  --space-10: 56px;
+  --space-12: 80px;
+
+  /* Layout widths. --rail-width matches the existing .helm-rail-layout
+     grid-template-columns 240px; --inspector-width is the upcoming
+     3-col modifier for Active Chats. */
+  --container-max:   720px;
+  --sidebar-width:   220px;
+  --rail-width:      240px;
+  --inspector-width: 320px;
+
+  /* helm-design — codify the 80 ms transitions already used in many rules.
+     New animations should use these tokens + respect prefers-reduced-motion. */
+  --motion-instant: 80ms;
+  --motion-fast:   160ms;
+  --motion-normal: 240ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -94,18 +207,31 @@
     --bg-sidebar: #141416;
     --bg-input: #1c1c1e;
     --bg-pre: rgba(0, 0, 0, 0.30);
+    --bg-elev-rgb: 44, 44, 46;
     --border: #3a3a3c;
     --border-strong: #545458;
     --text: #f5f5f7;
     /* a11y A1: bumped from #8e8e93 (4.0:1) to #a1a1a6 (4.8:1) on --bg-elev */
     --text-secondary: #a1a1a6;
+    --text-tertiary: #8e8e93;
     --hover: rgba(255, 255, 255, 0.06);
     /* P0-3: subtle surface elevation rather than saturated blue */
     --selected: rgba(255, 255, 255, 0.08);
     --selected-text: #f5f5f7;
     --focus-ring: rgba(10, 132, 255, 0.5);
+
+    /* helm-design — dark-mode semantic tints. Slightly higher alpha than
+       light because the underlying surface is already darker; the eye
+       needs more contrast for the wash to read. */
+    --surface-accent-tinted:  rgba(10, 132, 255, 0.14);
+    --surface-danger-tinted:  rgba(255,  69,  58, 0.14);
+    --surface-warn-tinted:    rgba(255, 159,  10, 0.14);
+    --surface-success-tinted: rgba( 48, 209,  88, 0.14);
+
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
     --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.30);
+    --shadow-modal:   0 24px 64px rgba(0, 0, 0, 0.60), 0 6px 16px rgba(0, 0, 0, 0.40);
   }
 }
 
@@ -673,4 +799,47 @@ code, pre {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   helm-design — 5-size type scale utility classes. NOT applied to any
+   existing element (zero visual diff for PR 1); new code opts in via
+   className OR the equivalent Tailwind utility (text-display / etc.)
+   exposed in the @theme inline block above.
+   ──────────────────────────────────────────────────────────────────── */
+.t-display {
+  font: var(--weight-semibold) var(--text-display)/var(--leading-display) var(--font-system);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.t-h1 {
+  font: var(--weight-semibold) var(--text-h1)/var(--leading-h1) var(--font-system);
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.t-h2 {
+  font: var(--weight-semibold) var(--text-h2)/var(--leading-h2) var(--font-system);
+  color: var(--text);
+}
+.t-h3 {
+  font: var(--weight-semibold) var(--text-h3)/var(--leading-h3) var(--font-system);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-h3);
+}
+.t-body {
+  font: var(--weight-regular) var(--text-body)/var(--leading-body) var(--font-system);
+  color: var(--text);
+}
+.t-caption {
+  font: var(--weight-regular) var(--text-caption)/var(--leading-caption) var(--font-system);
+  color: var(--text-secondary);
+}
+.t-mono {
+  font: var(--weight-regular) var(--text-mono)/var(--leading-mono) var(--font-mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.t-num {
+  font-variant-numeric: tabular-nums;
 }

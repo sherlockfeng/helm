@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .toast {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 12px; background: var(--bg-elev);
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.06);
+    max-width: 380px;
+  }
+  .icon { flex-shrink: 0; margin-top: 1px; }
+  .icon.success { color: var(--success); }
+  .icon.warn { color: var(--warn); }
+  .icon.danger { color: var(--danger); }
+  .title { font: 600 13px/16px var(--font-sans); color: var(--text); }
+  .body { font: 400 12px/16px var(--font-sans); color: var(--text-secondary); margin-top: 2px; }
+  .meta { margin-left: auto; font: 500 11px/14px var(--font-mono); color: var(--text-tertiary); align-self: flex-start; }
+  .col { gap: 8px; }
+</style></head>
+<body>
+<div class="col">
+  <div class="toast">
+    <svg class="icon success" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <div><div class="title">Role exported</div><div class="body">helm-goofy-v3.helmrole · 14.2 KB</div></div>
+    <div class="meta">2 s</div>
+  </div>
+  <div class="toast">
+    <svg class="icon warn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <div><div class="title">Approval expiring</div><div class="body">cursor → run_shell_command · 8 s left</div></div>
+    <div class="meta">now</div>
+  </div>
+  <div class="toast">
+    <svg class="icon danger" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    <div><div class="title">Plugin returned 404</div><div class="body">subscriptions/tos: bundle not found</div></div>
+    <div class="meta">12 s</div>
+  </div>
+</div>
+</body></html>

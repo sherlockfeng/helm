@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .field {
+    height: 28px; padding: 0 10px; width: 100%;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-input); color: var(--text);
+    font: 400 13px/1 var(--font-sans);
+    outline: none;
+  }
+  .field:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,122,255,.18); }
+  .field.has-icon { padding-left: 28px; }
+  .wrap-field { position: relative; }
+  .lead-icon { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); }
+  .lbl { font: 500 11px/1 var(--font-sans); color: var(--text-secondary); text-transform: uppercase; letter-spacing:0.08em; margin-bottom: 4px; display:block; }
+  .col { gap: 10px; max-width: 340px; }
+  textarea.field { height: 60px; padding: 8px 10px; resize: none; line-height: 1.4; }
+</style></head>
+<body>
+<div class="col">
+  <div>
+    <label class="lbl">Chat label</label>
+    <input class="field" value="dr-dashboard refactor" />
+  </div>
+  <div>
+    <label class="lbl">Search</label>
+    <div class="wrap-field">
+      <svg class="lead-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input class="field has-icon" placeholder="Search roles…" />
+    </div>
+  </div>
+  <div>
+    <label class="lbl">System prompt</label>
+    <textarea class="field" placeholder="You are an expert in…"></textarea>
+  </div>
+</div>
+</body></html>

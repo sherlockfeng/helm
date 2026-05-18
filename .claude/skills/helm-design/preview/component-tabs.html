@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="_preview.css">
+<style>
+  .tabs { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 8px; }
+  .tab {
+    height: 24px; padding: 0 10px; border-radius: 6px;
+    font: 500 12px/1 var(--font-sans); color: var(--text-secondary);
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    background: transparent; border: 0;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--bg-elev); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .pill { font: 500 10px/1 var(--font-mono); padding: 1px 5px; background: var(--bg); border-radius: 9999px; color: var(--text-secondary); }
+  .tab.active .pill { background: var(--surface-accent-tinted); color: var(--accent); }
+  .col { gap: 12px; }
+</style></head>
+<body>
+<div class="col">
+  <div class="tabs">
+    <button class="tab active">Chunks <span class="pill">12</span></button>
+    <button class="tab">Sources <span class="pill">4</span></button>
+    <button class="tab">Candidates <span class="pill">3</span></button>
+    <button class="tab">Archive</button>
+  </div>
+  <div class="tabs">
+    <button class="tab active">new_feature</button>
+    <button class="tab">implement</button>
+    <button class="tab">archived</button>
+  </div>
+</div>
+</body></html>

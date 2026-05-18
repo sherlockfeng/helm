@@ -399,6 +399,10 @@ code, pre {
   flex-direction: column;
   gap: 2px;
   -webkit-app-region: no-drag;
+  /* helm-design PR 4: nav grows to fill the sidebar so the inner
+     .helm-nav-spacer can push Settings to the bottom. */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .helm-nav a {
@@ -597,7 +601,40 @@ code, pre {
 }
 
 .helm-nav a.nested {
-  padding-left: 24px;
+  padding-left: 20px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   helm-design PR 4: lucide icons in the sidebar nav.
+   Every nav row carries an 18 px leading icon (see ICONOGRAPHY.md).
+   Icons inherit currentColor — the existing a / a:hover / a.active
+   rules drive their tone automatically. Icons are flex-shrink:0 so
+   the label truncates instead of squashing the icon if the sidebar
+   width ever shrinks.
+   ──────────────────────────────────────────────────────────────────── */
+.helm-nav-icon {
+  flex-shrink: 0;
+  /* lucide ships at 1.75 stroke at 16; the prop already locks 18×18 */
+  opacity: 0.85;
+}
+.helm-nav a.active .helm-nav-icon { opacity: 1; }
+.helm-nav a:hover .helm-nav-icon { opacity: 1; }
+
+.helm-nav-label {
+  /* Lets the label truncate under tight widths without pushing the
+     pending-count badge offscreen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Spacer pushes the Settings row to the bottom of the sidebar. The
+   .helm-nav is already flex-column; the spacer just grabs the leftover
+   vertical space. */
+.helm-nav-spacer {
+  flex: 1 1 auto;
+  min-height: 12px;
 }
 
 /* ────────────────────────────────────────────────────────────────────

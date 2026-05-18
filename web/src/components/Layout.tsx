@@ -6,13 +6,22 @@
  */
 
 import { NavLink, Outlet } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ComponentType, type SVGProps } from 'react';
 import { helmApi } from '../api/client.js';
 import { useEventStream } from '../hooks/useEventStream.js';
+import {
+  MessagesSquare, Link2, ShieldCheck,
+  BookOpen, Cloud, Plug,
+  Workflow, Settings,
+} from './Icons.js';
+
+type IconCmp = ComponentType<SVGProps<SVGSVGElement>>;
 
 interface NavItem {
   to: string;
   label: string;
+  /** helm-design PR 4: every nav row carries a lucide icon (18 px, leading). */
+  icon: IconCmp;
 }
 
 interface NavGroup {
@@ -30,23 +39,80 @@ function isGroup(entry: NavEntry): entry is NavGroup {
 
 // Phase 79 follow-up: chat-adjacent surfaces (Active / Bindings / Approvals)
 // nest under a "Chats" group header — they're all "this Cursor chat I'm
-// observing" viewed from a different angle. Roles / Harness / Settings stay
-// top-level because they don't share that subject.
-// Campaigns + Requirements removed from the nav entirely; routes still
-// resolve at /campaigns and /requirements for anyone with a direct link.
+// observing" viewed from a different angle.
+//
+// helm-design PR 4: introduces a parallel "Knowledge" group for surfaces
+// that feed roles (Roles + Subscriptions + Plugins, the latter two
+// lifted out of Settings in PR 5). Harness stays top-level (different
+// subject). Settings stays top-level but is pinned to the bottom of the
+// sidebar via the .helm-nav-spacer flex element.
+//
+// Campaigns + Requirements remain hidden from the nav; routes still
+// resolve for anyone with a direct link.
 const NAV: NavEntry[] = [
   {
     label: 'Chats',
     items: [
-      { to: '/chats', label: 'Active' },
-      { to: '/bindings', label: 'Bindings' },
-      { to: '/approvals', label: 'Approvals' },
+      { to: '/chats', label: 'Active', icon: MessagesSquare },
+      { to: '/bindings', label: 'Bindings', icon: Link2 },
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
     ],
   },
-  { to: '/roles', label: 'Roles' },
-  { to: '/harness', label: 'Harness' },
-  { to: '/settings', label: 'Settings' },
+  {
+    label: 'Knowledge',
+    items: [
+      { to: '/roles', label: 'Roles', icon: BookOpen },
+      { to: '/subscriptions', label: 'Subscriptions', icon: Cloud },
+      { to: '/plugins', label: 'Plugins', icon: Plug },
+    ],
+  },
+  { to: '/harness', label: 'Harness', icon: Workflow },
+  // Settings is rendered separately so we can drop a flex spacer above
+  // it and pin it to the bottom of the sidebar.
 ];
+
+const SETTINGS_ITEM: NavItem = { to: '/settings', label: 'Settings', icon: Settings };
+
+/**
+ * Brand row — plain wordmark for now (helm-design PR 4 spec). The wrapper
+ * exists so a future PR can drop a real logo SVG next to the wordmark
+ * without touching `<Layout/>`.
+ */
+function HelmBrand() {
+  return (
+    <h1 className="helm-brand font-semibold tracking-tight">Helm</h1>
+  );
+}
+
+/**
+ * One sidebar nav row: icon + label, with the approvals count badge when
+ * applicable. Extracted from the inline JSX so the top-level grouped vs
+ * flat branches both render identically (icons + a11y).
+ */
+function NavRow({
+  item, pendingCount, nested,
+}: { item: NavItem; pendingCount: number; nested?: boolean }) {
+  const Icon = item.icon;
+  return (
+    <NavLink
+      to={item.to}
+      className={({ isActive }) => {
+        const parts = [nested ? 'nested' : ''];
+        if (isActive) parts.push('active');
+        return parts.filter(Boolean).join(' ') || undefined;
+      }}
+    >
+      {/* aria-hidden — the label already names the row for screen readers. */}
+      <Icon className="helm-nav-icon" aria-hidden="true" width={18} height={18} />
+      <span className="helm-nav-label">{item.label}</span>
+      {item.to === '/approvals' && pendingCount > 0 && (
+        <span className="badge" aria-label={`${pendingCount} pending`}>
+          {pendingCount}
+        </span>
+      )}
+    </NavLink>
+  );
+}
 
 export function Layout() {
   const [pendingCount, setPendingCount] = useState<number>(0);
@@ -112,36 +178,22 @@ export function Layout() {
   return (
     <div className="helm-app">
       <aside className="helm-sidebar">
-        <h1 className="font-semibold tracking-tight">Helm</h1>
+        <HelmBrand />
         <nav className="helm-nav" aria-label="Main">
           {NAV.map((entry) => isGroup(entry) ? (
             <div key={entry.label} className="helm-nav-group">
               <div className="helm-nav-group-label">{entry.label}</div>
               {entry.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  className={({ isActive }) => isActive ? 'active nested' : 'nested'}
-                >
-                  <span>{item.label}</span>
-                  {item.to === '/approvals' && pendingCount > 0 && (
-                    <span
-                      className="badge"
-                      aria-label={`${pendingCount} pending`}
-                    >{pendingCount}</span>
-                  )}
-                </NavLink>
+                <NavRow key={item.to} item={item} pendingCount={pendingCount} nested />
               ))}
             </div>
           ) : (
-            <NavLink
-              key={entry.to}
-              to={entry.to}
-              className={({ isActive }) => isActive ? 'active' : undefined}
-            >
-              <span>{entry.label}</span>
-            </NavLink>
+            <NavRow key={entry.to} item={entry} pendingCount={pendingCount} />
           ))}
+          {/* helm-design PR 4: spacer pushes Settings to the bottom of the
+              sidebar — it's the only "infrequent / admin" item in the IA. */}
+          <div className="helm-nav-spacer" aria-hidden="true" />
+          <NavRow item={SETTINGS_ITEM} pendingCount={pendingCount} />
         </nav>
         <div className="helm-sidebar-footer">
           <span

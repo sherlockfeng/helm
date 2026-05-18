@@ -14,6 +14,8 @@ import { SettingsPage } from './pages/Settings.js';
 import { RolesPage } from './pages/Roles.js';
 import { RequirementsPage } from './pages/Requirements.js';
 import { HarnessPage } from './pages/Harness.js';
+import { SubscriptionsPage } from './pages/Subscriptions.js';
+import { PluginsPage } from './pages/Plugins.js';
 
 export default function App() {
   return (
@@ -28,6 +30,12 @@ export default function App() {
           <Route path="/cycles/:cycleId" element={<CycleDetailPage />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
           <Route path="/roles" element={<RolesPage />} />
+          {/* helm-design PR 4: new Knowledge group routes. The page bodies
+              are placeholder shells in PR 4; PR 5 lifts the real
+              <RoleSubscriptionsCard> + <StoragePluginsCard> out of
+              Settings into these modules. */}
+          <Route path="/subscriptions" element={<SubscriptionsPage />} />
+          <Route path="/plugins" element={<PluginsPage />} />
           <Route path="/requirements" element={<RequirementsPage />} />
           <Route path="/harness" element={<HarnessPage />} />
           <Route path="/settings" element={<SettingsPage />} />

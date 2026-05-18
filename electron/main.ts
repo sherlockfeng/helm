@@ -57,15 +57,21 @@ function createMainWindow(): void {
   if (isDev) {
     void mainWindow.loadURL('http://localhost:5173');
   } else {
-    // Phase 50: pass the live HTTP API origin to the renderer via the URL
-    // hash so the preload can expose it as `window.helm.apiBase`. Under
-    // file://, relative `/api/...` URLs don't resolve to anywhere useful —
-    // the renderer needs the explicit `http://127.0.0.1:<port>` origin.
+    // Phase 50: pass the live HTTP API origin to the renderer so the
+    // preload can expose it as `window.helm.apiBase`. Under file://,
+    // relative `/api/...` URLs don't resolve to anywhere useful — the
+    // renderer needs the explicit `http://127.0.0.1:<port>` origin.
+    //
+    // helm-design hotfix: the renderer uses react-router's HashRouter
+    // (BrowserRouter would push routes like /approvals into the file://
+    // URL, which then 404s on reload). The route lives in `#`, so we
+    // can't squat the hash with apiBase — pass it through the search
+    // string instead. Preload reads from `location.search`.
     const port = helmApp?.httpPort();
     const indexHtml = path.join(__projectDir, '..', '..', 'web', 'dist', 'index.html');
     if (port) {
       void mainWindow.loadFile(indexHtml, {
-        hash: `apiBase=${encodeURIComponent(`http://127.0.0.1:${port}`)}`,
+        search: `apiBase=${encodeURIComponent(`http://127.0.0.1:${port}`)}`,
       });
     } else {
       // Pre-boot edge case — let the renderer fall back to its built-in

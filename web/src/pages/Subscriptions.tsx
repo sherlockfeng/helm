@@ -20,6 +20,7 @@ import { Card } from '../components/Card.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 
 export function SubscriptionsPage() {
   const subs = useApi(() => helmApi.listSubscriptions());
@@ -103,16 +104,16 @@ export function SubscriptionsPage() {
 
       <Card>
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-          <select
-            value={roleId}
-            onChange={(e) => setRoleId(e.target.value)}
-            style={{ minWidth: 180 }}
-          >
-            <option value="">— role —</option>
-            {(roles.data?.roles ?? []).map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
+          <Select value={roleId} onValueChange={setRoleId}>
+            <SelectTrigger style={{ minWidth: 180 }}>
+              <SelectValue placeholder="— role —" />
+            </SelectTrigger>
+            <SelectContent>
+              {(roles.data?.roles ?? []).map((r) => (
+                <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <input
             type="text"
             value={sourceUrl}

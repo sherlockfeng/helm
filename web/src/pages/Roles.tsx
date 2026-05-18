@@ -21,6 +21,8 @@ import { Card } from '../components/Card.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 
 /**
@@ -201,38 +203,25 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       <div className="label">System prompt</div>
       <pre style={{ marginBottom: 14 }}>{role.systemPrompt}</pre>
 
-      {/* Phase 78: tab strip — Chunks (default, holds sources + chunks +
-          train form) vs Candidates (knowledge-capture pending review). */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
-        <button
-          type="button"
-          onClick={() => setActiveTab('chunks')}
-          aria-pressed={activeTab === 'chunks'}
-          style={{
-            background: activeTab === 'chunks' ? 'var(--accent)' : 'transparent',
-            color: activeTab === 'chunks' ? '#fff' : 'inherit',
-          }}
-        >
-          Chunks
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('candidates')}
-          aria-pressed={activeTab === 'candidates'}
-          style={{
-            background: activeTab === 'candidates' ? 'var(--accent)' : 'transparent',
-            color: activeTab === 'candidates' ? '#fff' : 'inherit',
-          }}
-        >
-          Candidates
-        </button>
-      </div>
+      {/* Phase 78 / helm-design PR 8: segmented control over Chunks
+          (default, holds sources + chunks + train form) vs Candidates
+          (knowledge-capture pending review). Radix Tabs gives keyboard
+          arrow nav + roving-focus + tablist/tabpanel a11y wiring for
+          free; we only own the segmented-pill styling. */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as 'chunks' | 'candidates')}
+      >
+        <TabsList aria-label="Role detail sections">
+          <TabsTrigger value="chunks">Chunks</TabsTrigger>
+          <TabsTrigger value="candidates">Candidates</TabsTrigger>
+        </TabsList>
 
-      {activeTab === 'candidates' && (
-        <RoleCandidates roleId={roleId} onChange={() => { detail.reload(); onTrained(); }} />
-      )}
+        <TabsContent value="candidates">
+          <RoleCandidates roleId={roleId} onChange={() => { detail.reload(); onTrained(); }} />
+        </TabsContent>
 
-      {activeTab === 'chunks' && (<>
+        <TabsContent value="chunks">
       {/* Phase 73: Sources block. Each knowledge_source row corresponds to
           one raw-doc ingestion event; the Drop button cascade-deletes every
           chunk derived from that source. */}
@@ -394,15 +383,19 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       </label>
       <label className="helm-form-row">
         <div className="muted">Kind (applies to every doc in this batch)</div>
-        <select
+        <Select
           value={trainKind}
-          onChange={(e) => setTrainKind(e.target.value as KnowledgeChunkKind)}
-          style={{ minWidth: 160 }}
+          onValueChange={(v) => setTrainKind(v as KnowledgeChunkKind)}
         >
-          {KIND_OPTIONS.map((k) => (
-            <option key={k} value={k}>{k}</option>
-          ))}
-        </select>
+          <SelectTrigger style={{ minWidth: 160 }}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KIND_OPTIONS.map((k) => (
+              <SelectItem key={k} value={k}>{k}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </label>
       <label className="helm-form-row">
         <div className="muted">Documents (.md / .txt — multiple)</div>
@@ -433,7 +426,8 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
           {training ? 'Training…' : 'Train'}
         </Button>
       </div>
-      </>)}
+        </TabsContent>
+      </Tabs>
 
       {dropConfirm && (
         <ConfirmDialog

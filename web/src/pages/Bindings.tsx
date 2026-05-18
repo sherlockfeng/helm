@@ -18,6 +18,7 @@ import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { ConfirmDialog } from '../components/Dialog.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
@@ -158,18 +159,21 @@ function PendingRow({
       ) : (
         <>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
-            <select
+            <Select
               value={hostSessionId}
-              onChange={(e) => setHostSessionId(e.target.value)}
-              aria-label="Cursor chat to bind to"
-              style={{ flex: 1 }}
+              onValueChange={setHostSessionId}
             >
-              {chats.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {chatLabel(c, c.id)}{c.cwd && c.firstPrompt ? ` — ${c.cwd}` : ''} ({c.id.slice(0, 8)})
-                </option>
-              ))}
-            </select>
+              <SelectTrigger aria-label="Cursor chat to bind to" style={{ flex: 1 }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {chats.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {chatLabel(c, c.id)}{c.cwd && c.firstPrompt ? ` — ${c.cwd}` : ''} ({c.id.slice(0, 8)})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Button
               variant="primary"
               disabled={submitting}

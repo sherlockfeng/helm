@@ -19,6 +19,7 @@ import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
+import { Combobox } from '../components/Combobox.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -317,24 +318,22 @@ export function ChatsPage() {
               {(() => {
                 const addable = roles.filter((r) => !chat.roleIds.includes(r.id));
                 if (addable.length === 0) return null;
+                // helm-design PR 8: searchable <Combobox> (cmdk + Radix
+                // Popover) replaces the bare <select>. Power users may
+                // have ~50 roles; typing narrows the list.
                 return (
-                  <select
-                    aria-label={`Add role to chat ${chat.id}`}
+                  <Combobox
                     value=""
+                    placeholder="+ Add role…"
                     disabled={savingId === chat.id}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v) void addRole(chat.id, v);
-                    }}
-                    style={{ fontSize: 12, padding: '2px 4px' }}
-                  >
-                    <option value="">+ Add role…</option>
-                    {addable.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name}{r.isBuiltin ? ' (built-in)' : ''}
-                      </option>
-                    ))}
-                  </select>
+                    triggerClassName="helm-chat-add-role"
+                    items={addable.map((r) => ({
+                      value: r.id,
+                      label: r.name,
+                      description: r.isBuiltin ? 'built-in' : undefined,
+                    }))}
+                    onValueChange={(v) => { if (v) void addRole(chat.id, v); }}
+                  />
                 );
               })()}
               {savingId === chat.id && <span className="muted" style={{ fontSize: 11 }}>saving…</span>}

@@ -21,6 +21,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { Button } from '../components/Button.js';
+import { ConfirmDialog } from '../components/Dialog.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -730,6 +731,8 @@ function RoleSubscriptionsCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // helm-design PR 3: replace window.confirm with themed ConfirmDialog.
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   async function add(): Promise<void> {
     if (!roleId || !sourceUrl) { setErr('Select role + paste URL'); return; }
@@ -768,7 +771,6 @@ function RoleSubscriptionsCard() {
     }
   }
   async function del(id: string): Promise<void> {
-    if (!window.confirm('Delete this subscription? Accepted chunks stay; only the sync stops.')) return;
     setBusyId(id); setErr(null);
     try {
       await helmApi.deleteSubscription(id);
@@ -777,6 +779,7 @@ function RoleSubscriptionsCard() {
       setErr(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setBusyId(null);
+      setDeleteConfirm(null);
     }
   }
 
@@ -852,7 +855,7 @@ function RoleSubscriptionsCard() {
                 </button>
                 <button
                   disabled={busyId === s.id}
-                  onClick={() => { void del(s.id); }}
+                  onClick={() => setDeleteConfirm(s.id)}
                   style={{ color: 'var(--danger)' }}
                 >
                   Delete
@@ -872,6 +875,16 @@ function RoleSubscriptionsCard() {
           ))}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={deleteConfirm !== null}
+        onOpenChange={(o) => { if (!o) setDeleteConfirm(null); }}
+        title="Delete this subscription?"
+        description="Accepted chunks stay in the role; only the sync stops."
+        confirmLabel="Delete"
+        onConfirm={() => { if (deleteConfirm) void del(deleteConfirm); }}
+        busy={busyId !== null && busyId === deleteConfirm}
+      />
     </article>
   );
 }

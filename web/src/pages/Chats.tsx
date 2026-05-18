@@ -17,6 +17,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 import type { ActiveChat, ChannelBinding } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -365,15 +366,15 @@ export function ChatsPage() {
             >
               Close
             </button>
-            <button
+            <Button
               type="button"
-              className="danger-outline"
+              variant="danger-outline"
               disabled={savingId === chat.id}
               onClick={() => { void closeChat(chat.id, true); }}
               aria-label={`Delete chat ${chat.id} and all bindings`}
             >
               Delete
-            </button>
+            </Button>
           </div>
         </article>
       ))}
@@ -740,9 +741,9 @@ function MirrorToLarkModal({
               <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }}>{err}</p>
             )}
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="primary" onClick={() => void initiate()}>
+              <Button variant="primary" onClick={() => void initiate()}>
                 Generate code
-              </button>
+              </Button>
               <button onClick={cancel}>Cancel</button>
             </div>
           </>

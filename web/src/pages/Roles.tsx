@@ -16,6 +16,7 @@ import { useRef, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 
 /**
@@ -417,14 +418,14 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       )}
 
       <div style={{ marginTop: 12 }}>
-        <button
-          className="primary"
+        <Button
+          variant="primary"
           disabled={training}
           aria-busy={training}
           onClick={() => { void train(); }}
         >
           {training ? 'Training…' : 'Train'}
-        </button>
+        </Button>
       </div>
       </>)}
     </div>
@@ -545,27 +546,27 @@ function RoleCandidates({
               <div style={{ display: 'flex', gap: 6 }}>
                 {isEditing ? (
                   <>
-                    <button
-                      className="primary"
+                    <Button
+                      variant="primary"
                       disabled={isBusy}
                       aria-busy={isBusy}
                       onClick={() => { void saveEdit(c.id); }}
                     >
                       {isBusy ? 'Saving…' : 'Save & Accept'}
-                    </button>
+                    </Button>
                     <button onClick={() => { setEditingId(null); setEditingText(''); }}>Cancel</button>
                   </>
                 ) : (
                   <>
-                    <button
-                      className="primary"
+                    <Button
+                      variant="primary"
                       disabled={isBusy}
                       aria-busy={isBusy}
                       onClick={() => { void accept(c.id); }}
                       title="Add this segment as a new chunk on the role."
                     >
                       {isBusy ? 'Accepting…' : 'Accept'}
-                    </button>
+                    </Button>
                     <button
                       disabled={isBusy}
                       onClick={() => { setEditingId(c.id); setEditingText(c.chunkText); }}
@@ -681,9 +682,9 @@ export function RolesPage() {
       </p>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="primary" onClick={() => setChatTarget({ mode: 'create' })}>
+        <Button variant="primary" onClick={() => setChatTarget({ mode: 'create' })}>
           + Train a new role via chat
-        </button>
+        </Button>
         <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
           Coach an LLM through a conversation — it asks clarifying questions,
           then distills your answers into a role.
@@ -941,9 +942,9 @@ function RoleTrainChatModal({
               border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', resize: 'vertical',
             }}
           />
-          <button className="primary" disabled={busy || !input.trim()} onClick={() => void send()}>
+          <Button variant="primary" disabled={busy || !input.trim()} onClick={() => void send()}>
             Send
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -1009,15 +1010,15 @@ function TrainViaCliPanel() {
         One-time setup (click the target you use):
       </p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button
+        <Button
           type="button"
-          className="primary"
+          variant="primary"
           disabled={busy !== null}
           aria-busy={busy === 'claude'}
           onClick={() => { void setup('claude'); }}
         >
           {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code'}
-        </button>
+        </Button>
         <button
           type="button"
           disabled={busy !== null}

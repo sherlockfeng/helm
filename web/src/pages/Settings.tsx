@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { Button } from '../components/Button.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -472,9 +473,9 @@ export function SettingsPage() {
                 found.provider.config = cfg as Record<string, unknown>;
               })}
             />
-            <button
+            <Button
               type="button"
-              className="danger-outline"
+              variant="danger-outline"
               aria-label={`Remove mapping for ${m.cwdPrefix || '(unset prefix)'}`}
               onClick={() => update((c) => {
                 const found = ensureDepscope(c);
@@ -482,12 +483,12 @@ export function SettingsPage() {
                 cfg.mappings = (cfg.mappings ?? []).filter((_, idx) => idx !== i);
                 found.provider.config = cfg as Record<string, unknown>;
               })}
-            >Remove</button>
+            >Remove</Button>
           </div>
         ))}
-        <button
+        <Button
           type="button"
-          className="ghost"
+          variant="ghost"
           style={{ marginTop: 10 }}
           onClick={() => update((c) => {
             const found = ensureDepscope(c);
@@ -495,13 +496,13 @@ export function SettingsPage() {
             cfg.mappings = [...(cfg.mappings ?? []), { cwdPrefix: '', scmName: '' }];
             found.provider.config = cfg as Record<string, unknown>;
           })}
-        >+ Add mapping</button>
+        >+ Add mapping</Button>
       </article>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-        <button className="primary" disabled={!dirty} onClick={() => { void save(); }}>
+        <Button variant="primary" disabled={!dirty} onClick={() => { void save(); }}>
           Save
-        </button>
+        </Button>
         <button
           disabled={!dirty}
           onClick={() => {
@@ -814,9 +815,9 @@ function RoleSubscriptionsCard() {
           />
           auto-apply
         </label>
-        <button className="primary" onClick={() => { void add(); }} disabled={busy}>
+        <Button variant="primary" onClick={() => { void add(); }} disabled={busy}>
           {busy ? 'Adding…' : 'Add'}
-        </button>
+        </Button>
       </div>
 
       {err && <p style={{ color: 'var(--danger)' }}>{err}</p>}

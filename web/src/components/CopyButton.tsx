@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Button } from './Button.js';
 
 export function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -24,13 +25,13 @@ export function CopyButton({ value, label = 'Copy' }: { value: string; label?: s
   }
 
   return (
-    <button
+    <Button
       type="button"
-      className="ghost"
+      variant="ghost"
       onClick={() => { void copy(); }}
       aria-label={copied ? 'Copied' : `${label} ${value}`}
     >
       {copied ? 'Copied' : label}
-    </button>
+    </Button>
   );
 }

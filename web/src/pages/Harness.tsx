@@ -18,6 +18,7 @@ import { useState } from 'react';
 import { helmApi, type HarnessReviewView, type HarnessTaskView } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 
 export function HarnessPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.harnessTasks());
@@ -36,9 +37,9 @@ export function HarnessPage() {
       </p>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="primary" onClick={() => setCreating(true)}>
+        <Button variant="primary" onClick={() => setCreating(true)}>
           + New Harness task
-        </button>
+        </Button>
         <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
           Creates <code>.harness/tasks/&lt;id&gt;/task.md</code> and seeds Related Tasks
           from any matching archive cards.
@@ -275,9 +276,9 @@ function CreateTaskForm({ onClose, onCreated }: { onClose: () => void; onCreated
         <label>Objective (optional) <textarea value={objective} onChange={(e) => setObjective(e.target.value)} rows={2} style={{ width: '100%' }} /></label>
         {err && <p style={{ color: 'var(--danger)' }}>{err}</p>}
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="primary" onClick={submit} disabled={busy}>
+          <Button variant="primary" onClick={submit} disabled={busy}>
             {busy ? 'Creating…' : 'Create'}
-          </button>
+          </Button>
           <button onClick={onClose} disabled={busy}>Cancel</button>
         </div>
       </div>

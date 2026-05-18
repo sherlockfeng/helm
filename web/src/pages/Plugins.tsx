@@ -10,25 +10,34 @@
  * `~/.helm/config.json` under the Settings → general view. A future PR
  * may add inline toggles here.
  *
- * Page template: T1 (single-action). PR 6 will introduce <PageHeader/>;
- * until then we render a bare <h2> so the route works.
+ * Page template: T1 (single-action). helm-design PR 6 added <PageHeader/>
+ * + <StatTile/> — the title row now lives in the shared primitive.
  */
 
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 
 export function PluginsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.listPlugins());
+
+  // helm-design PR 6: stats summarize the load result. A failed
+  // plugin is a hot pointer the user should resolve.
+  const all = data?.plugins ?? [];
+  const okCount = all.filter((p) => p.ok).length;
+  const failedCount = all.length - okCount;
+
   return (
     <>
-      <h2>Plugins</h2>
-      <p className="muted">
-        Loaded storage plugins back role-bundle subscriptions. The built-in{' '}
-        <code>file://</code> scheme is always available. External plugins
-        (e.g. <code>helm-storage-tos</code>) load from{' '}
-        <code>~/.helm/plugins/&lt;id&gt;/</code> when listed in{' '}
-        <code>config.plugins.enabled</code>.
-      </p>
+      <PageHeader
+        title="Plugins"
+        subtitle={<>Loaded storage plugins back role-bundle subscriptions. The built-in <code>file://</code> scheme is always available. External plugins (e.g. <code>helm-storage-tos</code>) load from <code>~/.helm/plugins/&lt;id&gt;/</code> when listed in <code>config.plugins.enabled</code>.</>}
+        stats={<>
+          <StatTile label="Loaded" value={okCount} tone={okCount > 0 ? 'live' : 'muted'} />
+          <StatTile label="Failed" value={failedCount} tone={failedCount > 0 ? 'warn' : 'muted'} />
+        </>}
+      />
 
       <article className="helm-card">
         <div style={{ marginBottom: 8 }}>

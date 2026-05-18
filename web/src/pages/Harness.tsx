@@ -19,6 +19,8 @@ import { helmApi, type HarnessReviewView, type HarnessTaskView } from '../api/cl
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 
 export function HarnessPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.harnessTasks());
@@ -27,24 +29,28 @@ export function HarnessPage() {
   const tasks = data?.tasks ?? [];
   const grouped = groupByStage(tasks);
 
+  // helm-design PR 6: stats reflect Harness stage counts so the user
+  // sees the funnel at a glance (scoping → building → done).
   return (
     <>
-      <h2>Harness</h2>
-      <p className="muted">
-        AI-assisted feature development workflow: <code>new_feature → implement → archive</code>,
-        with a fresh-chat <code>review</code> checkpoint at the implement→archive boundary.
-        Tasks live on disk in <code>.harness/</code> (source of truth); helm DB indexes them.
+      <PageHeader
+        title="Harness"
+        subtitle={<>AI-assisted feature development workflow: <code>new_feature → implement → archive</code>, with a fresh-chat <code>review</code> checkpoint at the implement→archive boundary. Tasks live on disk in <code>.harness/</code> (source of truth); helm DB indexes them.</>}
+        stats={<>
+          <StatTile label="Scoping" value={grouped.new_feature.length} tone={grouped.new_feature.length > 0 ? 'info' : 'muted'} />
+          <StatTile label="Building" value={grouped.implement.length} tone={grouped.implement.length > 0 ? 'live' : 'muted'} />
+          <StatTile label="Archived" value={grouped.archived.length} tone="muted" />
+        </>}
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            + New Harness task
+          </Button>
+        }
+      />
+      <p className="muted" style={{ marginTop: -4, marginBottom: 16, fontSize: 12 }}>
+        Creates <code>.harness/tasks/&lt;id&gt;/task.md</code> and seeds Related Tasks
+        from any matching archive cards.
       </p>
-
-      <div style={{ marginBottom: 16 }}>
-        <Button variant="primary" onClick={() => setCreating(true)}>
-          + New Harness task
-        </Button>
-        <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
-          Creates <code>.harness/tasks/&lt;id&gt;/task.md</code> and seeds Related Tasks
-          from any matching archive cards.
-        </span>
-      </div>
 
       {creating && (
         <CreateTaskForm

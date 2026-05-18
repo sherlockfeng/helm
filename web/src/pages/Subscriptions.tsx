@@ -8,8 +8,8 @@
  * Diff lands as candidates in Roles → Candidates tab unless
  * `autoApply` is on. Use sparingly — trusted sources only.
  *
- * Page template: T1 (single-action). PR 6 will introduce <PageHeader/>;
- * until then we render a bare <h2> so the route works.
+ * Page template: T1 (single-action). helm-design PR 6 added <PageHeader/>
+ * + <StatTile/> — the title row now lives in the shared primitive.
  */
 
 import { useState } from 'react';
@@ -17,6 +17,8 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { Button } from '../components/Button.js';
 import { ConfirmDialog } from '../components/Dialog.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 
 export function SubscriptionsPage() {
   const subs = useApi(() => helmApi.listSubscriptions());
@@ -79,15 +81,24 @@ export function SubscriptionsPage() {
     }
   }
 
+  // helm-design PR 6: stats summarize what's been wired up. Errored
+  // count flags subscriptions whose last sync failed so the user can
+  // jump straight to the broken one.
+  const allSubs = subs.data?.subscriptions ?? [];
+  const erroredCount = allSubs.filter((s) => s.lastError).length;
+  const pausedCount = allSubs.filter((s) => s.status === 'paused').length;
+
   return (
     <>
-      <h2>Subscriptions</h2>
-      <p className="muted">
-        Subscribe a role to a remote <code>.helmrole</code> bundle URL.
-        Cron polls every 15 min; matching plugin handles the transport.
-        Diff lands as candidates in the Roles → Candidates tab unless
-        <em> auto-apply</em> is on (use sparingly — trusted sources only).
-      </p>
+      <PageHeader
+        title="Subscriptions"
+        subtitle={<>Subscribe a role to a remote <code>.helmrole</code> bundle URL. Cron polls every 15 min; matching plugin handles the transport. Diff lands as candidates in the Roles → Candidates tab unless <em>auto-apply</em> is on (use sparingly — trusted sources only).</>}
+        stats={<>
+          <StatTile label="Active" value={allSubs.length - pausedCount} tone={allSubs.length - pausedCount > 0 ? 'live' : 'muted'} />
+          <StatTile label="Paused" value={pausedCount} tone={pausedCount > 0 ? 'info' : 'muted'} />
+          <StatTile label="Errored" value={erroredCount} tone={erroredCount > 0 ? 'warn' : 'muted'} />
+        </>}
+      />
 
       <article className="helm-card">
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>

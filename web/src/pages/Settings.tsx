@@ -22,6 +22,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { Button } from '../components/Button.js';
+import { PageHeader } from '../components/PageHeader.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -143,11 +144,10 @@ export function SettingsPage() {
 
   return (
     <>
-      <h2>Settings</h2>
-      <p className="muted">
-        Lives in <code>~/.helm/config.json</code>. Knowledge-provider changes apply immediately on save;
-        HTTP port changes require a Helm restart.
-      </p>
+      <PageHeader
+        title="Settings"
+        subtitle={<>Lives in <code>~/.helm/config.json</code>. Knowledge-provider changes apply immediately on save; HTTP port changes require a Helm restart.</>}
+      />
 
       {saveOk && (
         <div className="helm-banner ok" role="status" aria-live="polite">

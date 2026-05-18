@@ -18,6 +18,8 @@ import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { StatTile } from '../components/StatTile.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 
 /**
@@ -687,24 +689,38 @@ export function RolesPage() {
     | { mode: 'update'; roleId: string; name: string }
   >(null);
 
+  // helm-design PR 6: stats reflect what's in the roles list. Built-in
+  // roles count separately so the user sees at a glance how many of
+  // their own roles they've added; pending-candidates rolls up the
+  // per-role candidate badge.
+  const allRoles = data?.roles ?? [];
+  const builtInRoles = allRoles.filter((r) => r.isBuiltin).length;
+  const userRoles = allRoles.length - builtInRoles;
+  const pendingCandidates = allRoles.reduce(
+    (acc, r) => acc + (r.pendingCandidateCount ?? 0),
+    0,
+  );
+
   return (
     <>
-      <h2>Roles</h2>
-      <p className="muted">
-        Built-in agent personas (product / developer / qa) plus any roles you train
-        with project-specific docs. <code>query_knowledge</code> and the
-        sessionStart context provider read from the same chunks.
+      <PageHeader
+        title="Roles"
+        subtitle={<>Built-in agent personas (product / developer / qa) plus any roles you train with project-specific docs. <code>query_knowledge</code> and the sessionStart context provider read from the same chunks.</>}
+        stats={<>
+          <StatTile label="Yours" value={userRoles} tone={userRoles > 0 ? 'live' : 'muted'} />
+          <StatTile label="Built-in" value={builtInRoles} tone="muted" />
+          <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
+        </>}
+        actions={
+          <Button variant="primary" onClick={() => setChatTarget({ mode: 'create' })}>
+            + Train a new role via chat
+          </Button>
+        }
+      />
+      <p className="muted" style={{ marginTop: -4, marginBottom: 16, fontSize: 12 }}>
+        Coach an LLM through a conversation — it asks clarifying questions,
+        then distills your answers into a role.
       </p>
-
-      <div style={{ marginBottom: 16 }}>
-        <Button variant="primary" onClick={() => setChatTarget({ mode: 'create' })}>
-          + Train a new role via chat
-        </Button>
-        <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
-          Coach an LLM through a conversation — it asks clarifying questions,
-          then distills your answers into a role.
-        </span>
-      </div>
 
       <TrainViaCliPanel />
 

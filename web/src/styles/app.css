@@ -482,6 +482,76 @@ code, pre {
 }
 .badge.danger .dot { background: var(--danger); }
 
+/* helm-design PR 3 — Dialog overlay + content. Used by all <Dialog>
+   and <ConfirmDialog> instances. Focus trap / esc / scroll lock all
+   come from Radix; this is pure theming. */
+.helm-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 100;
+  /* Radix toggles data-state="open"/"closed"; fade via opacity. */
+  opacity: 1;
+  transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.helm-dialog-overlay[data-state='closed'] {
+  opacity: 0;
+}
+
+.helm-dialog-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: 20px;
+  z-index: 101;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  /* Subtle scale-in via Radix data attribute. Width set inline by
+     <DialogContent width={...}>. */
+  opacity: 1;
+  transition: opacity var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-emphasis);
+}
+.helm-dialog-content[data-state='closed'] {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.97);
+}
+@media (prefers-reduced-motion: reduce) {
+  .helm-dialog-overlay,
+  .helm-dialog-content {
+    transition: none;
+  }
+}
+
+.helm-dialog-header {
+  margin-bottom: 14px;
+}
+.helm-dialog-title {
+  font-size: var(--text-h2);
+  line-height: var(--leading-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  margin: 0 0 6px;
+}
+.helm-dialog-description {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  color: var(--text-secondary);
+  margin: 0;
+}
+.helm-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 /* helm-design PR 2 — Tooltip content surface. Used by both <Tooltip>
    and <IconButton>. Reduced-motion users get an instant show/hide. */
 .helm-tooltip-content {

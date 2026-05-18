@@ -18,6 +18,7 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import type { ActiveChat, ChannelBinding } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -78,6 +79,10 @@ export function ChatsPage() {
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
   // Phase 62: which chat (if any) currently has the Mirror-to-Lark modal open.
   const [bindModalFor, setBindModalFor] = useState<string | null>(null);
+  // helm-design PR 3: themed ConfirmDialog replaces window.confirm for
+  // Close/Delete. cascade=true means Delete (destructive, cascades);
+  // cascade=false means Close (soft, history kept).
+  const [closeConfirm, setCloseConfirm] = useState<{ id: string; cascade: boolean } | null>(null);
 
   // Phase 79 follow-up: seed selection on first load + when the selected
   // chat disappears (close / delete). Don't auto-jump on every reload —
@@ -142,11 +147,6 @@ export function ChatsPage() {
   }
 
   async function closeChat(hostSessionId: string, cascade: boolean): Promise<void> {
-    const verb = cascade ? 'permanently delete this chat' : 'close this chat';
-    const detail = cascade
-      ? 'The session row, its bindings, and any queued Lark messages will be removed.'
-      : "It'll disappear from this list but the row + bindings stay for history.";
-    if (!window.confirm(`${verb}?\n\n${detail}`)) return;
     setSavingId(hostSessionId);
     setRowError(null);
     try {
@@ -157,6 +157,7 @@ export function ChatsPage() {
       setRowError({ id: hostSessionId, message: msg });
     } finally {
       setSavingId(null);
+      setCloseConfirm(null);
     }
   }
 
@@ -355,13 +356,14 @@ export function ChatsPage() {
           />
 
           {/* Phase 36: chat lifecycle controls. Close is soft (history kept);
-              Delete cascades to channel_bindings + queued messages. Both
-              prompt for confirmation via window.confirm. */}
+              Delete cascades to channel_bindings + queued messages. helm-design
+              PR 3 routes confirmation through ConfirmDialog instead of
+              window.confirm. */}
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <button
               type="button"
               disabled={savingId === chat.id}
-              onClick={() => { void closeChat(chat.id, false); }}
+              onClick={() => setCloseConfirm({ id: chat.id, cascade: false })}
               aria-label={`Close chat ${chat.id}`}
             >
               Close
@@ -370,7 +372,7 @@ export function ChatsPage() {
               type="button"
               variant="danger-outline"
               disabled={savingId === chat.id}
-              onClick={() => { void closeChat(chat.id, true); }}
+              onClick={() => setCloseConfirm({ id: chat.id, cascade: true })}
               aria-label={`Delete chat ${chat.id} and all bindings`}
             >
               Delete
@@ -398,6 +400,21 @@ export function ChatsPage() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={closeConfirm !== null}
+        onOpenChange={(o) => { if (!o) setCloseConfirm(null); }}
+        title={closeConfirm?.cascade ? 'Permanently delete this chat?' : 'Close this chat?'}
+        description={closeConfirm?.cascade
+          ? 'The session row, its bindings, and any queued Lark messages will be removed.'
+          : "It'll disappear from this list but the row + bindings stay for history."}
+        confirmLabel={closeConfirm?.cascade ? 'Delete' : 'Close'}
+        tone={closeConfirm?.cascade ? 'danger' : 'primary'}
+        onConfirm={() => {
+          if (closeConfirm) void closeChat(closeConfirm.id, closeConfirm.cascade);
+        }}
+        busy={savingId !== null && savingId === closeConfirm?.id}
+      />
     </>
   );
 }
@@ -690,20 +707,10 @@ function MirrorToLarkModal({
     : '';
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Mirror chat to Lark"
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
-      }}
-      onClick={cancel}
-    >
-      <div
-        className="helm-card"
-        style={{ width: 'min(560px, 90vw)' }}
-        onClick={(e) => e.stopPropagation()}
+    <Dialog open={true} onOpenChange={(o) => { if (!o) cancel(); }}>
+      <DialogContent
+        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 560)}
+        aria-label="Mirror chat to Lark"
       >
         <div className="row" style={{ marginBottom: 12 }}>
           <div>
@@ -796,7 +803,7 @@ function MirrorToLarkModal({
             </div>
           </>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

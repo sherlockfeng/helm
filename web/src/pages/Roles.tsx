@@ -17,6 +17,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 
 /**
@@ -88,6 +89,9 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
   const [trainKind, setTrainKind] = useState<KnowledgeChunkKind>('other');
   // Phase 73: in-flight drop on a knowledge source.
   const [droppingSourceId, setDroppingSourceId] = useState<string | null>(null);
+  // helm-design PR 3 — pending drop confirmation (was window.confirm).
+  // Holds the source about to be dropped while ConfirmDialog is open.
+  const [dropConfirm, setDropConfirm] = useState<{ sourceId: string; origin: string } | null>(null);
   // Phase 77: per-chunk pending state for the unarchive button.
   const [unarchivingChunkId, setUnarchivingChunkId] = useState<string | null>(null);
   // Phase 78: tab selector for the role detail panel. Three tabs:
@@ -166,12 +170,10 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
     }
   }
 
-  async function dropSource(sourceId: string, origin: string): Promise<void> {
-    if (!window.confirm(
-      `Drop knowledge source "${origin}"?\n\n`
-      + 'This cascade-deletes every chunk derived from this source. '
-      + 'Chunks from other sources are not affected.',
-    )) return;
+  // helm-design PR 3 — dropSource is now ConfirmDialog-driven. The
+  // button below sets `dropConfirm`; this function runs only after the
+  // user clicks the destructive button in the dialog.
+  async function dropSource(sourceId: string): Promise<void> {
     setDroppingSourceId(sourceId);
     try {
       await helmApi.dropKnowledgeSource(sourceId);
@@ -182,6 +184,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       setTrainError(`Drop failed: ${msg}`);
     } finally {
       setDroppingSourceId(null);
+      setDropConfirm(null);
     }
   }
 
@@ -263,7 +266,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
                   type="button"
                   disabled={droppingSourceId === s.id}
                   aria-busy={droppingSourceId === s.id}
-                  onClick={() => { void dropSource(s.id, s.origin); }}
+                  onClick={() => setDropConfirm({ sourceId: s.id, origin: s.origin })}
                   style={{ color: 'var(--danger)' }}
                   title="Drop this source — cascade-deletes its chunks"
                 >
@@ -428,6 +431,18 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
         </Button>
       </div>
       </>)}
+
+      {dropConfirm && (
+        <ConfirmDialog
+          open={true}
+          onOpenChange={(o) => { if (!o) setDropConfirm(null); }}
+          title="Drop knowledge source?"
+          description={`Cascade-deletes every chunk derived from "${dropConfirm.origin}". Chunks from other sources are not affected.`}
+          confirmLabel="Drop"
+          onConfirm={() => dropSource(dropConfirm.sourceId)}
+          busy={droppingSourceId === dropConfirm.sourceId}
+        />
+      )}
     </div>
   );
 }
@@ -835,26 +850,11 @@ function RoleTrainChatModal({
     : 'Train a new role via chat';
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
-        // The page-content rule `.helm-main > * { max-width: ... }` was
-        // clamping this fixed-positioned overlay to the body container
-        // width because the modal renders inside the Roles fragment (which
-        // is a direct child of .helm-main). Explicit override keeps the
-        // overlay viewport-sized so the white card actually centers.
-        maxWidth: 'none',
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="helm-card"
-        style={{ width: 'min(720px, 90vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
-        onClick={(e) => e.stopPropagation()}
+    <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 720)}
+        aria-label={title}
+        style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
       >
         <div className="row" style={{ marginBottom: 12 }}>
           <div>
@@ -946,8 +946,8 @@ function RoleTrainChatModal({
             Send
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

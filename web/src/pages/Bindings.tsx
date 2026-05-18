@@ -16,6 +16,7 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { ConfirmDialog } from '../components/Dialog.js';
 import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -67,6 +68,8 @@ function PendingRow({
   const [hostSessionId, setHostSessionId] = useState<string>(chats[0]?.id ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // helm-design PR 3: replace window.confirm with themed ConfirmDialog.
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   // Phase 40: chats load asynchronously — when this row mounts before
   // chatsQuery resolves, useState locks `hostSessionId` to ''. The native
@@ -98,7 +101,6 @@ function PendingRow({
   // clearing accidental codes / stale entries instead of waiting for the
   // 10-minute TTL. Confirms before deleting since the code is then gone.
   async function cancel(): Promise<void> {
-    if (!window.confirm(`Cancel pending bind code ${pending.code}?\n\nThis discards the code without binding. The user will need to send "@bot bind chat" again to get a new one.`)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -109,6 +111,7 @@ function PendingRow({
       setError(msg);
     } finally {
       setSubmitting(false);
+      setConfirmCancel(false);
     }
   }
 
@@ -142,7 +145,7 @@ function PendingRow({
               type="button"
               variant="danger-outline"
               disabled={submitting}
-              onClick={() => { void cancel(); }}
+              onClick={() => setConfirmCancel(true)}
               aria-label={`Cancel pending bind code ${pending.code}`}
             >
               {submitting ? 'Cancelling…' : 'Cancel'}
@@ -179,7 +182,7 @@ function PendingRow({
               type="button"
               variant="danger-outline"
               disabled={submitting}
-              onClick={() => { void cancel(); }}
+              onClick={() => setConfirmCancel(true)}
               aria-label={`Cancel pending bind code ${pending.code}`}
             >
               Cancel
@@ -188,6 +191,17 @@ function PendingRow({
           {error && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p>}
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmCancel}
+        onOpenChange={setConfirmCancel}
+        title={`Cancel pending bind code ${pending.code}?`}
+        description={'This discards the code without binding. The user will need to send "@bot bind chat" again to get a new one.'}
+        confirmLabel="Cancel code"
+        cancelLabel="Keep"
+        onConfirm={() => { void cancel(); }}
+        busy={submitting}
+      />
     </article>
   );
 }

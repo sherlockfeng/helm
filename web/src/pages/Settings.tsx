@@ -24,6 +24,7 @@ import { CopyButton } from '../components/CopyButton.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
 
 /**
@@ -247,14 +248,18 @@ export function SettingsPage() {
       <Card>
         <label className="helm-form-row">
           <div className="muted">Mode</div>
-          <select
+          <Select
             value={draft.cursor.mode}
-            onChange={(e) => update((c) => { c.cursor.mode = e.target.value as 'local' | 'cloud'; })}
-            style={{ width: 200 }}
+            onValueChange={(v) => update((c) => { c.cursor.mode = v as 'local' | 'cloud'; })}
           >
-            <option value="local">local (use Cursor app auth)</option>
-            <option value="cloud">cloud (CURSOR_API_KEY required)</option>
-          </select>
+            <SelectTrigger style={{ width: 280 }}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="local">local (use Cursor app auth)</SelectItem>
+              <SelectItem value="cloud">cloud (CURSOR_API_KEY required)</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <CursorModelField
           value={draft.cursor.model}
@@ -587,23 +592,27 @@ function CursorModelField({
     <label className="helm-form-row">
       <div className="muted">Model</div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <select
+        <Select
           value={useCustom ? '__custom__' : value}
-          onChange={(e) => {
-            if (e.target.value === '__custom__') {
+          onValueChange={(v) => {
+            if (v === '__custom__') {
               setShowCustom(true);
               return;
             }
             setShowCustom(false);
-            onChange(e.target.value);
+            onChange(v);
           }}
-          style={{ minWidth: 220 }}
         >
-          {KNOWN_CURSOR_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>{m.label}</option>
-          ))}
-          <option value="__custom__">Custom…</option>
-        </select>
+          <SelectTrigger style={{ minWidth: 220 }}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KNOWN_CURSOR_MODELS.map((m) => (
+              <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+            ))}
+            <SelectItem value="__custom__">Custom…</SelectItem>
+          </SelectContent>
+        </Select>
         {useCustom && (
           <input
             type="text"

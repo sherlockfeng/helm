@@ -13,6 +13,7 @@
  */
 
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { Button } from '../components/Button.js';
@@ -29,54 +30,60 @@ export function SubscriptionsPage() {
   const [sourceUrl, setSourceUrl] = useState('');
   const [autoApply, setAutoApply] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // helm-design PR 3: themed ConfirmDialog replaces window.confirm.
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+  // helm-design PR 9: action errors / successes → toasts (was inline <p>).
+  function reportError(e: unknown): void {
+    toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+  }
+
   async function add(): Promise<void> {
-    if (!roleId || !sourceUrl) { setErr('Select role + paste URL'); return; }
-    setBusy(true); setErr(null);
+    if (!roleId || !sourceUrl) { toast.error('Select role + paste URL'); return; }
+    setBusy(true);
     try {
       await helmApi.createSubscription({ roleId, sourceUrl, autoApply });
       setRoleId(''); setSourceUrl(''); setAutoApply(false);
+      toast.success('Subscription added');
       subs.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+      reportError(e);
     } finally {
       setBusy(false);
     }
   }
 
   async function syncNow(id: string): Promise<void> {
-    setBusyId(id); setErr(null);
+    setBusyId(id);
     try {
       await helmApi.syncSubscriptionNow(id);
       subs.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+      reportError(e);
     } finally {
       setBusyId(null);
     }
   }
   async function togglePaused(id: string, currentlyPaused: boolean): Promise<void> {
-    setBusyId(id); setErr(null);
+    setBusyId(id);
     try {
       await helmApi.setSubscriptionPaused(id, !currentlyPaused);
       subs.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+      reportError(e);
     } finally {
       setBusyId(null);
     }
   }
   async function del(id: string): Promise<void> {
-    setBusyId(id); setErr(null);
+    setBusyId(id);
     try {
       await helmApi.deleteSubscription(id);
+      toast.success('Subscription deleted');
       subs.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+      reportError(e);
     } finally {
       setBusyId(null);
       setDeleteConfirm(null);
@@ -133,8 +140,6 @@ export function SubscriptionsPage() {
             {busy ? 'Adding…' : 'Add'}
           </Button>
         </div>
-
-        {err && <p style={{ color: 'var(--danger)' }}>{err}</p>}
 
         {subs.data && subs.data.subscriptions.length === 0 && (
           <p className="muted" style={{ fontSize: 12 }}>No subscriptions yet.</p>

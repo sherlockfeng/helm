@@ -14,13 +14,15 @@
  * status board + escape hatch for manual interventions.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { helmApi, type HarnessReviewView, type HarnessTaskView } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import { StatTile } from '../components/StatTile.js';
 
 export function HarnessPage() {
@@ -29,6 +31,11 @@ export function HarnessPage() {
 
   const tasks = data?.tasks ?? [];
   const grouped = groupByStage(tasks);
+
+  // helm-design PR 9: load errors → toast.
+  useEffect(() => {
+    if (error) toast.error(`Harness: ${error.message}`, { id: 'harness-load' });
+  }, [error]);
 
   // helm-design PR 6: stats reflect Harness stage counts so the user
   // sees the funnel at a glance (scoping → building → done).
@@ -60,8 +67,7 @@ export function HarnessPage() {
         />
       )}
 
-      {loading && <p className="muted">Loading…</p>}
-      {error && <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>}
+      {loading && <CardSkeletonList n={3} />}
 
       {data && tasks.length === 0 && !loading && (
         <EmptyState

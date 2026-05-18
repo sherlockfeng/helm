@@ -20,7 +20,8 @@
  * need no further input from the user. Mirrors Lark's `/allow! <scope>`.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
@@ -28,6 +29,7 @@ import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { PageHeader } from '../components/PageHeader.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import { StatTile } from '../components/StatTile.js';
 import type { PendingApproval } from '../api/types.js';
 
@@ -49,11 +51,16 @@ function shortId(id: string, len = 12): string {
 export function ApprovalsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.approvals());
   const [acting, setActing] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   useEventStream(() => reload(), {
     types: ['approval.pending', 'approval.settled'],
   });
+
+  // helm-design PR 9: load errors surface as toasts. We dedupe per
+  // error.message so a repeated GET failure doesn't spam.
+  useEffect(() => {
+    if (error) toast.error(`Failed to load: ${error.message}`, { id: 'approvals-load' });
+  }, [error]);
 
   const decide = async (
     id: string,
@@ -61,13 +68,13 @@ export function ApprovalsPage() {
     options: { remember?: boolean; scope?: string } = {},
   ): Promise<void> => {
     setActing(id);
-    setActionError(null);
     try {
       await helmApi.decideApproval(id, decision, options);
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
-      setActionError(msg);
+      // helm-design PR 9: action errors → toast.error (was inline <p>).
+      toast.error(msg);
     } finally {
       setActing(null);
     }
@@ -92,9 +99,7 @@ export function ApprovalsPage() {
         </>}
       />
 
-      {loading && <p className="muted">Loading…</p>}
-      {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
-      {actionError && <p className="muted" style={{ color: 'var(--danger)' }}>{actionError}</p>}
+      {loading && <CardSkeletonList n={3} />}
 
       {data && data.approvals.length === 0 && (
         <EmptyState

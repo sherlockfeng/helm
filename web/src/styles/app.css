@@ -730,6 +730,56 @@ code, pre {
   align-items: start;
 }
 
+/* helm-design PR 9: 3-col workspace — rail + main + inspector. The
+   inspector column hosts "knowledge in this chat" + "recent approvals"
+   on Active Chats. Modifier so other pages can opt in later. */
+.helm-rail-layout--with-inspector {
+  grid-template-columns: 240px minmax(0, 1fr) var(--inspector-width, 280px);
+}
+.helm-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  /* Same elevation feel as the rail so the eye reads them as paired
+     side columns; no border so the main pane visually dominates. */
+}
+.helm-inspector-section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  box-shadow: var(--shadow-card);
+}
+.helm-inspector-section h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.helm-inspector-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+@media (max-width: 1100px) {
+  /* Below ~1100 px the inspector folds back into the main column to
+     keep the rail+content widths readable. */
+  .helm-rail-layout--with-inspector {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .helm-inspector {
+    grid-column: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+  }
+  .helm-inspector-section { flex: 1 1 240px; }
+}
+
 .helm-rail {
   display: flex;
   flex-direction: column;
@@ -1357,4 +1407,65 @@ code, pre {
   font-size: 11px;
   color: var(--text-secondary);
   margin-top: 1px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   helm-design PR 9 — Skeleton + Toaster theming.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Skeleton — shimmer block. Single keyframe slides a soft highlight
+   across a tinted base; respects prefers-reduced-motion. */
+.helm-skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--bg-pre) 0%,
+    color-mix(in srgb, var(--hover) 80%, var(--bg-pre)) 50%,
+    var(--bg-pre) 100%
+  );
+  background-size: 200% 100%;
+  animation: helm-skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes helm-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .helm-skeleton { animation: none; }
+}
+
+.helm-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+.helm-skeleton-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Sonner theming — match helm's elevated surface so toasts blend
+   with the rest of the app rather than the library's default. */
+[data-sonner-toaster] {
+  --normal-bg: var(--bg-elev);
+  --normal-text: var(--text);
+  --normal-border: var(--border);
+  --error-bg: var(--bg-elev);
+  --error-text: var(--danger);
+  --error-border: var(--danger);
+  --success-bg: var(--bg-elev);
+  --success-text: var(--success);
+  --success-border: var(--success);
+  --border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+}
+[data-sonner-toast] {
+  box-shadow: var(--shadow-modal);
 }

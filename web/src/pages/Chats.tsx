@@ -18,9 +18,11 @@ import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
+import { toast } from 'sonner';
 import { Card } from '../components/Card.js';
 import { Combobox } from '../components/Combobox.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import type { ActiveChat, ChannelBinding } from '../api/types.js';
@@ -69,6 +71,11 @@ export function ChatsPage() {
   // one on load and follows newly-arrived chats only when nothing is
   // selected (otherwise an SSE-triggered reload would steal focus).
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // helm-design PR 9: load errors → toast (deduped per query).
+  useEffect(() => {
+    if (error) toast.error(`Active chats: ${error.message}`, { id: 'chats-load' });
+  }, [error]);
+
   useEventStream(() => { reload(); reloadBindings(); }, {
     types: [
       'session.started', 'session.closed',
@@ -193,8 +200,7 @@ export function ChatsPage() {
       />
 
 
-      {loading && <p className="muted">Loading…</p>}
-      {error && <p className="muted" style={{ color: 'var(--danger)' }}>Failed to load: {error.message}</p>}
+      {loading && <CardSkeletonList n={3} />}
 
       {data && data.chats.length === 0 && (
         <EmptyState
@@ -209,7 +215,7 @@ export function ChatsPage() {
           selected row. Single-chat install still works fine — the rail
           shows one item and the pane is the same as before. */}
       {data && data.chats.length > 0 && (
-      <div className="helm-rail-layout">
+      <div className="helm-rail-layout helm-rail-layout--with-inspector">
         <aside className="helm-rail" aria-label="Chats list">
           {data.chats.map((chat) => (
             <ChatRailRow
@@ -382,6 +388,65 @@ export function ChatsPage() {
       ))}
 
         </section>
+
+        {/* helm-design PR 9: inspector column. Surfaces the selected
+            chat's metadata as a sticky side panel so the user doesn't
+            lose track of "what's bound to this chat" while scrolling
+            the detail card. Below 1100 px the column folds back into
+            the main flow (handled in app.css). */}
+        <aside className="helm-inspector" aria-label="Chat inspector">
+          {(() => {
+            const sel = data.chats.find((c) => c.id === selectedId);
+            if (!sel) return null;
+            const selBindings = bindings.filter((b) => b.hostSessionId === sel.id);
+            const selRoles = sel.roleIds
+              .map((rid) => roles.find((r) => r.id === rid))
+              .filter((r): r is NonNullable<typeof r> => Boolean(r));
+            return (
+              <>
+                <div className="helm-inspector-section">
+                  <h4>Knowledge sources</h4>
+                  {selRoles.length === 0 ? (
+                    <p className="helm-inspector-empty">
+                      No roles bound. Add one in the detail pane to start
+                      injecting prompts + chunks at session start.
+                    </p>
+                  ) : (
+                    <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {selRoles.map((r) => (
+                        <li key={r.id} style={{ fontSize: 12 }}>
+                          <strong>{r.name}</strong>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {r.isBuiltin ? 'built-in · ' : ''}
+                            {r.chunkCount} chunk{r.chunkCount === 1 ? '' : 's'}
+                            {r.pendingCandidateCount > 0 && (
+                              <> · <span style={{ color: 'var(--warn, #f59e0b)' }}>
+                                {r.pendingCandidateCount} pending
+                              </span></>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="helm-inspector-section">
+                  <h4>Activity</h4>
+                  <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                    <li>Last seen <strong>{formatRelative(sel.lastSeenAt)}</strong></li>
+                    <li>
+                      Queued msgs:{' '}
+                      <strong style={{ color: sel.queuedMessageCount ? 'var(--warn, #f59e0b)' : 'inherit' }}>
+                        {sel.queuedMessageCount ?? 0}
+                      </strong>
+                    </li>
+                    <li>Bindings: <strong>{selBindings.length}</strong></li>
+                  </ul>
+                </div>
+              </>
+            );
+          })()}
+        </aside>
       </div>
       )}
 

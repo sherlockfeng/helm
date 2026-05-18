@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
@@ -19,6 +20,7 @@ import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
@@ -289,6 +291,19 @@ export function BindingsPage() {
     bindingsQuery.reload();
   }, { types: ['binding.created', 'binding.removed'] });
 
+  // helm-design PR 9: load errors → toasts. Dedupe id per query so a
+  // sustained outage doesn't stack a tower of toasts.
+  useEffect(() => {
+    if (pendingQuery.error) {
+      toast.error(`Pending binds: ${pendingQuery.error.message}`, { id: 'bindings-pending' });
+    }
+  }, [pendingQuery.error]);
+  useEffect(() => {
+    if (bindingsQuery.error) {
+      toast.error(`Active bindings: ${bindingsQuery.error.message}`, { id: 'bindings-active' });
+    }
+  }, [bindingsQuery.error]);
+
   // helm-design PR 6: stats summarize the page's two lists.
   const pendingCount = pendingQuery.data?.pending.length ?? 0;
   const activeCount = bindingsQuery.data?.bindings.length ?? 0;
@@ -305,8 +320,7 @@ export function BindingsPage() {
       />
 
       <h3>Pending</h3>
-      {pendingQuery.loading && <p className="muted">Loading…</p>}
-      {pendingQuery.error && <p className="muted" style={{ color: 'var(--danger)' }}>{pendingQuery.error.message}</p>}
+      {pendingQuery.loading && <CardSkeletonList n={2} />}
       {pendingQuery.data && pendingQuery.data.pending.length === 0 && (
         <EmptyState
           title="No pending bind codes."
@@ -327,8 +341,7 @@ export function BindingsPage() {
       ))}
 
       <h3>Active</h3>
-      {bindingsQuery.loading && <p className="muted">Loading…</p>}
-      {bindingsQuery.error && <p className="muted" style={{ color: 'var(--danger)' }}>{bindingsQuery.error.message}</p>}
+      {bindingsQuery.loading && <CardSkeletonList n={2} />}
       {bindingsQuery.data && bindingsQuery.data.bindings.length === 0 && (
         <EmptyState
           title="No active bindings."

@@ -12,7 +12,8 @@
  * for a 10-file set, gated on aria-busy.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
@@ -23,6 +24,7 @@ import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
+import { CardSkeletonList } from '../components/Skeleton.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 
 /**
@@ -684,6 +686,11 @@ export function RolesPage() {
     | { mode: 'update'; roleId: string; name: string }
   >(null);
 
+  // helm-design PR 9: load errors → toast.
+  useEffect(() => {
+    if (error) toast.error(`Roles: ${error.message}`, { id: 'roles-load' });
+  }, [error]);
+
   // helm-design PR 6: stats reflect what's in the roles list. Built-in
   // roles count separately so the user sees at a glance how many of
   // their own roles they've added; pending-candidates rolls up the
@@ -720,8 +727,7 @@ export function RolesPage() {
       <TrainViaCliPanel />
 
 
-      {loading && <p className="muted">Loading…</p>}
-      {error && <p className="muted" style={{ color: 'var(--danger)' }}>{error.message}</p>}
+      {loading && <CardSkeletonList n={4} />}
 
       {data && data.roles.length === 0 && (
         <EmptyState

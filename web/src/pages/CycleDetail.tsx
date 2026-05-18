@@ -15,6 +15,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 import type { BugTaskInput, Task } from '../api/types.js';
 
 const STATUS_TONE: Record<Task['status'], 'ok' | 'warn' | 'err' | ''> = {
@@ -117,9 +118,9 @@ function CompleteCycleAction({
 
   if (!open) {
     return (
-      <button className="primary" onClick={() => setOpen(true)}>
+      <Button variant="primary" onClick={() => setOpen(true)}>
         Complete cycle
-      </button>
+      </Button>
     );
   }
 
@@ -152,14 +153,14 @@ function CompleteCycleAction({
         <p className="muted" style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>
       )}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          className="primary"
+        <Button
+          variant="primary"
           disabled={submitting}
           aria-busy={submitting}
           onClick={() => { void complete(); }}
         >
           {submitting ? 'Completing…' : 'Complete'}
-        </button>
+        </Button>
         <button onClick={() => { setOpen(false); setError(null); }} disabled={submitting}>
           Cancel
         </button>
@@ -256,14 +257,14 @@ function BugTaskAction({
         <p className="muted" style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>
       )}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          className="primary"
+        <Button
+          variant="primary"
           disabled={submitting}
           aria-busy={submitting}
           onClick={() => { void create(); }}
         >
           {submitting ? 'Creating…' : 'Create bug task'}
-        </button>
+        </Button>
         <button onClick={() => { setOpen(false); setError(null); }} disabled={submitting}>
           Cancel
         </button>

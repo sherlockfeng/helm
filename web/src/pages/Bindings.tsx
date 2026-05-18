@@ -15,6 +15,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 import type { ActiveChat, ChannelBinding, PendingBind } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -137,15 +138,15 @@ function PendingRow({
             No active Cursor chats — start one and it'll appear here.
           </p>
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button
+            <Button
               type="button"
-              className="danger-outline"
+              variant="danger-outline"
               disabled={submitting}
               onClick={() => { void cancel(); }}
               aria-label={`Cancel pending bind code ${pending.code}`}
             >
               {submitting ? 'Cancelling…' : 'Cancel'}
-            </button>
+            </Button>
           </div>
         </>
       ) : (
@@ -163,26 +164,26 @@ function PendingRow({
                 </option>
               ))}
             </select>
-            <button
-              className="primary"
+            <Button
+              variant="primary"
               disabled={submitting}
               aria-busy={submitting}
               onClick={() => { void bind(); }}
             >
               {submitting ? 'Binding…' : 'Bind'}
-            </button>
+            </Button>
             {/* Phase 39: cancel a pending code without binding it.
                 Lives next to Bind so the user can dismiss accidental /
                 stale codes inline. */}
-            <button
+            <Button
               type="button"
-              className="danger-outline"
+              variant="danger-outline"
               disabled={submitting}
               onClick={() => { void cancel(); }}
               aria-label={`Cancel pending bind code ${pending.code}`}
             >
               Cancel
-            </button>
+            </Button>
           </div>
           {error && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p>}
         </>
@@ -242,15 +243,15 @@ function ActiveRow({
             </div>
           )}
         </div>
-        <button
-          className="danger-outline"
+        <Button
+          variant="danger-outline"
           disabled={submitting}
           aria-busy={submitting}
           aria-label={`Unbind ${binding.channel} binding ${binding.id}`}
           onClick={() => { void unbind(); }}
         >
           {submitting ? 'Unbinding…' : 'Unbind'}
-        </button>
+        </Button>
       </div>
       {error && <p className="muted" style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</p>}
     </article>

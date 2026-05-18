@@ -25,6 +25,7 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { Button } from '../components/Button.js';
 import type { PendingApproval } from '../api/types.js';
 
 function timeUntil(iso: string): string {
@@ -188,22 +189,22 @@ function ApprovalCard({
       </div>
 
       <div className="actions">
-        <button
-          className="primary"
+        <Button
+          variant="primary"
           disabled={acting}
           aria-busy={acting}
           onClick={() => onAllow(remember ? { remember: true, ...(scope.trim() ? { scope: scope.trim() } : {}) } : {})}
         >
           {remember ? 'Allow & remember' : 'Allow'}
-        </button>
-        <button
-          className="danger-outline"
+        </Button>
+        <Button
+          variant="danger-outline"
           disabled={acting}
           aria-busy={acting}
           onClick={onDeny}
         >
           Deny
-        </button>
+        </Button>
       </div>
     </article>
   );

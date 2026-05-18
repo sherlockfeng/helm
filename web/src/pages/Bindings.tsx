@@ -166,7 +166,15 @@ function PendingRow({
               onValueChange={setHostSessionId}
             >
               <SelectTrigger aria-label="Cursor chat to bind to" style={{ flex: 1 }}>
-                <SelectValue />
+                {/* helm-design hotfix: compute display text from current
+                    value; Radix's auto-tracking lags for async items. */}
+                <SelectValue>
+                  {(() => {
+                    const c = chats.find((x) => x.id === hostSessionId);
+                    if (!c) return undefined;
+                    return `${chatLabel(c, c.id)}${c.cwd && c.firstPrompt ? ` — ${c.cwd}` : ''} (${c.id.slice(0, 8)})`;
+                  })()}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {chats.map((c) => (

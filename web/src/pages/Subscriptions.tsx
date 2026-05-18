@@ -113,7 +113,18 @@ export function SubscriptionsPage() {
         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
           <Select value={roleId} onValueChange={setRoleId}>
             <SelectTrigger style={{ minWidth: 180 }}>
-              <SelectValue placeholder="— role —" />
+              {/* helm-design hotfix: Radix Select's <SelectValue> tracks
+                  the selected item's ItemText via an internal registry
+                  that doesn't refresh reliably when `value` changes
+                  against async-loaded items (the role list comes from
+                  /api/roles). Compute the display text from the current
+                  roleId ourselves — children override Radix's default
+                  rendering and re-evaluate on every render. */}
+              <SelectValue placeholder="— role —">
+                {roleId
+                  ? ((roles.data?.roles ?? []).find((r) => r.id === roleId)?.name ?? roleId)
+                  : undefined}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {(roles.data?.roles ?? []).map((r) => (
@@ -152,7 +163,14 @@ export function SubscriptionsPage() {
                 border: '1px solid var(--border)', borderRadius: 4,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <strong>{s.roleId}</strong>
+                  {/* helm-design hotfix: show the role's display name
+                      instead of the raw role_id (e.g. "Developer Agent"
+                      instead of "developer"). Fall back to the id when
+                      the roles list hasn't loaded yet or the role was
+                      deleted out from under this subscription. */}
+                  <strong>
+                    {(roles.data?.roles ?? []).find((r) => r.id === s.roleId)?.name ?? s.roleId}
+                  </strong>
                   <span className="muted" style={{ fontSize: 11 }}>
                     · {s.sourceType}://… · {s.status}
                   </span>

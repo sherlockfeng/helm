@@ -2,7 +2,12 @@
  * Helm renderer root — sets up the router; routes mount pages inside Layout.
  */
 
-import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+// helm-design hotfix: HashRouter instead of BrowserRouter. In Electron's
+// file:// context, BrowserRouter rewrites pathname (e.g. /approvals) into
+// the file:// URL — reload then tries to `file:///approvals` and 404s
+// (white screen). HashRouter keeps the route in the URL fragment so the
+// underlying file load is always index.html.
+import { HashRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { Layout } from './components/Layout.js';
 import { ApprovalsPage } from './pages/Approvals.js';

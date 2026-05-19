@@ -52,6 +52,7 @@ import {
   PluginRegistry,
 } from '../plugins/index.js';
 import { runSubscriptionSync } from '../subscriptions/sync.js';
+import { createMirrorRunner } from '../mirrors/runner.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
@@ -328,6 +329,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     void runSubscriptionSyncWithLogging();
   }, SUBSCRIPTION_CRON_MS);
   subscriptionCron.unref?.();
+
+  // Phase 80 (PR B): mirror runner — debounces role.version bumps and
+  // auto-pushes the .helmrole bundle to the configured remote URL via
+  // the matching storage plugin. Mutation paths fire
+  // `fireMirrorSync(roleId)` (via setMirrorSyncTrigger registered by
+  // start() below); the runner coalesces bursts within debounceMs and
+  // runs a periodic catch-up sweep for missed events.
+  const mirrorLog = deps.loggers.module('mirrors.runner');
+  const mirrorRunner = createMirrorRunner({
+    db: deps.db,
+    pluginRegistry,
+    // Same source as the export endpoint stamps onto bundles — keeps
+    // pushed + ad-hoc-exported bundles indistinguishable.
+    helmVersion: process.env['npm_package_version'] ?? 'unknown',
+    logger: mirrorLog,
+  });
 
   // Knowledge — LocalRolesProvider + RequirementsArchiveProvider always on
   // (canHandle gates per-session — no `requirements/` dir = quietly skipped).
@@ -1183,6 +1200,11 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       pluginRegistry,
       runSubscriptionSyncOnce: runSubscriptionSyncWithLogging,
       helmVersion: process.env['npm_package_version'] ?? 'unknown',
+      // Phase 80 (PR B): the HTTP API surfaces the runner for the manual
+      // "Push now" endpoint. Other endpoints (GET/PUT/DELETE mirror)
+      // touch the role_mirrors repo directly — no need to go through
+      // the runner. Only the push action does.
+      mirrorRunner,
     },
     { port: deps.httpPort ?? deps.config?.server?.port ?? 0 },
   );
@@ -1258,6 +1280,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       });
       // Catch up on any overdue subscriptions immediately.
       void runSubscriptionSyncWithLogging();
+      // Phase 80 (PR B): start the mirror runner. Installs the trigger
+      // hook (setMirrorSyncTrigger) + starts the catch-up sweep
+      // interval. Boot-time sweep runs after the first interval tick;
+      // could be moved to here for an immediate catch-up if missed
+      // pushes during downtime become a real concern.
+      mirrorRunner.start();
       started = true;
       log.info('boot_complete');
     },
@@ -1270,6 +1298,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // schedule new sweep work onto a tearing-down DB connection.
       clearInterval(lifecycleCron);
       setLifecycleSweepTrigger(null);
+      // Phase 80 (PR B): stop the mirror runner BEFORE the plugins
+      // shutdown. Unhooks the setMirrorSyncTrigger callback + cancels
+      // pending debounce timers; in-flight uploads will reject when
+      // the plugin's connection closes (last_error gets written;
+      // next boot's catch-up retries).
+      mirrorRunner.stop();
       // Phase 79: stop the subscription cron + shutdown loaded plugins.
       // Order matters: clear the cron first so a tick doesn't fire while
       // plugins are tearing down (TOS SDK destroy is not idempotent).

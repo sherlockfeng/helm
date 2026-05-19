@@ -566,6 +566,41 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE roles ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
     `,
   },
+  {
+    version: 18,
+    description:
+      'Role mirror config (Phase 80 / helm-design PR B). One row per role'
+      + ' that should auto-publish its .helmrole bundle to a remote URL on'
+      + ' every meaningful content change.'
+      + ' Lifecycle: each mutation path bumps roles.version (PR A); the in-'
+      + ' process MirrorRunner debounces N seconds then packs + uploads via the'
+      + ' matching storage plugin and writes last_pushed_version + last_pushed_at.'
+      + ' A periodic catch-up sweep rescues missed pushes (process restart while'
+      + ' a debounce was in flight, plugin/network failure, etc.) by selecting'
+      + ' mirrors where last_pushed_version < roles.version.'
+      + ' UNIQUE(role_id) enforces "at most one mirror per role" — multi-target'
+      + ' fan-out is a deliberate cut (config gets complicated; v1 keeps it'
+      + ' simple). Use target_url with a scheme registered in the plugin registry.',
+    up: `
+      CREATE TABLE IF NOT EXISTS role_mirrors (
+        role_id              TEXT PRIMARY KEY REFERENCES roles(id) ON DELETE CASCADE,
+        target_url           TEXT NOT NULL,
+        enabled              INTEGER NOT NULL DEFAULT 1,
+        last_pushed_version  INTEGER,
+        last_pushed_etag     TEXT,
+        last_pushed_at       TEXT,
+        last_error           TEXT,
+        created_at           TEXT NOT NULL,
+        updated_at           TEXT NOT NULL
+      );
+      -- Catch-up sweep query: WHERE enabled AND (last_pushed_version IS NULL OR < roles.version).
+      -- Index on (enabled, last_pushed_version) keeps the sweep O(N enabled-mirrors)
+      -- instead of full-table-scan, though for v1's expected scale (< 100 mirrors)
+      -- this is mostly defensive.
+      CREATE INDEX IF NOT EXISTS idx_role_mirrors_enabled_version
+        ON role_mirrors(enabled, last_pushed_version);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

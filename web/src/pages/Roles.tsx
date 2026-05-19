@@ -205,6 +205,9 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       <div className="label">System prompt</div>
       <pre style={{ marginBottom: 14 }}>{role.systemPrompt}</pre>
 
+      {/* helm-design PR B: remote mirror config for auto-push. */}
+      <MirrorPanel roleId={roleId} roleVersion={role.version} />
+
       {/* Phase 78 / helm-design PR 8: segmented control over Chunks
           (default, holds sources + chunks + train form) vs Candidates
           (knowledge-capture pending review). Radix Tabs gives keyboard
@@ -980,6 +983,145 @@ function RoleTrainChatModal({
  * the role lands here. This panel surfaces the one-time setup commands so
  * the user doesn't have to memorize URLs or hand-edit JSON.
  */
+
+// ─── Mirror panel — auto-push to remote (Phase 80 / helm-design PR B) ──
+
+/**
+ * Per-role config for "auto-publish my .helmrole bundle to <URL> on every
+ * edit." The backend runner debounces a few seconds + has a catch-up
+ * sweep, so saving the URL is enough — no need to push manually after
+ * every edit. The "Push now" button bypasses the debounce.
+ */
+function MirrorPanel({ roleId, roleVersion }: { roleId: string; roleVersion: number }) {
+  const mirror = useApi(() => helmApi.getRoleMirror(roleId), [roleId]);
+  const [targetUrl, setTargetUrl] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  // Seed the form once mirror data arrives.
+  useEffect(() => {
+    if (mirror.data) {
+      setTargetUrl(mirror.data.targetUrl);
+      setEnabled(mirror.data.enabled);
+    } else if (mirror.data === null) {
+      setTargetUrl('');
+      setEnabled(true);
+    }
+  }, [mirror.data]);
+
+  async function save(): Promise<void> {
+    if (!targetUrl.trim()) { toast.error('Target URL is required'); return; }
+    setSaving(true);
+    try {
+      await helmApi.upsertRoleMirror(roleId, { targetUrl: targetUrl.trim(), enabled });
+      toast.success('Mirror saved — push will fire on next edit');
+      mirror.reload();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function pushNow(): Promise<void> {
+    setPushing(true);
+    try {
+      const r = await helmApi.pushRoleMirror(roleId);
+      toast.success(`Pushed v${r.pushedVersion ?? '?'}`);
+      mirror.reload();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setPushing(false);
+    }
+  }
+
+  async function remove(): Promise<void> {
+    setSaving(true);
+    try {
+      await helmApi.deleteRoleMirror(roleId);
+      toast.success('Mirror removed');
+      mirror.reload();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSaving(false);
+      setConfirmRemove(false);
+    }
+  }
+
+  const m = mirror.data;
+  const status: { label: string; tone: string } = (() => {
+    if (!m) return { label: 'Not configured', tone: 'var(--text-secondary)' };
+    if (!m.enabled) return { label: 'Disabled', tone: 'var(--text-secondary)' };
+    if (m.lastError) return { label: `Error: ${m.lastError}`, tone: 'var(--danger)' };
+    if (m.lastPushedVersion === undefined) return { label: 'Never pushed (will fire on next edit)', tone: 'var(--warn, #f59e0b)' };
+    if (m.lastPushedVersion < roleVersion) {
+      return { label: `Behind — last pushed v${m.lastPushedVersion}, role at v${roleVersion}`, tone: 'var(--warn, #f59e0b)' };
+    }
+    return { label: `Synced (v${m.lastPushedVersion}${m.lastPushedAt ? ` · ${new Date(m.lastPushedAt).toLocaleString()}` : ''})`, tone: 'var(--success)' };
+  })();
+
+  return (
+    <div style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>Remote mirror</div>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+        Auto-push this role's <code>.helmrole</code> bundle to a remote URL whenever it changes.
+        Requires a storage plugin matching the URL scheme (see Plugins page).
+      </p>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <input
+          type="text"
+          value={targetUrl}
+          placeholder="tos://bucket — helm appends /helm-role/<id>.helmrole"
+          onChange={(e) => setTargetUrl(e.target.value)}
+          disabled={saving || pushing}
+          style={{ flex: 1, fontFamily: 'inherit', fontSize: 13, padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
+        />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            disabled={saving || pushing}
+          />
+          enabled
+        </label>
+        <Button variant="primary" onClick={() => { void save(); }} disabled={saving || pushing}>
+          {saving ? 'Saving…' : (m ? 'Update' : 'Save')}
+        </Button>
+        {m && (
+          <>
+            <Button variant="default" onClick={() => { void pushNow(); }} disabled={saving || pushing || !m.enabled}>
+              {pushing ? 'Pushing…' : 'Push now'}
+            </Button>
+            <Button variant="danger-outline" onClick={() => setConfirmRemove(true)} disabled={saving || pushing}>
+              Remove
+            </Button>
+          </>
+        )}
+      </div>
+
+      <div className="muted" style={{ fontSize: 11, color: status.tone }}>
+        {status.label}
+      </div>
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title="Remove this mirror?"
+        description="The remote .helmrole file is left in place; only the auto-push config is cleared. Edits won't be pushed until you re-add the mirror."
+        confirmLabel="Remove"
+        onConfirm={() => { void remove(); }}
+        busy={saving}
+      />
+    </div>
+  );
+}
+
 function TrainViaCliPanel() {
   const HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
   const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 role';

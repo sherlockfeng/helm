@@ -21,6 +21,7 @@ import type {
   Requirement,
   Role,
   RoleChunk,
+  RoleMirror,
   RoleSummary,
   Task,
   TrainRoleInput,
@@ -312,6 +313,33 @@ export const helmApi = {
       ? request<{ roleId: string; uploadedTo: string; etag: string; bundleVersion: number; contentHash: string }>('POST', path)
       : request<unknown>('POST', path); // raw bundle JSON
   },
+
+  // ── Role mirrors (Phase 80 / helm-design PR B) ────────────────────────
+  // Auto-push a role's .helmrole bundle to a remote URL on every
+  // version bump. The mirror runner debounces a few seconds + has a
+  // catch-up sweep, so the UI fire-and-forget pattern is safe.
+
+  /** Returns the role's mirror config, or null when none is set. */
+  getRoleMirror: async (roleId: string): Promise<RoleMirror | null> => {
+    try {
+      const r = await request<{ mirror: RoleMirror }>('GET', `/api/roles/${encodeURIComponent(roleId)}/mirror`);
+      return r.mirror;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  },
+  /** Create or update the role's mirror config. PUT is idempotent. */
+  upsertRoleMirror: (roleId: string, input: { targetUrl: string; enabled?: boolean }) =>
+    request<{ mirror: RoleMirror }>('PUT', `/api/roles/${encodeURIComponent(roleId)}/mirror`, input),
+  /** Remove the mirror entirely. No-op if not configured (404). */
+  deleteRoleMirror: (roleId: string) =>
+    request<{ roleId: string; deleted: true }>('DELETE', `/api/roles/${encodeURIComponent(roleId)}/mirror`),
+  /** Bypass debounce + push immediately. */
+  pushRoleMirror: (roleId: string) =>
+    request<{ roleId: string; pushedVersion: number | null; etag: string | null }>(
+      'POST', `/api/roles/${encodeURIComponent(roleId)}/mirror/push`,
+    ),
 
   // Phase 60b: conversational role training. Each turn POSTs the full
   // transcript; helm spawns `claude -p` with helm's MCP injected so the

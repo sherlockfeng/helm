@@ -8,6 +8,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { fireMirrorSync } from '../mirrors/trigger.js';
 import {
   bumpRoleVersion,
   deleteChunksForRole,
@@ -214,6 +215,10 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
   // default — so consumers can tell "this is the initial version"
   // apart from "the role has been edited at least once".
   if (existing) bumpRoleVersion(db, input.roleId);
+  // PR B: signal the MirrorRunner. We fire for new roles too — if a
+  // user configures the mirror first and trains the role later, the
+  // first push will go out.
+  fireMirrorSync(input.roleId);
 
   const refreshed = getRoleRow(db, input.roleId);
   if (!refreshed) throw new Error(`trainRole: role disappeared after upsert: ${input.roleId}`);
@@ -432,6 +437,8 @@ export async function updateRole(
   // point we've either changed name/prompt or added chunks (chunksAdded
   // >= 0; if zero we still bumped name/prompt if they were passed).
   bumpRoleVersion(db, existing.id);
+  // PR B: signal the MirrorRunner.
+  fireMirrorSync(existing.id);
 
   const refreshed = getRoleRow(db, existing.id);
   if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);

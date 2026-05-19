@@ -90,12 +90,38 @@ export function SubscriptionsPage() {
     }
   }
 
+  // Phase 80 (PR C): conflict resolution. `use_remote` re-fetches the
+  // bundle and writes candidates regardless of autoApply (a divergence
+  // deserves human review). `keep_local` re-fetches just to learn the
+  // current remote version and bumps last_pulled_version without
+  // applying — explicit "I know remote changed, I don't want it".
+  async function resolveConflict(id: string, strategy: 'use_remote' | 'keep_local'): Promise<void> {
+    setBusyId(id);
+    try {
+      const r = await helmApi.resolveSubscriptionConflict(id, strategy);
+      if (strategy === 'use_remote') {
+        const n = r.candidatesCreated ?? 0;
+        toast.success(n > 0 ? `Pulled remote — ${n} new candidates for review` : 'Pulled remote — no new chunks');
+      } else {
+        toast.success(`Marked resolved — local kept (acked remote v${r.pulledVersion ?? '?'})`);
+      }
+      subs.reload();
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   // helm-design PR 6: stats summarize what's been wired up. Errored
   // count flags subscriptions whose last sync failed so the user can
   // jump straight to the broken one.
   const allSubs = subs.data?.subscriptions ?? [];
-  const erroredCount = allSubs.filter((s) => s.lastError).length;
+  // PR C: errored counts only rows with status='error' (lastError is
+  // also set on 'conflict' rows but those have their own tile).
+  const erroredCount = allSubs.filter((s) => s.status === 'error').length;
   const pausedCount = allSubs.filter((s) => s.status === 'paused').length;
+  const conflictCount = allSubs.filter((s) => s.status === 'conflict').length;
 
   return (
     <>
@@ -103,8 +129,9 @@ export function SubscriptionsPage() {
         title="Subscriptions"
         subtitle={<>Subscribe a role to a remote <code>.helmrole</code> bundle URL. Cron polls every 15 min; matching plugin handles the transport. Diff lands as candidates in the Roles → Candidates tab unless <em>auto-apply</em> is on (use sparingly — trusted sources only).</>}
         stats={<>
-          <StatTile label="Active" value={allSubs.length - pausedCount} tone={allSubs.length - pausedCount > 0 ? 'live' : 'muted'} />
+          <StatTile label="Active" value={allSubs.length - pausedCount - conflictCount - erroredCount} tone={allSubs.length - pausedCount - conflictCount - erroredCount > 0 ? 'live' : 'muted'} />
           <StatTile label="Paused" value={pausedCount} tone={pausedCount > 0 ? 'info' : 'muted'} />
+          <StatTile label="Conflict" value={conflictCount} tone={conflictCount > 0 ? 'warn' : 'muted'} />
           <StatTile label="Errored" value={erroredCount} tone={erroredCount > 0 ? 'warn' : 'muted'} />
         </>}
       />
@@ -161,6 +188,10 @@ export function SubscriptionsPage() {
               <li key={s.id} style={{
                 marginBottom: 8, padding: 8,
                 border: '1px solid var(--border)', borderRadius: 4,
+                // PR C: tint the row when in conflict so it stands out
+                // even before the user reads the status text.
+                background: s.status === 'conflict' ? 'color-mix(in srgb, var(--warn, #f59e0b) 6%, var(--bg-elev))' : undefined,
+                borderColor: s.status === 'conflict' ? 'var(--warn, #f59e0b)' : 'var(--border)',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {/* helm-design hotfix: show the role's display name
@@ -172,28 +203,61 @@ export function SubscriptionsPage() {
                     {(roles.data?.roles ?? []).find((r) => r.id === s.roleId)?.name ?? s.roleId}
                   </strong>
                   <span className="muted" style={{ fontSize: 11 }}>
-                    · {s.sourceType}://… · {s.status}
+                    · {s.sourceType}://… · <span style={{
+                      color: s.status === 'conflict' ? 'var(--warn, #f59e0b)' : undefined,
+                      fontWeight: s.status === 'conflict' ? 600 : 'normal',
+                    }}>{s.status}</span>
                   </span>
                   <span style={{ flex: 1 }} />
-                  <button
-                    disabled={busyId === s.id}
-                    onClick={() => { void syncNow(s.id); }}
-                  >
-                    {busyId === s.id ? '…' : 'Sync now'}
-                  </button>
-                  <button
-                    disabled={busyId === s.id}
-                    onClick={() => { void togglePaused(s.id, s.status === 'paused'); }}
-                  >
-                    {s.status === 'paused' ? 'Resume' : 'Pause'}
-                  </button>
-                  <button
-                    disabled={busyId === s.id}
-                    onClick={() => setDeleteConfirm(s.id)}
-                    style={{ color: 'var(--danger)' }}
-                  >
-                    Delete
-                  </button>
+                  {s.status === 'conflict' ? (
+                    // PR C: replace the standard action row with resolve buttons
+                    // when in conflict. Pause/Delete still useful as escape hatches.
+                    <>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => { void resolveConflict(s.id, 'use_remote'); }}
+                        title="Re-fetch remote and write its chunks as candidates for review."
+                      >
+                        Use remote
+                      </button>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => { void resolveConflict(s.id, 'keep_local'); }}
+                        title="Acknowledge remote without applying. Local stays as-is."
+                      >
+                        Keep local
+                      </button>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => setDeleteConfirm(s.id)}
+                        style={{ color: 'var(--danger)' }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => { void syncNow(s.id); }}
+                      >
+                        {busyId === s.id ? '…' : 'Sync now'}
+                      </button>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => { void togglePaused(s.id, s.status === 'paused'); }}
+                      >
+                        {s.status === 'paused' ? 'Resume' : 'Pause'}
+                      </button>
+                      <button
+                        disabled={busyId === s.id}
+                        onClick={() => setDeleteConfirm(s.id)}
+                        style={{ color: 'var(--danger)' }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div className="muted" style={{ fontSize: 11, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   <code>{s.sourceUrl}</code>
@@ -201,8 +265,13 @@ export function SubscriptionsPage() {
                 <div className="muted" style={{ fontSize: 11 }}>
                   {s.autoApply ? 'auto-apply on · ' : ''}
                   {s.lastSyncAt ? `synced ${s.lastSyncAt}` : 'never synced'}
+                  {s.lastPulledVersion !== undefined && (
+                    <> · last pulled v{s.lastPulledVersion}</>
+                  )}
                   {s.lastError && (
-                    <span style={{ color: 'var(--danger)' }}> · error: {s.lastError}</span>
+                    <span style={{ color: s.status === 'conflict' ? 'var(--warn, #f59e0b)' : 'var(--danger)' }}>
+                      {' '}· {s.status === 'conflict' ? '' : 'error: '}{s.lastError}
+                    </span>
                   )}
                 </div>
               </li>

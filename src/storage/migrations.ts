@@ -601,6 +601,28 @@ export const MIGRATIONS: Migration[] = [
         ON role_mirrors(enabled, last_pushed_version);
     `,
   },
+  {
+    version: 19,
+    description:
+      'Version-aware subscription pull (Phase 80 / helm-design PR C).'
+      + ' Adds `role_subscriptions.last_pulled_version` to track what'
+      + ' bundle version was successfully applied last. Combined with'
+      + ' PR A\'s `roles.version` + PR B\'s bundle.roleVersion, lets the'
+      + ' sync engine detect "remote and local both diverged from last'
+      + ' sync" conflicts and surface them via a new `conflict` status'
+      + ' instead of silently overwriting local edits.'
+      + ' 4-case logic in syncOne:'
+      + '   remote==pulled, local==pulled → noop (caught by contentHash)'
+      + '   remote>pulled, local==pulled  → fast-forward apply'
+      + '   remote==pulled, local>pulled  → noop (PR B push handles inverse)'
+      + '   remote>pulled, local>pulled   → CONFLICT, status=conflict, no apply'
+      + ' Existing rows back-migrate with last_pulled_version=NULL — first'
+      + ' subsequent sync apply still goes through (no conflict possible'
+      + ' until we have a baseline).',
+    up: `
+      ALTER TABLE role_subscriptions ADD COLUMN last_pulled_version INTEGER;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

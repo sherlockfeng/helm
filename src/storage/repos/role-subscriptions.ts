@@ -24,6 +24,7 @@ function rowToSubscription(row: Record<string, unknown>): RoleSubscription {
   if (row['last_content_hash'] != null) s.lastContentHash = String(row['last_content_hash']);
   if (row['last_sync_at'] != null) s.lastSyncAt = String(row['last_sync_at']);
   if (row['last_error'] != null) s.lastError = String(row['last_error']);
+  if (row['last_pulled_version'] != null) s.lastPulledVersion = Number(row['last_pulled_version']);
   return s;
 }
 
@@ -86,21 +87,62 @@ export function listDueForSync(db: Database.Database, now: Date): RoleSubscripti
   `).all(nowIso) as Record<string, unknown>[]).map(rowToSubscription);
 }
 
-/** Update after a successful HEAD/GET cycle. */
+/**
+ * Update after a successful HEAD/GET cycle.
+ *
+ * Phase 80 (PR C): when an apply landed, callers pass `pulledVersion`
+ * to advance `last_pulled_version`. When the bundle didn't ship a
+ * `roleVersion` (pre-PR-A peer), callers omit it and the column stays
+ * at its previous value — the next sync will re-evaluate the change
+ * detection via contentHash.
+ */
 export function markSubscriptionSynced(
   db: Database.Database,
   id: string,
-  fields: { etag?: string; contentHash?: string; at: string },
+  fields: { etag?: string; contentHash?: string; pulledVersion?: number; at: string },
 ): void {
   db.prepare(`
     UPDATE role_subscriptions
     SET last_etag = COALESCE(?, last_etag),
         last_content_hash = COALESCE(?, last_content_hash),
+        last_pulled_version = COALESCE(?, last_pulled_version),
         last_sync_at = ?,
         last_error = NULL,
         status = 'active'
     WHERE id = ?
-  `).run(fields.etag ?? null, fields.contentHash ?? null, fields.at, id);
+  `).run(
+    fields.etag ?? null,
+    fields.contentHash ?? null,
+    fields.pulledVersion ?? null,
+    fields.at,
+    id,
+  );
+}
+
+/**
+ * Phase 80 (PR C): the sync engine detected that both the local role
+ * and the remote bundle moved past `last_pulled_version`. Mark the
+ * subscription as conflicted so the cron stops re-trying (the user
+ * must resolve via /resolve-conflict). `lastError` carries a
+ * human-readable summary that the UI surfaces.
+ *
+ * We deliberately do NOT advance `last_pulled_version` here: the
+ * resolve endpoint either applies the latest remote (setting
+ * last_pulled_version = remoteVer) or keeps local (resolve endpoint
+ * re-fetches HEAD to learn the current remote version and copies it
+ * in). Storing it now would lock the user into a stale view.
+ */
+export function markSubscriptionConflict(
+  db: Database.Database,
+  id: string,
+  error: string,
+  at: string,
+): void {
+  db.prepare(`
+    UPDATE role_subscriptions
+    SET status = 'conflict', last_error = ?, last_sync_at = ?
+    WHERE id = ?
+  `).run(error, at, id);
 }
 
 /** Mark this subscription as failing. UI shows `lastError`. */

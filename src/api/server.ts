@@ -288,6 +288,23 @@ export interface HttpApiDeps {
    */
   runSubscriptionSyncOnce?: (subscriptionId?: string) => Promise<void>;
   /**
+   * Phase 80 (PR C): resolve a `status='conflict'` subscription via one
+   * of the two strategies. Re-fetches the bundle before applying
+   * (use_remote) or marking ack'd (keep_local). When undefined, the
+   * resolve endpoint returns 501.
+   */
+  resolveSubscriptionConflictOnce?: (
+    subscriptionId: string,
+    strategy: 'use_remote' | 'keep_local',
+  ) => Promise<{
+    subscriptionId: string;
+    strategy: 'use_remote' | 'keep_local';
+    ok: boolean;
+    pulledVersion?: number;
+    candidatesCreated?: number;
+    error?: string;
+  }>;
+  /**
    * Phase 79: stamp on the role bundle export. helm's own version (from
    * package.json) — purely for cross-version debugging. Defaults to
    * `"unknown"` when omitted.
@@ -897,6 +914,46 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           await deps.runSubscriptionSyncOnce(subId);
           const fresh = getSubscription(deps.db, subId);
           return send(res, 200, { subscription: fresh });
+        } catch (err) { return internalError(res, err); }
+      }
+
+      // Phase 80 (PR C): conflict resolution.
+      //
+      // POST /api/role-subscriptions/:id/resolve-conflict
+      //   body: { strategy: 'use_remote' | 'keep_local' }
+      //
+      // use_remote → re-fetch + apply (writes candidates) + lastPulled = remote
+      // keep_local → re-fetch (to learn current remote version) + lastPulled = remote, no apply
+      const subResolveMatch = url.pathname.match(/^\/api\/role-subscriptions\/([^/]+)\/resolve-conflict$/);
+      if (subResolveMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.resolveSubscriptionConflictOnce) {
+          return send(res, 501, { error: 'not_implemented', message: 'conflict resolution not wired' });
+        }
+        const subId = subResolveMatch[1]!;
+        const existing = getSubscription(deps.db, subId);
+        if (!existing) return notFound(res);
+        if (existing.status !== 'conflict') {
+          return send(res, 409, { error: 'not_in_conflict', message: `subscription status is '${existing.status}', not 'conflict'` });
+        }
+        let body: { strategy?: unknown };
+        try { body = JSON.parse(ctx.body || '{}'); } catch { return badRequest(res, 'invalid JSON'); }
+        const strategy = body.strategy;
+        if (strategy !== 'use_remote' && strategy !== 'keep_local') {
+          return badRequest(res, 'strategy must be "use_remote" or "keep_local"');
+        }
+        try {
+          const result = await deps.resolveSubscriptionConflictOnce(subId, strategy);
+          if (!result.ok) {
+            return send(res, 502, { error: 'resolve_failed', message: result.error ?? 'resolve failed' });
+          }
+          const fresh = getSubscription(deps.db, subId);
+          return send(res, 200, {
+            subscription: fresh,
+            strategy,
+            pulledVersion: result.pulledVersion ?? null,
+            candidatesCreated: result.candidatesCreated ?? null,
+          });
         } catch (err) { return internalError(res, err); }
       }
 

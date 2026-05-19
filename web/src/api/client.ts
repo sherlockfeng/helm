@@ -303,6 +303,29 @@ export const helmApi = {
     request<{ id: string; deleted: boolean; chunksAffected: number }>(
       'DELETE', `/api/role-subscriptions/${encodeURIComponent(subscriptionId)}`,
     ),
+  /** Resolve a `status='conflict'` subscription. Phase 80 / PR C.
+   *
+   *  - `use_remote` → re-fetches the bundle, applies it (writes new
+   *    chunks as subscription-provenance candidates regardless of
+   *    autoApply — a divergence deserves explicit review), and
+   *    advances `last_pulled_version`.
+   *  - `keep_local` → re-fetches just to learn the current remote
+   *    version, then advances `last_pulled_version` without applying.
+   *    User explicitly ignored the remote update.
+   */
+  resolveSubscriptionConflict: (
+    subscriptionId: string,
+    strategy: 'use_remote' | 'keep_local',
+  ) =>
+    request<{
+      subscription: import('./types.js').RoleSubscription;
+      strategy: 'use_remote' | 'keep_local';
+      pulledVersion: number | null;
+      candidatesCreated: number | null;
+    }>(
+      'POST', `/api/role-subscriptions/${encodeURIComponent(subscriptionId)}/resolve-conflict`,
+      { strategy },
+    ),
   /** Export a role as a `.helmrole` bundle. Returns the bundle JSON
    *  when `uploadTo` is omitted; uploads through the matching storage
    *  plugin when provided. */

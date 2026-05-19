@@ -225,7 +225,13 @@ export interface KnowledgeCandidate {
  * autoApply=true means "trusted source": skip the candidates queue,
  * write chunks directly. Use sparingly; almost always false.
  */
-export type SubscriptionStatus = 'active' | 'paused' | 'error';
+/**
+ * Phase 80 (PR C): `conflict` added. Set when the sync engine detects
+ * that local and remote both moved past `last_pulled_version` —
+ * applying would clobber local edits. User resolves via the
+ * `/resolve-conflict` endpoint (use_remote / keep_local).
+ */
+export type SubscriptionStatus = 'active' | 'paused' | 'error' | 'conflict';
 
 export interface RoleSubscription {
   id: string;
@@ -241,11 +247,17 @@ export interface RoleSubscription {
    * a matching content hash means "no change". */
   lastContentHash?: string;
   lastSyncAt?: string;
-  /** Populated when status === 'error'; cleared on next successful sync. */
+  /** Populated when status === 'error' OR 'conflict'; cleared on next
+   *  successful sync / on explicit conflict-resolution. */
   lastError?: string;
   syncIntervalMinutes: number;
   autoApply: boolean;
   status: SubscriptionStatus;
+  /** Phase 80 (PR C): bundle's `roleVersion` at the moment of the last
+   *  successful apply. NULL = never pulled (first sync skips the
+   *  4-case conflict gate). Compared with local `role.version` +
+   *  remote `bundle.roleVersion` to detect divergent edits. */
+  lastPulledVersion?: number;
   createdAt: string;
 }
 

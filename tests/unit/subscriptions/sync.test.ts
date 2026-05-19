@@ -230,3 +230,233 @@ describe('runSubscriptionSync', () => {
     } finally { db.close(); }
   });
 });
+
+// ─── Phase 80 (PR C) — version-aware conflict gate ─────────────────────
+
+import { bumpRoleVersion } from '../../../src/storage/repos/roles.js';
+import {
+  markSubscriptionSynced,
+  getSubscription as getSub,
+} from '../../../src/storage/repos/role-subscriptions.js';
+import { resolveSubscriptionConflict } from '../../../src/subscriptions/sync.js';
+
+describe('version-aware sync (PR C)', () => {
+  async function setup(db: BetterSqlite3.Database) {
+    const embedFn = makePseudoEmbedFn();
+    const { bundle, url } = await setupRolesAndBundle(db, embedFn);
+    const registry = new PluginRegistry();
+    registry.registerOk(fileStoragePlugin, '<test>');
+    const subId = 'sub-1';
+    insertSubscription(db, {
+      id: subId, roleId: 'tgt-role', sourceType: 'file', sourceUrl: url,
+      syncIntervalMinutes: 60, autoApply: false, status: 'active',
+      createdAt: new Date().toISOString(),
+    });
+    return { bundle, url, registry, subId };
+  }
+
+  it('first-ever pull (lastPulledVersion=NULL) applies without checking conflict gate', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId } = await setup(db);
+      // tgt-role at v=1, no lastPulled → just apply.
+      const outcomes = await runSubscriptionSync({ db, registry });
+      expect(outcomes[0]?.action).toBe('applied');
+      // lastPulled should now hold the bundle's roleVersion (1 from a
+      // brand-new src-role that's never been re-trained).
+      const after = getSub(db, subId)!;
+      expect(after.lastPulledVersion).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('R>P, L==P → fast-forward apply (action=applied)', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      // Manually set lastPulled to 1, simulating a previous sync. Local
+      // tgt-role stays at v=1. Re-pack to bump bundle's roleVersion to
+      // 2 by re-training src-role.
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      await trainRole(db, {
+        roleId: 'src-role', name: 'src',
+        documents: [{
+          filename: 's2.md',
+          content: 'second wave content that is long enough to survive the splitter floor xxxxxxxxxxxxxxxxxxxxxxxxxxx',
+          kind: 'spec',
+        }],
+        embedFn: makePseudoEmbedFn(),
+      });
+      // Re-pack + overwrite the on-disk bundle so HEAD/GET sees v=2.
+      const nextBundle = packRole(db, 'src-role');
+      await fs.writeFile(
+        new URL(bundle.contentHash ? `file://${workDir}/src.helmrole` : '').pathname || join(workDir, 'src.helmrole'),
+        bundleToBytes(nextBundle),
+      );
+
+      const outcomes = await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      expect(outcomes[0]?.action).toBe('applied');
+      const after = getSub(db, subId)!;
+      expect(after.lastPulledVersion).toBe(nextBundle.roleVersion);
+    } finally { db.close(); }
+  });
+
+  it('R==P, L>P → action=local_ahead, no apply, no conflict', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      // Set baseline: lastPulled=1. Then bump local without touching remote.
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      bumpRoleVersion(db, 'tgt-role');  // local at v=2
+
+      // Force contentHash mismatch so we get past the contentHash guard
+      // and into the 4-case gate — sub's stored contentHash is fine,
+      // but the bundle's contentHash will differ if we change the
+      // bundle on disk. Easier: nuke the recorded contentHash.
+      db.prepare(`UPDATE role_subscriptions SET last_content_hash = NULL WHERE id = ?`).run(subId);
+
+      const outcomes = await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      expect(outcomes[0]?.action).toBe('local_ahead');
+      const after = getSub(db, subId)!;
+      // local_ahead does NOT advance lastPulled (remote unchanged).
+      expect(after.lastPulledVersion).toBe(1);
+      expect(after.status).toBe('active');
+    } finally { db.close(); }
+  });
+
+  it('R>P AND L>P → action=conflict, status=conflict, no apply', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      bumpRoleVersion(db, 'tgt-role'); // local at v=2
+      // Re-pack source role at v=2.
+      await trainRole(db, {
+        roleId: 'src-role', name: 'src',
+        documents: [{
+          filename: 's2.md', kind: 'spec',
+          content: 'new remote chunk text long enough to survive the splitter floor xxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        }],
+        embedFn: makePseudoEmbedFn(),
+      });
+      const nextBundle = packRole(db, 'src-role');
+      await fs.writeFile(join(workDir, 'src.helmrole'), bundleToBytes(nextBundle));
+
+      const outcomes = await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      expect(outcomes[0]?.action).toBe('conflict');
+      const after = getSub(db, subId)!;
+      expect(after.status).toBe('conflict');
+      expect(after.lastError).toMatch(/conflict/);
+      // Conflict does NOT advance lastPulled — caller resolves explicitly.
+      expect(after.lastPulledVersion).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('resolveSubscriptionConflict use_remote → applies + lastPulled advances', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      bumpRoleVersion(db, 'tgt-role');
+      await trainRole(db, {
+        roleId: 'src-role', name: 'src',
+        documents: [{
+          filename: 's2.md', kind: 'spec',
+          content: 'conflict-time remote chunk text long enough to survive splitter floor xxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        }],
+        embedFn: makePseudoEmbedFn(),
+      });
+      const nextBundle = packRole(db, 'src-role');
+      await fs.writeFile(join(workDir, 'src.helmrole'), bundleToBytes(nextBundle));
+      // Trigger conflict.
+      await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      expect(getSub(db, subId)?.status).toBe('conflict');
+
+      // Resolve: use_remote.
+      const result = await resolveSubscriptionConflict({ db, registry }, subId, 'use_remote');
+      expect(result.ok).toBe(true);
+      expect(result.pulledVersion).toBe(nextBundle.roleVersion);
+      const after = getSub(db, subId)!;
+      expect(after.status).toBe('active');
+      expect(after.lastError).toBeUndefined();
+      expect(after.lastPulledVersion).toBe(nextBundle.roleVersion);
+    } finally { db.close(); }
+  });
+
+  it('resolveSubscriptionConflict keep_local → no apply, lastPulled advances', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      bumpRoleVersion(db, 'tgt-role');
+      await trainRole(db, {
+        roleId: 'src-role', name: 'src',
+        documents: [{
+          filename: 's2.md', kind: 'spec',
+          content: 'remote moved on but we keep local long enough to survive splitter floor xxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        }],
+        embedFn: makePseudoEmbedFn(),
+      });
+      const nextBundle = packRole(db, 'src-role');
+      await fs.writeFile(join(workDir, 'src.helmrole'), bundleToBytes(nextBundle));
+      await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      expect(getSub(db, subId)?.status).toBe('conflict');
+
+      const result = await resolveSubscriptionConflict({ db, registry }, subId, 'keep_local');
+      expect(result.ok).toBe(true);
+      expect(result.pulledVersion).toBe(nextBundle.roleVersion);
+      // keep_local does NOT report candidatesCreated.
+      expect(result.candidatesCreated).toBeUndefined();
+      const after = getSub(db, subId)!;
+      expect(after.status).toBe('active');
+      expect(after.lastPulledVersion).toBe(nextBundle.roleVersion);
+    } finally { db.close(); }
+  });
+
+  it('bundles without roleVersion (pre-PR-A peer) skip the 4-case gate', async () => {
+    const db = openDb();
+    try {
+      const { registry, subId, bundle } = await setup(db);
+      markSubscriptionSynced(db, subId, {
+        contentHash: bundle.contentHash,
+        pulledVersion: 1,
+        at: new Date().toISOString(),
+      });
+      bumpRoleVersion(db, 'tgt-role'); // local moves
+      // Hand-craft a bundle with NO roleVersion field, different content.
+      const stripped: Record<string, unknown> = { ...bundle };
+      delete stripped['roleVersion'];
+      stripped['contentHash'] = 'forced-different-hash';
+      await fs.writeFile(
+        join(workDir, 'src.helmrole'),
+        Buffer.from(JSON.stringify(stripped), 'utf8'),
+      );
+
+      const outcomes = await runSubscriptionSync({ db, registry }, { subscriptionId: subId });
+      // No version info → can't detect conflict → applies as before.
+      expect(outcomes[0]?.action).toBe('applied');
+      const after = getSub(db, subId)!;
+      // lastPulled unchanged (no version came in).
+      expect(after.lastPulledVersion).toBe(1);
+    } finally { db.close(); }
+  });
+});

@@ -51,7 +51,7 @@ import {
   loadPlugins,
   PluginRegistry,
 } from '../plugins/index.js';
-import { runSubscriptionSync } from '../subscriptions/sync.js';
+import { resolveSubscriptionConflict, runSubscriptionSync, type ResolveConflictStrategy } from '../subscriptions/sync.js';
 import { createMirrorRunner } from '../mirrors/runner.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
@@ -323,6 +323,21 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     })();
     inFlight.set(key, promise);
     try { await promise; } finally { inFlight.delete(key); }
+  }
+
+  // Phase 80 (PR C): conflict resolution wrapper. Same logging pattern
+  // as the sync sweep; the HTTP API endpoint surfaces the outcome
+  // directly. Not deduped via inFlight — conflict resolution is a
+  // discrete user action, not an ambient cron sweep.
+  async function resolveConflictWithLogging(
+    subscriptionId: string,
+    strategy: ResolveConflictStrategy,
+  ): Promise<Awaited<ReturnType<typeof resolveSubscriptionConflict>>> {
+    return resolveSubscriptionConflict(
+      { db: deps.db, registry: pluginRegistry, logger: subsLog },
+      subscriptionId,
+      strategy,
+    );
   }
   const SUBSCRIPTION_CRON_MS = 15 * 60 * 1000;
   const subscriptionCron: NodeJS.Timeout = setInterval(() => {
@@ -1199,6 +1214,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // bundle so cross-version debugging is possible later.
       pluginRegistry,
       runSubscriptionSyncOnce: runSubscriptionSyncWithLogging,
+      // PR C: surface the conflict-resolution wrapper. HTTP endpoint
+      // POST /api/role-subscriptions/:id/resolve-conflict dispatches here.
+      resolveSubscriptionConflictOnce: resolveConflictWithLogging,
       helmVersion: process.env['npm_package_version'] ?? 'unknown',
       // Phase 80 (PR B): the HTTP API surfaces the runner for the manual
       // "Push now" endpoint. Other endpoints (GET/PUT/DELETE mirror)

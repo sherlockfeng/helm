@@ -1,8 +1,11 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  bumpRoleVersion,
+  deleteChunkById,
   deleteChunksForRole, deleteRole, getAgentSession, getChunksForRole, getRole,
-  insertChunk, listRoles, upsertAgentSession, upsertRole,
+  insertChunk, insertSource, listRoles, upsertAgentSession, upsertRole,
+  deleteSource,
 } from '../../../src/storage/repos/roles.js';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import type { AgentSession, KnowledgeChunk, Role } from '../../../src/storage/types.js';
@@ -16,7 +19,15 @@ function openDb(): BetterSqlite3.Database {
 }
 
 function makeRole(overrides: Partial<Role> = {}): Role {
-  return { id: 'r1', name: 'Dev', systemPrompt: 'You are a dev', isBuiltin: false, createdAt: new Date().toISOString(), ...overrides };
+  return {
+    id: 'r1', name: 'Dev', systemPrompt: 'You are a dev',
+    isBuiltin: false, createdAt: new Date().toISOString(),
+    // Phase 80 (PR A): Role now requires `version`. Tests default to 1 (the
+    // schema's INSERT default) so existing assertions about "is the role
+    // there" keep working without per-test boilerplate.
+    version: 1,
+    ...overrides,
+  };
 }
 
 describe('roles', () => {
@@ -55,6 +66,73 @@ describe('roles', () => {
 
   it('attack: getRole on missing id returns undefined', () => {
     expect(getRole(db, 'ghost')).toBeUndefined();
+  });
+
+  // ── Phase 80 (helm-design PR A) — version counter ───────────────────────
+
+  describe('version counter', () => {
+    it('fresh INSERT starts at version=1 (schema default)', () => {
+      upsertRole(db, makeRole());
+      expect(getRole(db, 'r1')?.version).toBe(1);
+    });
+
+    it('upsertRole does NOT bump version on conflict update', () => {
+      // Reason: upsertRole is also used for built-in role re-seeding at
+      // boot. Bumping every restart would lie. Callers that actually
+      // change content should call bumpRoleVersion explicitly.
+      upsertRole(db, makeRole());
+      upsertRole(db, makeRole({ name: 'Renamed' }));
+      expect(getRole(db, 'r1')?.version).toBe(1);
+    });
+
+    it('bumpRoleVersion increments by 1 and returns the new value', () => {
+      upsertRole(db, makeRole());
+      expect(bumpRoleVersion(db, 'r1')).toBe(2);
+      expect(getRole(db, 'r1')?.version).toBe(2);
+      expect(bumpRoleVersion(db, 'r1')).toBe(3);
+    });
+
+    it('bumpRoleVersion on missing role returns 0 and does not throw', () => {
+      expect(bumpRoleVersion(db, 'ghost')).toBe(0);
+    });
+
+    it('deleteChunkById bumps the owning role', () => {
+      upsertRole(db, makeRole());
+      insertChunk(db, {
+        id: 'ch1', roleId: 'r1', chunkText: 'x', kind: 'other',
+        createdAt: new Date().toISOString(),
+      });
+      const before = getRole(db, 'r1')!.version;
+      expect(deleteChunkById(db, 'ch1')).toBe(true);
+      expect(getRole(db, 'r1')!.version).toBe(before + 1);
+    });
+
+    it('deleteChunkById on missing chunk does NOT bump', () => {
+      upsertRole(db, makeRole());
+      const before = getRole(db, 'r1')!.version;
+      expect(deleteChunkById(db, 'ghost-chunk')).toBe(false);
+      expect(getRole(db, 'r1')!.version).toBe(before);
+    });
+
+    it('deleteSource bumps the owning role', () => {
+      upsertRole(db, makeRole());
+      insertSource(db, {
+        id: 'src1', roleId: 'r1', kind: 'inline', origin: 'inline:1',
+        fingerprint: 'fp1', createdAt: new Date().toISOString(),
+      });
+      const before = getRole(db, 'r1')!.version;
+      const result = deleteSource(db, 'src1');
+      expect(result.removed).toBe(true);
+      expect(getRole(db, 'r1')!.version).toBe(before + 1);
+    });
+
+    it('deleteSource on missing source does NOT bump', () => {
+      upsertRole(db, makeRole());
+      const before = getRole(db, 'r1')!.version;
+      const result = deleteSource(db, 'ghost-src');
+      expect(result.removed).toBe(false);
+      expect(getRole(db, 'r1')!.version).toBe(before);
+    });
   });
 });
 

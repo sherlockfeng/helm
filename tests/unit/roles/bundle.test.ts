@@ -76,6 +76,31 @@ describe('packRole + unpackRole — roundtrip', () => {
     const b = packRole(db, 'rA').contentHash;
     expect(a).toBe(b);
   });
+
+  // Phase 80 (PR A) — bundle ships roleVersion
+  it('packRole includes the role.version in the bundle', () => {
+    const bundle = packRole(db, 'rA');
+    // Brand-new role from beforeEach — first train left version at 1
+    expect(bundle.roleVersion).toBe(1);
+  });
+
+  it('unpackRole accepts bundles without roleVersion (backward compat)', () => {
+    // Hand-craft a bundle missing roleVersion (pre-PR-A format).
+    const bundle = packRole(db, 'rA');
+    const raw = JSON.parse(bundleToBytes(bundle).toString('utf8')) as Record<string, unknown>;
+    delete raw['roleVersion'];
+    const rebytes = Buffer.from(JSON.stringify(raw), 'utf8');
+    const unpacked = unpackRole(rebytes);
+    expect(unpacked.roleVersion).toBeUndefined();
+  });
+
+  it('unpackRole rejects roleVersion that is not a positive integer', () => {
+    const bundle = packRole(db, 'rA');
+    const raw = JSON.parse(bundleToBytes(bundle).toString('utf8')) as Record<string, unknown>;
+    raw['roleVersion'] = -1;
+    const bad = Buffer.from(JSON.stringify(raw), 'utf8');
+    expect(() => unpackRole(bad)).toThrow(/roleVersion/);
+  });
 });
 
 describe('computeContentHash — canonical-form invariants', () => {

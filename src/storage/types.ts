@@ -51,6 +51,12 @@ export interface Role {
   docPath?: string;
   isBuiltin: boolean;
   createdAt: string;
+  /** Phase 80 (helm-design PR A): monotonic counter bumped on every
+   *  meaningful content change (train, update, drop chunk/source).
+   *  PR B will gate auto-push by comparing this to lastPushedVersion;
+   *  PR C will gate pull-apply by comparing it to the bundle's
+   *  `roleVersion`. Fresh roles + back-migrated rows start at 1. */
+  version: number;
 }
 
 /**

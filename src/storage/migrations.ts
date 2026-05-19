@@ -548,6 +548,24 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_candidates_provenance ON knowledge_candidates(role_id, provenance);
     `,
   },
+  {
+    version: 17,
+    description:
+      'Role version counter (Phase 80 / helm-design PR A). Adds a monotonic'
+      + ' `version` column to roles, bumped on every meaningful content change'
+      + ' (trainRole / updateRole / deleteChunkById / deleteSource).'
+      + ' Foundation for upcoming sync features:'
+      + ' - PR B (auto-push to remote) uses version to decide whether the role'
+      + '   has changed since the last successful mirror upload.'
+      + ' - PR C (version-aware pull) compares local version vs the remote'
+      + '   bundle\'s `roleVersion` to detect "remote and local both diverged'
+      + '   from last sync" conflicts and gate the apply step.'
+      + ' Existing roles get version=1 (the schema default); the first mutation'
+      + ' after the migration bumps them to 2.',
+    up: `
+      ALTER TABLE roles ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

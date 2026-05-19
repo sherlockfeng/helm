@@ -84,6 +84,27 @@ describe('trainRole', () => {
     });
     expect(getRole(db, 'r').systemPrompt).toBe('custom prompt');
   });
+
+  // Phase 80 (PR A) — version counter semantics
+  it('brand-new role starts at version=1 (no bump on initial train)', async () => {
+    const embedFn = makePseudoEmbedFn();
+    const role = await trainRole(db, {
+      roleId: 'fresh', name: 'Fresh', documents: [{ filename: 'a.md', content: 'x' }], embedFn,
+    });
+    expect(role.version).toBe(1);
+  });
+
+  it('re-training an existing role bumps version', async () => {
+    const embedFn = makePseudoEmbedFn();
+    await trainRole(db, {
+      roleId: 'r', name: 'R', documents: [{ filename: 'a.md', content: 'x' }], embedFn,
+    });
+    expect(getRole(db, 'r').version).toBe(1);
+    await trainRole(db, {
+      roleId: 'r', name: 'R', documents: [{ filename: 'b.md', content: 'y' }], embedFn,
+    });
+    expect(getRole(db, 'r').version).toBe(2);
+  });
 });
 
 describe('searchKnowledge', () => {

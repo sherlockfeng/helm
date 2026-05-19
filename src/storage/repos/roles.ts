@@ -16,6 +16,10 @@ function rowToRole(row: Record<string, unknown>): Role {
     docPath: row['doc_path'] != null ? String(row['doc_path']) : undefined,
     isBuiltin: Boolean(row['is_builtin']),
     createdAt: String(row['created_at']),
+    // Phase 80 (PR A). NULL coercion handles pre-migration rows for any
+    // helm install that for some reason runs against a DB at v16; the
+    // ALTER TABLE in v17 fills NULLs with 1 via the column default.
+    version: row['version'] != null ? Number(row['version']) : 1,
   };
 }
 
@@ -32,7 +36,15 @@ function rowToAgentSession(row: Record<string, unknown>): AgentSession {
 
 // ── Role ───────────────────────────────────────────────────────────────────
 
-export function upsertRole(db: Database.Database, r: Role): void {
+/**
+ * Phase 80 (PR A) — version is NOT a parameter here. New INSERTs get
+ * the column default (1); UPDATEs on conflict leave version untouched.
+ * Callers that mutate role content should call `bumpRoleVersion()`
+ * explicitly after the write — keeping bumps out of upsertRole means
+ * built-in role re-seeding at boot doesn't accidentally bump every
+ * restart.
+ */
+export function upsertRole(db: Database.Database, r: Omit<Role, 'version'>): void {
   db.prepare(`
     INSERT INTO roles (id, name, system_prompt, doc_path, is_builtin, created_at)
     VALUES (@id, @name, @system_prompt, @doc_path, @is_builtin, @created_at)
@@ -44,6 +56,26 @@ export function upsertRole(db: Database.Database, r: Role): void {
     id: r.id, name: r.name, system_prompt: r.systemPrompt,
     doc_path: r.docPath ?? null, is_builtin: r.isBuiltin ? 1 : 0, created_at: r.createdAt,
   });
+}
+
+/**
+ * Phase 80 (helm-design PR A): bump a role's monotonic version counter.
+ * Call this from any path that mutates the role's user-visible content
+ * (trainRole, updateRole, deleteChunkById, deleteSource, etc.) AFTER
+ * the underlying write succeeds. Safe to call inside the caller's
+ * transaction — the UPDATE is atomic.
+ *
+ * Returns the new version. If the role doesn't exist, returns 0 and
+ * doesn't throw — callers that need strict semantics should check
+ * existence themselves.
+ */
+export function bumpRoleVersion(db: Database.Database, roleId: string): number {
+  const info = db.prepare(
+    `UPDATE roles SET version = version + 1 WHERE id = ?`,
+  ).run(roleId);
+  if (info.changes === 0) return 0;
+  const row = db.prepare(`SELECT version FROM roles WHERE id = ?`).get(roleId) as { version: number } | undefined;
+  return row ? Number(row.version) : 0;
 }
 
 export function getRole(db: Database.Database, id: string): Role | undefined {
@@ -132,6 +164,10 @@ export function listSourcesForRole(
  * Phase 73: cascade-delete a source. The schema-level ON DELETE CASCADE
  * on knowledge_chunks.source_id wipes derived chunks atomically. Returns
  * a small summary so callers can confirm the blast radius.
+ *
+ * Phase 80 (PR A): bump the owning role's `version` when the source
+ * actually existed. We look up role_id BEFORE the DELETE so we don't
+ * lose it to the cascade.
  */
 export function deleteSource(
   db: Database.Database,
@@ -140,8 +176,13 @@ export function deleteSource(
   const chunksRow = db.prepare(
     `SELECT COUNT(*) AS n FROM knowledge_chunks WHERE source_id = ?`,
   ).get(id) as { n: number };
+  const roleRow = db.prepare(
+    `SELECT role_id FROM knowledge_sources WHERE id = ?`,
+  ).get(id) as { role_id: string } | undefined;
   const info = db.prepare(`DELETE FROM knowledge_sources WHERE id = ?`).run(id);
-  return { removed: info.changes > 0, chunksDeleted: Number(chunksRow.n) };
+  const removed = info.changes > 0;
+  if (removed && roleRow) bumpRoleVersion(db, roleRow.role_id);
+  return { removed, chunksDeleted: Number(chunksRow.n) };
 }
 
 // ── KnowledgeChunk ─────────────────────────────────────────────────────────
@@ -253,8 +294,16 @@ export function deleteChunksForRole(db: Database.Database, roleId: string): void
  * "deleted" from "id not found, nothing to do").
  */
 export function deleteChunkById(db: Database.Database, chunkId: string): boolean {
+  // Phase 80 (PR A): look up the owning role BEFORE the DELETE so we can
+  // bump its version. The chunk row is gone after the DELETE, so doing
+  // the lookup after would return undefined.
+  const roleRow = db.prepare(
+    `SELECT role_id FROM knowledge_chunks WHERE id = ?`,
+  ).get(chunkId) as { role_id: string } | undefined;
   const info = db.prepare(`DELETE FROM knowledge_chunks WHERE id = ?`).run(chunkId);
-  return info.changes > 0;
+  const removed = info.changes > 0;
+  if (removed && roleRow) bumpRoleVersion(db, roleRow.role_id);
+  return removed;
 }
 
 // ── Knowledge lifecycle (Phase 77) ─────────────────────────────────────────

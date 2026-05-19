@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
+  bumpRoleVersion,
   deleteChunksForRole,
   getChunksForRole,
   getRole as getRoleRow,
@@ -64,7 +65,7 @@ export function fireLifecycleSweep(roleId: string): void {
   }
 }
 
-const BUILTIN_ROLES: Omit<Role, 'createdAt'>[] = [
+const BUILTIN_ROLES: Omit<Role, 'createdAt' | 'version'>[] = [
   { id: 'product', name: 'Product Agent', systemPrompt: PRODUCT_SYSTEM_PROMPT, docPath: 'docs/roles/product.md', isBuiltin: true },
   { id: 'developer', name: 'Developer Agent', systemPrompt: DEVELOPER_SYSTEM_PROMPT, docPath: 'docs/roles/developer.md', isBuiltin: true },
   { id: 'tester', name: 'Test Agent', systemPrompt: TESTER_SYSTEM_PROMPT, docPath: 'docs/roles/tester.md', isBuiltin: true },
@@ -206,6 +207,13 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
       indexEntitiesForChunk(db, row, doc.filename, now);
     }
   }
+
+  // Phase 80 (PR A): bump the version counter only when this train call
+  // touched an already-existing role. Brand-new roles (no `existing`
+  // row before the upsert above) stay at version=1 — the column
+  // default — so consumers can tell "this is the initial version"
+  // apart from "the role has been edited at least once".
+  if (existing) bumpRoleVersion(db, input.roleId);
 
   const refreshed = getRoleRow(db, input.roleId);
   if (!refreshed) throw new Error(`trainRole: role disappeared after upsert: ${input.roleId}`);
@@ -418,6 +426,12 @@ export async function updateRole(
     indexEntitiesForChunk(db, row, c.filename, now);
     chunksAdded += 1;
   }
+
+  // Phase 80 (PR A): bump the version. updateRole only runs against an
+  // existing role (early-throw above guarantees `existing`), and at this
+  // point we've either changed name/prompt or added chunks (chunksAdded
+  // >= 0; if zero we still bumped name/prompt if they were passed).
+  bumpRoleVersion(db, existing.id);
 
   const refreshed = getRoleRow(db, existing.id);
   if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);

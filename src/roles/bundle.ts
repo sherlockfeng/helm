@@ -148,6 +148,13 @@ export interface RoleBundle {
   /** sha256 over the canonical-form `chunks` array. The same role
    *  exported twice with no changes produces the same hash. */
   contentHash: string;
+  /** Phase 80 (helm-design PR A): role's monotonic version at export
+   *  time. Optional in the schema for backward compatibility —
+   *  bundles produced before this field existed unpack as
+   *  `roleVersion: 1` via the default in unpackRole. PR C will use
+   *  this to detect "remote and local both diverged from last sync"
+   *  conflicts. */
+  roleVersion?: number;
   role: BundleRole;
   sources: BundleSource[];
   chunks: BundleChunk[];
@@ -200,6 +207,10 @@ export function packRole(
     exportedAt: new Date().toISOString(),
     sourceHelmVersion: opts.helmVersion ?? 'unknown',
     contentHash: computeContentHash(chunks),
+    // Phase 80 (PR A): the role's monotonic version at export time.
+    // Subscribers (PR C) will compare this to their local role's
+    // version to detect divergent-edit conflicts.
+    roleVersion: role.version,
     role: { name: role.name, systemPrompt: role.systemPrompt },
     sources,
     chunks,
@@ -241,6 +252,16 @@ export function unpackRole(buffer: Buffer): RoleBundle {
   if (typeof b['contentHash'] !== 'string') throw new Error('unpackRole: missing contentHash');
   if (typeof b['exportedAt'] !== 'string') throw new Error('unpackRole: missing exportedAt');
   if (typeof b['sourceHelmVersion'] !== 'string') throw new Error('unpackRole: missing sourceHelmVersion');
+  // Phase 80 (PR A): roleVersion is optional for backward compatibility
+  // with bundles produced before this field existed. When present it
+  // must be a positive integer; absence is fine and consumers should
+  // treat undefined as "unknown / pre-versioning".
+  if (b['roleVersion'] !== undefined) {
+    const rv = b['roleVersion'];
+    if (typeof rv !== 'number' || !Number.isInteger(rv) || rv < 1) {
+      throw new Error(`unpackRole: roleVersion must be a positive integer, got ${String(rv)}`);
+    }
+  }
   if (!b['role'] || typeof b['role'] !== 'object') throw new Error('unpackRole: missing role block');
   if (!Array.isArray(b['sources'])) throw new Error('unpackRole: missing sources array');
   if (!Array.isArray(b['chunks'])) throw new Error('unpackRole: missing chunks array');

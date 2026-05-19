@@ -209,6 +209,10 @@ export interface Role {
   docPath?: string;
   isBuiltin: boolean;
   createdAt: string;
+  /** Phase 80 (helm-design PR A): monotonic counter bumped on every
+   *  meaningful content change (train, update, drop chunk/source).
+   *  Fresh roles + back-migrated rows start at 1. */
+  version: number;
 }
 
 export interface RoleSummary extends Role {

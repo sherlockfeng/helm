@@ -626,6 +626,10 @@ function RoleCard({
         <div style={{ flex: 1 }}>
           <div className="label">
             {role.isBuiltin ? 'built-in' : 'custom'} · <code title={role.id}>{shortId(role.id)}</code>
+            {/* helm-design PR A: role version. Hidden when v1 (the
+                initial state — visually noisy on every brand-new
+                role) so only edited roles show the marker. */}
+            {role.version > 1 && <> · v{role.version}</>}
           </div>
           <div style={{ fontWeight: 600, fontSize: 14 }}>{role.name}</div>
           <div className="muted" style={{ marginTop: 4, marginBottom: 0 }}>

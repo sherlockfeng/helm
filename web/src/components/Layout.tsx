@@ -97,14 +97,30 @@ function HelmBrand() {
 }
 
 /**
- * One sidebar nav row: icon + label, with the approvals count badge when
- * applicable. Extracted from the inline JSX so the top-level grouped vs
- * flat branches both render identically (icons + a11y).
+ * One sidebar nav row: icon + label, with the approvals / verification
+ * count badges when applicable. Extracted from the inline JSX so the
+ * top-level grouped vs flat branches both render identically (icons +
+ * a11y).
+ *
+ * verificationBadge is a combined count of proposed cases + open
+ * regression alerts — the renderer pulls users into the Verification
+ * section whenever either is non-zero. Showing them as a single number
+ * keeps the sidebar tidy; the page itself surfaces the split.
  */
 function NavRow({
-  item, pendingCount, nested,
-}: { item: NavItem; pendingCount: number; nested?: boolean }) {
+  item, pendingCount, verificationBadge, nested,
+}: {
+  item: NavItem;
+  pendingCount: number;
+  verificationBadge: number;
+  nested?: boolean;
+}) {
   const Icon = item.icon;
+  const isApprovals = item.to === '/approvals';
+  // Any verification surface participates in the verification badge so
+  // the count is visible from the group entry AND from each sub-item
+  // until the user clears the queue.
+  const isVerification = item.to.startsWith('/verification');
   return (
     <NavLink
       to={item.to}
@@ -117,9 +133,14 @@ function NavRow({
       {/* aria-hidden — the label already names the row for screen readers. */}
       <Icon className="helm-nav-icon" aria-hidden="true" width={18} height={18} />
       <span className="helm-nav-label">{item.label}</span>
-      {item.to === '/approvals' && pendingCount > 0 && (
+      {isApprovals && pendingCount > 0 && (
         <span className="badge" aria-label={`${pendingCount} pending`}>
           {pendingCount}
+        </span>
+      )}
+      {isVerification && verificationBadge > 0 && (
+        <span className="badge" aria-label={`${verificationBadge} need attention`}>
+          {verificationBadge}
         </span>
       )}
     </NavLink>
@@ -128,6 +149,7 @@ function NavRow({
 
 export function Layout() {
   const [pendingCount, setPendingCount] = useState<number>(0);
+  const [verificationBadge, setVerificationBadge] = useState<number>(0);
   const [healthy, setHealthy] = useState<boolean>(true);
   const [advancedOn, setAdvancedOn] = useState<boolean>(isAdvancedEnabled());
 
@@ -150,6 +172,22 @@ export function Layout() {
     void refreshCount();
     const id = setInterval(refreshCount, 30_000);
     return () => clearInterval(id);
+  }, []);
+
+  // PR 7: Verification badge. Polled on a slow cadence (60s) — the
+  // failure path is benign so a network blip just leaves the previous
+  // count visible. Combined count = proposed cases + open alerts.
+  useEffect(() => {
+    let alive = true;
+    const refresh = async (): Promise<void> => {
+      try {
+        const c = await helmApi.verificationCounts();
+        if (alive) setVerificationBadge(c.proposed + c.openAlerts);
+      } catch { /* tolerate offline */ }
+    };
+    void refresh();
+    const id = setInterval(refresh, 60_000);
+    return () => { alive = false; clearInterval(id); };
   }, []);
 
   // Keep the sidebar in sync with the Settings › Advanced toggle without
@@ -216,24 +254,24 @@ export function Layout() {
             <div key={entry.label} className="helm-nav-group">
               <div className="helm-nav-group-label">{entry.label}</div>
               {entry.items.map((item) => (
-                <NavRow key={item.to} item={item} pendingCount={pendingCount} nested />
+                <NavRow key={item.to} item={item} pendingCount={pendingCount} verificationBadge={verificationBadge} nested />
               ))}
             </div>
           ) : (
-            <NavRow key={entry.to} item={entry} pendingCount={pendingCount} />
+            <NavRow key={entry.to} item={entry} pendingCount={pendingCount} verificationBadge={verificationBadge} />
           ))}
           {advancedOn && (
             <div className="helm-nav-group" data-testid="helm-nav-advanced">
               <div className="helm-nav-group-label">{ADVANCED_GROUP.label}</div>
               {ADVANCED_GROUP.items.map((item) => (
-                <NavRow key={item.to} item={item} pendingCount={pendingCount} nested />
+                <NavRow key={item.to} item={item} pendingCount={pendingCount} verificationBadge={verificationBadge} nested />
               ))}
             </div>
           )}
           {/* Spacer pushes Settings to the bottom of the sidebar — the
               "infrequent / admin" item per the IA. */}
           <div className="helm-nav-spacer" aria-hidden="true" />
-          <NavRow item={SETTINGS_ITEM} pendingCount={pendingCount} />
+          <NavRow item={SETTINGS_ITEM} pendingCount={pendingCount} verificationBadge={verificationBadge} />
         </nav>
         <div className="helm-sidebar-footer">
           <span

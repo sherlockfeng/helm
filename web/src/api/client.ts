@@ -297,6 +297,88 @@ export const helmApi = {
       'POST', '/api/review/bulk-reject', { candidateIds },
     ),
 
+  // ── Verification (PR 5 + PR 6) ──────────────────────────────────
+  /**
+   * List cases. Defaults to confirmed; pass status='proposed' for the
+   * §4.7 R-5 review queue or 'all' for the full audit log.
+   */
+  listVerificationCases: (opts?: {
+    status?: import('./types.js').BenchmarkCaseStatus | 'all';
+    roleId?: string;
+    limit?: number;
+  }) => {
+    const p = new URLSearchParams();
+    if (opts?.status) p.set('status', opts.status);
+    if (opts?.roleId) p.set('roleId', opts.roleId);
+    if (opts?.limit)  p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return request<{ cases: import('./types.js').BenchmarkCase[] }>(
+      'GET',
+      `/api/verification/cases${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  getVerificationCase: (id: string) =>
+    request<{ case: import('./types.js').BenchmarkCase }>(
+      'GET', `/api/verification/cases/${encodeURIComponent(id)}`,
+    ),
+
+  createVerificationCase: (input: {
+    name: string;
+    question: string;
+    expectedTruth: string;
+    goldenPointIds?: readonly string[];
+    targetRoleIds?: readonly string[];
+    agentKindHint?: import('./types.js').BenchmarkAgentKindHint;
+    notes?: string;
+    proposedSource?: import('./types.js').BenchmarkCaseProposedSource;
+  }) =>
+    request<{ case: import('./types.js').BenchmarkCase }>(
+      'POST', '/api/verification/cases', input,
+    ),
+
+  confirmVerificationCase: (id: string, confirmedBy?: string) =>
+    request<{ caseId: string; status: 'confirmed' }>(
+      'POST',
+      `/api/verification/cases/${encodeURIComponent(id)}/confirm`,
+      confirmedBy ? { confirmedBy } : undefined,
+    ),
+
+  rejectVerificationCase: (id: string, reason?: string) =>
+    request<{ caseId: string; status: 'rejected' }>(
+      'POST',
+      `/api/verification/cases/${encodeURIComponent(id)}/reject`,
+      reason ? { reason } : undefined,
+    ),
+
+  listVerificationRunsForCase: (caseId: string, limit?: number) => {
+    const qs = limit ? `?limit=${limit}` : '';
+    return request<{ runs: import('./types.js').BenchmarkRun[] }>(
+      'GET',
+      `/api/verification/cases/${encodeURIComponent(caseId)}/runs${qs}`,
+    );
+  },
+
+  listVerificationAlerts: (opts?: {
+    status?: import('./types.js').RegressionAlertStatus | 'all';
+    limit?: number;
+  }) => {
+    const p = new URLSearchParams();
+    if (opts?.status) p.set('status', opts.status);
+    if (opts?.limit)  p.set('limit', String(opts.limit));
+    const qs = p.toString();
+    return request<{ alerts: import('./types.js').RegressionAlert[] }>(
+      'GET',
+      `/api/verification/alerts${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  /** Sidebar badge counts: proposed cases + open regression alerts. */
+  verificationCounts: () =>
+    request<import('./types.js').VerificationCounts>(
+      'GET', '/api/verification/counts',
+    ),
+
   // ── Phase 79: storage plugins (read) + role subscriptions ───────
   /** List every storage plugin helm tried to load — OK + failed. */
   listPlugins: () =>

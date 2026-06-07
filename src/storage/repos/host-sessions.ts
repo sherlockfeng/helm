@@ -1,10 +1,15 @@
 import type Database from 'better-sqlite3';
-import type { HostSession } from '../types.js';
+import type { AgentKind, HostSession } from '../types.js';
 
 function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string[] = []): HostSession {
   return {
     id: String(row['id']),
     host: String(row['host']),
+    // PR 2 (migration v20): agent_kind is backfilled from host for legacy
+    // rows; new rows set it explicitly. Cast is safe because the migration
+    // UPDATE forces non-NULL for any row with a non-NULL host, and the
+    // only writer (this repo) constrains the value to the AgentKind union.
+    agentKind: row['agent_kind'] != null ? (String(row['agent_kind']) as AgentKind) : undefined,
     cwd: row['cwd'] != null ? String(row['cwd']) : undefined,
     composerMode: row['composer_mode'] != null ? String(row['composer_mode']) : undefined,
     campaignId: row['campaign_id'] != null ? String(row['campaign_id']) : undefined,
@@ -51,9 +56,14 @@ export function upsertHostSession(db: Database.Database, s: HostSession): void {
   // Note: cwd is updated on conflict because Cursor's sessionStart only
   // started carrying workspace_roots in 3.3+; older session rows captured
   // before that fix can have an empty cwd that the next hook can fill in.
+  // PR 2 (migration v20): agent_kind defaults to host when the caller
+  // doesn't pass one — keeps every legacy CursorHostAdapter call path
+  // working without churn while making new adapters (Claude Code, Codex)
+  // a one-line addition at the construction site.
+  const agentKind = s.agentKind ?? (s.host as AgentKind | undefined) ?? null;
   db.prepare(`
-    INSERT INTO host_sessions (id, host, cwd, composer_mode, campaign_id, cycle_id, role_id, first_prompt, status, first_seen_at, last_seen_at)
-    VALUES (@id, @host, @cwd, @composer_mode, @campaign_id, @cycle_id, @role_id, @first_prompt, @status, @first_seen_at, @last_seen_at)
+    INSERT INTO host_sessions (id, host, agent_kind, cwd, composer_mode, campaign_id, cycle_id, role_id, first_prompt, status, first_seen_at, last_seen_at)
+    VALUES (@id, @host, @agent_kind, @cwd, @composer_mode, @campaign_id, @cycle_id, @role_id, @first_prompt, @status, @first_seen_at, @last_seen_at)
     ON CONFLICT(id) DO UPDATE SET
       cwd           = excluded.cwd,
       composer_mode = excluded.composer_mode,
@@ -62,7 +72,8 @@ export function upsertHostSession(db: Database.Database, s: HostSession): void {
       status        = excluded.status,
       last_seen_at  = excluded.last_seen_at
   `).run({
-    id: s.id, host: s.host, cwd: s.cwd ?? null, composer_mode: s.composerMode ?? null,
+    id: s.id, host: s.host, agent_kind: agentKind,
+    cwd: s.cwd ?? null, composer_mode: s.composerMode ?? null,
     campaign_id: s.campaignId ?? null, cycle_id: s.cycleId ?? null,
     role_id: s.roleId ?? null,
     first_prompt: s.firstPrompt ?? null,

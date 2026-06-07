@@ -241,6 +241,14 @@ function rowToChunk(row: Record<string, unknown>): KnowledgeChunk {
     createdAt: String(row['created_at']),
     accessCount: Number(row['access_count'] ?? 0),
     archived: Boolean(row['archived']),
+    // PR 2 (migration v20): always populate these so downstream
+    // readers (renderer / retrieval) can treat them as definite.
+    // The columns are NOT NULL with DEFAULT, so the cast is safe.
+    editVersion: Number(row['edit_version'] ?? 1),
+    visibility: (row['visibility'] != null
+      ? String(row['visibility'])
+      : 'internal') as KnowledgeChunk['visibility'],
+    versionExt: Number(row['version_ext'] ?? 1),
   };
   if (row['source_file'] != null) chunk.sourceFile = String(row['source_file']);
   if (row['source_id'] != null) chunk.sourceId = String(row['source_id']);
@@ -248,7 +256,81 @@ function rowToChunk(row: Record<string, unknown>): KnowledgeChunk {
   if (row['embedding'] != null) {
     chunk.embedding = new Float32Array((row['embedding'] as Buffer).buffer);
   }
+  // PR 2 fields are present on every fresh row but read defensively
+  // so legacy code paths that backfill rows from pre-v20 dumps still
+  // produce a usable KnowledgeChunk object.
+  if (row['title'] != null) chunk.title = String(row['title']);
+  if (row['source'] != null) {
+    try {
+      chunk.source = JSON.parse(String(row['source'])) as KnowledgeChunk['source'];
+    } catch { /* legacy garbage — leave undefined */ }
+  }
+  if (row['last_referenced_at'] != null) {
+    chunk.lastReferencedAt = Number(row['last_referenced_at']);
+  }
   return chunk;
+}
+
+/**
+ * PR 2 (migration v20): G4 optimistic-locking update for the
+ * promotion-level fields (title / source / visibility / kind / body).
+ *
+ * The caller passes the `expectedEditVersion` they read; the UPDATE's
+ * WHERE clause only matches when the current row still has that
+ * version. On match the row's edit_version + version_ext are bumped
+ * by one. On miss (someone else wrote in between) the UPDATE returns
+ * 0 changes and this function returns false — callers should refresh
+ * + show a conflict prompt rather than retry blindly.
+ *
+ * Optional fields can be skipped by passing `undefined`; the SQL uses
+ * COALESCE so an undefined value preserves the existing column.
+ */
+export interface UpdateChunkInput {
+  title?: string;
+  body?: string;
+  kind?: KnowledgeChunkKind;
+  source?: KnowledgeChunk['source'];
+  visibility?: KnowledgeChunk['visibility'];
+  lastReferencedAt?: number;
+}
+
+export function updateChunkWithVersionCheck(
+  db: Database.Database,
+  chunkId: string,
+  expectedEditVersion: number,
+  input: UpdateChunkInput,
+): { applied: boolean; newEditVersion: number; newVersionExt: number } {
+  const sourceJson = input.source !== undefined ? JSON.stringify(input.source) : undefined;
+  const stmt = db.prepare(`
+    UPDATE knowledge_chunks
+       SET title              = COALESCE(@title, title),
+           chunk_text         = COALESCE(@chunk_text, chunk_text),
+           kind               = COALESCE(@kind, kind),
+           source             = COALESCE(@source, source),
+           visibility         = COALESCE(@visibility, visibility),
+           last_referenced_at = COALESCE(@last_referenced_at, last_referenced_at),
+           edit_version       = edit_version + 1,
+           version_ext        = version_ext  + 1
+     WHERE id = @id AND edit_version = @expected_edit_version
+  `);
+  const r = stmt.run({
+    id: chunkId,
+    expected_edit_version: expectedEditVersion,
+    title: input.title ?? null,
+    chunk_text: input.body ?? null,
+    kind: input.kind ?? null,
+    source: sourceJson ?? null,
+    visibility: input.visibility ?? null,
+    last_referenced_at: input.lastReferencedAt ?? null,
+  });
+  if (r.changes === 0) {
+    return { applied: false, newEditVersion: expectedEditVersion, newVersionExt: 0 };
+  }
+  return {
+    applied: true,
+    newEditVersion: expectedEditVersion + 1,
+    newVersionExt: expectedEditVersion + 1,
+  };
 }
 
 export function getChunksForRole(

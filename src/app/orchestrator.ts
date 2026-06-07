@@ -122,6 +122,18 @@ export interface HelmAppDeps {
    */
   staleSessionCutoffMs?: number;
   /**
+   * PR 6 (auto-trigger): optional Verification runner. When provided,
+   * the API layer enqueues affected cases after a candidate is
+   * accepted so the Verification panel always reflects the post-
+   * acceptance state.
+   *
+   * Production binds this to a real LLM-backed runner; tests bind a
+   * faking implementation that records calls without making HTTP
+   * traffic. Absent = trigger is a no-op (the path through which
+   * existing tests + CI without LLM credentials run cleanly).
+   */
+  verificationRunner?: (caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>;
+  /**
    * Lark channel — opt-in. When provided, the orchestrator builds a LarkChannel
    * and wires its events into the registry / approval policy / channel queue.
    * Tests inject a pre-built channel; production reads `helm config` and
@@ -1097,6 +1109,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     {
       db: deps.db, registry, policy, events, logger: deps.loggers.module('api'),
       mcpFactory,
+      ...(deps.verificationRunner ? { verificationRunner: deps.verificationRunner } : {}),
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

@@ -53,6 +53,10 @@ import {
 } from '../storage/repos/knowledge-repo.js';
 import { GitUrlError } from '../knowledge-repo/url.js';
 import {
+  KNOWLEDGE_REPO_SEEDS,
+  findSeedById,
+} from '../knowledge-repo/seeds.js';
+import {
   getCampaign,
   getCycle,
   getTask,
@@ -952,6 +956,32 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           }
         }
         return methodNotAllowed(res);
+      }
+
+      // PR 5.5e: curated seed list. GET returns the catalogue;
+      // POST /:id/subscribe enrolls the seed via the manager.
+      if (url.pathname === '/api/knowledge-repos/seeds') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { seeds: KNOWLEDGE_REPO_SEEDS });
+      }
+      const seedSubMatch = url.pathname.match(/^\/api\/knowledge-repos\/seeds\/([^/]+)\/subscribe$/);
+      if (seedSubMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        const seed = findSeedById(seedSubMatch[1]!);
+        if (!seed) return notFound(res);
+        try {
+          const repo = await deps.knowledgeRepoManager.subscribe(seed.url, {
+            branch: seed.branch,
+          });
+          return send(res, 201, { repo, seedId: seed.id });
+        } catch (err) {
+          return send(res, 409, {
+            error: 'subscribe_failed', message: (err as Error).message,
+          });
+        }
       }
 
       // PR 5.5d: push selected local KnowledgePoints back to the

@@ -77,9 +77,19 @@ function parseHelmNative(text: string, relativePath: string): ParsedPoint {
   // emitted by the serializer. Missing → caller defaults to 'internal'.
   const vis = stringValue(data['visibility']);
   if (vis === 'internal' || vis === 'public') point.visibility = vis;
-  const source = data['source'];
-  if (source && typeof source === 'object' && !Array.isArray(source)) {
-    point.source = source as Record<string, unknown>;
+  // The subset YAML parser keeps inline `{ ... }` JSON as a raw
+  // string. Try to JSON.parse so the round-trip recovers the object
+  // shape the serializer emitted; bail silently on malformed input.
+  const sourceRaw = data['source'];
+  if (typeof sourceRaw === 'string' && sourceRaw.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(sourceRaw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        point.source = parsed as Record<string, unknown>;
+      }
+    } catch { /* malformed inline JSON — leave source undefined */ }
+  } else if (sourceRaw && typeof sourceRaw === 'object' && !Array.isArray(sourceRaw)) {
+    point.source = sourceRaw as Record<string, unknown>;
   }
   return point;
 }

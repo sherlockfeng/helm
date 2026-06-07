@@ -463,9 +463,9 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-iso','iso','sp',?)`).run(new Date().toISOString());
     db.prepare(`
       INSERT INTO knowledge_chunks
-        (id, role_id, filename, title, body, position, created_at, visibility)
-      VALUES ('p-iso','r-iso','iso.md','Iso','body',0,?,'public')
-    `).run(Date.now());
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-iso','r-iso','iso.md','Iso','body',?,'public')
+    `).run(new Date().toISOString());
 
     await mgr.publish({
       repoId: repo.id,
@@ -514,9 +514,9 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-fail','fail','sp',?)`).run(new Date().toISOString());
     db.prepare(`
       INSERT INTO knowledge_chunks
-        (id, role_id, filename, title, body, position, created_at, visibility)
-      VALUES ('p-fail','r-fail','f.md','F','body',0,?,'public')
-    `).run(Date.now());
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-fail','r-fail','f.md','F','body',?,'public')
+    `).run(new Date().toISOString());
 
     await expect(mgr.publish({
       repoId: repo.id,

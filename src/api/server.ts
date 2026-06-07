@@ -43,6 +43,16 @@ import {
 } from '../storage/repos/benchmark.js';
 import { enqueueAffectedRuns } from '../verification/auto-trigger.js';
 import {
+  KnowledgeRepoManager,
+  KnowledgeRepoManagerError,
+} from '../knowledge-repo/manager.js';
+import {
+  deleteKnowledgeRepo,
+  getKnowledgeRepo,
+  listKnowledgeRepos,
+} from '../storage/repos/knowledge-repo.js';
+import { GitUrlError } from '../knowledge-repo/url.js';
+import {
   getCampaign,
   getCycle,
   getTask,
@@ -170,6 +180,13 @@ export interface HttpApiDeps {
    * (existing tests + CI without LLM credentials run cleanly).
    */
   verificationRunner?: (caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>;
+  /**
+   * PR 5.5a: optional KnowledgeRepoManager bound to the same DB.
+   * Absent = `/api/knowledge-repos` endpoints respond 501 so the
+   * renderer can hide the git surface in environments where git is
+   * unavailable. Production wires this from orchestrator.
+   */
+  knowledgeRepoManager?: KnowledgeRepoManager;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -877,6 +894,104 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           `SELECT COUNT(*) AS n FROM regression_alert WHERE status = 'open'`,
         ).get() as { n: number }).n;
         return send(res, 200, { proposed, openAlerts });
+      }
+
+      // PR 5.5a: KnowledgeRepo subscription surface.
+      //   GET    /api/knowledge-repos                — list
+      //   POST   /api/knowledge-repos                — subscribe (body { url, branch?, syncIntervalMinutes?, autoApply? })
+      //   POST   /api/knowledge-repos/:id/fetch-now  — pull on demand
+      //   DELETE /api/knowledge-repos/:id?removeData=true  — unsubscribe
+      // 501 surface when no manager is wired so the renderer can hide
+      // the git surface gracefully on environments without git.
+      if (url.pathname === '/api/knowledge-repos') {
+        if (req.method === 'GET') {
+          const statusParam = url.searchParams.get('status') ?? 'all';
+          const VALID = ['active', 'paused', 'error', 'conflict', 'all'] as const;
+          if (!(VALID as readonly string[]).includes(statusParam)) {
+            return badRequest(res, `invalid status: '${statusParam}'`);
+          }
+          const repos = listKnowledgeRepos(deps.db, {
+            status: statusParam as typeof VALID[number],
+          });
+          return send(res, 200, { repos });
+        }
+        if (req.method === 'POST') {
+          if (!deps.knowledgeRepoManager) {
+            return send(res, 501, {
+              error: 'no_repo_manager',
+              message: 'Git repo subscription is not enabled in this helm build.',
+            });
+          }
+          let body: Record<string, unknown>;
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          if (typeof body['url'] !== 'string' || body['url'].length === 0) {
+            return badRequest(res, 'url is required');
+          }
+          try {
+            const subscribeOpts: Parameters<KnowledgeRepoManager['subscribe']>[1] = {};
+            if (typeof body['branch'] === 'string') subscribeOpts.branch = body['branch'];
+            if (typeof body['syncIntervalMinutes'] === 'number') {
+              subscribeOpts.syncIntervalMinutes = body['syncIntervalMinutes'];
+            }
+            if (typeof body['autoApply'] === 'boolean') {
+              subscribeOpts.autoApply = body['autoApply'];
+            }
+            const repo = await deps.knowledgeRepoManager.subscribe(
+              body['url'] as string, subscribeOpts,
+            );
+            return send(res, 201, { repo });
+          } catch (err) {
+            if (err instanceof GitUrlError) {
+              return badRequest(res, err.message);
+            }
+            if (err instanceof KnowledgeRepoManagerError) {
+              return send(res, 409, { error: 'subscribe_failed', message: err.message });
+            }
+            return internalError(res, err);
+          }
+        }
+        return methodNotAllowed(res);
+      }
+
+      const repoFetchMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/fetch-now$/);
+      if (repoFetchMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        try {
+          const outcome = await deps.knowledgeRepoManager.fetchNow(repoFetchMatch[1]!);
+          return send(res, 200, outcome);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, err.message.startsWith('unknown repo') ? 404 : 409, {
+              error: 'fetch_failed', message: err.message,
+            });
+          }
+          return send(res, 500, { error: 'fetch_failed', message: (err as Error).message });
+        }
+      }
+
+      const repoIdMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)$/);
+      if (repoIdMatch) {
+        if (req.method === 'GET') {
+          const repo = getKnowledgeRepo(deps.db, repoIdMatch[1]!);
+          if (!repo) return notFound(res);
+          return send(res, 200, { repo });
+        }
+        if (req.method === 'DELETE') {
+          const removeData = url.searchParams.get('removeData') === 'true';
+          if (deps.knowledgeRepoManager) {
+            deps.knowledgeRepoManager.unsubscribe(repoIdMatch[1]!, { removeData });
+          } else {
+            // Even without a manager (no git), let the user clear the
+            // row so the UI doesn't trap them.
+            deleteKnowledgeRepo(deps.db, repoIdMatch[1]!);
+          }
+          return send(res, 200, { ok: true });
+        }
+        return methodNotAllowed(res);
       }
 
       if (url.pathname === '/api/verification/alerts') {

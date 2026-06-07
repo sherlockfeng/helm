@@ -846,3 +846,24 @@ export interface KnowledgeRepo {
   createdAt: number;
   updatedAt: number;
 }
+
+// ── KnowledgeMergeConflict (PR 5.5c / migration v23) ───────────────────────
+
+export type KnowledgeMergeConflictStatus = 'open' | 'resolved';
+
+export interface KnowledgeMergeConflict {
+  id: string;
+  repoId: string;
+  pointId: string;
+  localBody: string;
+  remoteBody: string;
+  /** edit_version the local chunk was at when the conflict was recorded. */
+  localVersion: number;
+  /** Commit SHA the remote body came from. */
+  remoteRevision: string;
+  status: KnowledgeMergeConflictStatus;
+  resolvedBody?: string;
+  resolvedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}

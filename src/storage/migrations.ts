@@ -895,6 +895,36 @@ export const MIGRATIONS: Migration[] = [
         ON knowledge_repo(url, branch);
     `,
   },
+  {
+    version: 23,
+    description:
+      'Knowledge merge conflicts (PR 5.5c). When import-now would'
+      + ' overwrite a chunk that diverged locally (edit_version moved'
+      + ' past the last imported version), the importer records a row'
+      + ' here instead of clobbering. The Library shows pending'
+      + ' conflicts and surfaces local / remote / merged-draft panes so'
+      + ' the user picks a winner. status open / resolved.',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_merge_conflict (
+        id              TEXT PRIMARY KEY,
+        repo_id         TEXT NOT NULL REFERENCES knowledge_repo(id) ON DELETE CASCADE,
+        point_id        TEXT NOT NULL,
+        local_body      TEXT NOT NULL,
+        remote_body     TEXT NOT NULL,
+        local_version   INTEGER NOT NULL,
+        remote_revision TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        resolved_body   TEXT,
+        resolved_at     INTEGER,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_merge_conflict_status
+        ON knowledge_merge_conflict(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_merge_conflict_repo
+        ON knowledge_merge_conflict(repo_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

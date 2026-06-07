@@ -102,6 +102,7 @@ import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
 import { attachLarkChannel, type LarkWiringHandle } from './lark-wiring.js';
 import type { HostStopRequest, HostStopResponse } from '../bridge/protocol.js';
+import { buildVerificationRunner } from '../verification/bootstrap.js';
 
 export interface HelmAppDeps {
   db: Database.Database;
@@ -1104,12 +1105,30 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   }
 
+  // PR 5b: try to bootstrap a real Verification runner from
+  // `~/.helm/benchmark/providers.json`. Failures (missing file →
+  // null; malformed JSON / unresolvable env → caught + logged) leave
+  // the API surface running with verificationRunner=undefined, which
+  // the candidate-accept hook + POST /run path treat as 503 / no-op.
+  let bootstrappedRunner: ((caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>) | undefined;
+  if (!deps.verificationRunner) {
+    try {
+      const bootstrapped = buildVerificationRunner({ db: deps.db });
+      if (bootstrapped) bootstrappedRunner = bootstrapped.runner;
+    } catch (err) {
+      deps.loggers.module('verification').warn('bootstrap_failed', {
+        data: { message: (err as Error).message },
+      });
+    }
+  }
+  const effectiveVerificationRunner = deps.verificationRunner ?? bootstrappedRunner;
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
       db: deps.db, registry, policy, events, logger: deps.loggers.module('api'),
       mcpFactory,
-      ...(deps.verificationRunner ? { verificationRunner: deps.verificationRunner } : {}),
+      ...(effectiveVerificationRunner ? { verificationRunner: effectiveVerificationRunner } : {}),
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

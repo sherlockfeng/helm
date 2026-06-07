@@ -132,6 +132,24 @@ function CaseRow({ c, onActed }: { c: BenchmarkCase; onActed: () => void }): Rea
     } finally { setBusy(false); }
   };
 
+  const runNow = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const r = await helmApi.runVerificationCase(c.id);
+      toast.success(`Ran: ${r.run.alignmentPct.toFixed(1)}% alignment, ${r.run.recallPct.toFixed(1)}% recall.`);
+      onActed();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        toast.error(
+          'No verification runner configured. Create '
+          + '~/.helm/benchmark/providers.json and restart helm.',
+        );
+      } else {
+        toast.error(`Run failed: ${err instanceof ApiError ? err.message : String(err)}`);
+      }
+    } finally { setBusy(false); }
+  };
+
   return (
     <Card>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -165,6 +183,11 @@ function CaseRow({ c, onActed }: { c: BenchmarkCase; onActed: () => void }): Rea
           <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
             <Button onClick={confirm} disabled={busy} variant="primary">Confirm</Button>
             <Button onClick={reject} disabled={busy} variant="danger">Reject</Button>
+          </div>
+        )}
+        {c.status === 'confirmed' && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <Button onClick={runNow} disabled={busy} variant="primary">Run now</Button>
           </div>
         )}
       </div>

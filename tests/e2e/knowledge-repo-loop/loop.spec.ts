@@ -105,11 +105,14 @@ describeOrSkip('e2e knowledge-repo loop (R-12)', () => {
   it('subscribe → publish → fetch round-trip lands the new commit on the remote', async () => {
     const repo = await mgr.subscribe(remoteUrl, { branch: 'main' });
     expect(repo.status).toBe('active');
-    expect(repo.lastFetchedSha ?? '').toMatch(/^[0-9a-f]+$/i);
+    // lastFetchedSha is populated by fetchNow, not by subscribe — drive
+    // an explicit fetch so the round-trip below has a sha to anchor on.
+    const fetched = await mgr.fetchNow(repo.id);
+    expect(fetched.headSha).toMatch(/^[0-9a-f]+$/i);
 
     seedPublishablePoint(db, 'p-loop-1', 'first published body');
 
-    const before = repo.lastFetchedSha;
+    const before = fetched.headSha;
     const publishResult = await mgr.publish({
       repoId: repo.id,
       pointIds: ['p-loop-1'],

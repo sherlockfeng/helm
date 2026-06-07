@@ -54,6 +54,17 @@ let lifecycleSweepTrigger: LifecycleSweepTrigger | null = null;
 export function setLifecycleSweepTrigger(trigger: LifecycleSweepTrigger | null): void {
   lifecycleSweepTrigger = trigger;
 }
+
+// R-21: optional logger sink so the orchestrator can route
+// trigger-failure noise to the file logger instead of stderr. The
+// module stays usable in unit tests (no logger installed) by
+// falling back to console.warn.
+type SweepLogger = { warn(msg: string, fields?: { data?: unknown }): void };
+let sweepLogger: SweepLogger | null = null;
+export function setLifecycleSweepLogger(logger: SweepLogger | null): void {
+  sweepLogger = logger;
+}
+
 export function fireLifecycleSweep(roleId: string): void {
   if (!lifecycleSweepTrigger) return;
   try {
@@ -61,8 +72,13 @@ export function fireLifecycleSweep(roleId: string): void {
   } catch (err) {
     // Triggers are fire-and-forget — failing to schedule a sweep must
     // never break a train/update call.
-    // eslint-disable-next-line no-console
-    console.warn('[roles/library] lifecycle sweep trigger threw:', (err as Error).message);
+    const message = (err as Error).message;
+    if (sweepLogger) {
+      sweepLogger.warn('lifecycle_sweep_trigger_threw', { data: { roleId, message } });
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[roles/library] lifecycle sweep trigger threw:', message);
+    }
   }
 }
 

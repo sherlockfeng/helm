@@ -527,4 +527,61 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     expect(worktreeAddSeen).toBe(true);
     expect(worktreeRemoveSeen).toBe(true);
   });
+
+  it('R-21: PR-create failure routes through the injected logger, not console', async () => {
+    let cloneSeen = false;
+    let worktreePath = '';
+    const runner: GitRunner = async (args) => {
+      const first = args[0];
+      if (first === 'clone' && !cloneSeen) {
+        cloneSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'worktree' && args[1] === 'add') {
+        worktreePath = String(args[4]);
+        mkdirSync(worktreePath, { recursive: true });
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'worktree' && args[1] === 'remove') {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    // PR runner refuses → manager should log the warning via the
+    // injected logger instead of letting console.error fire.
+    const prRunner = async () => ({
+      stdout: '', stderr: 'gh: not authenticated', exitCode: 1,
+    });
+    const warnCalls: Array<{ msg: string; data: unknown }> = [];
+    const fakeLogger = {
+      module: 'test',
+      debug() {}, info() {}, error() {},
+      warn(msg: string, fields?: { data?: unknown }) {
+        warnCalls.push({ msg, data: fields?.data });
+      },
+      session() { return this; },
+    };
+
+    const mgr = new KnowledgeRepoManager({
+      db, git: runner, reposRoot,
+      prRunner, logger: fakeLogger as never,
+    });
+    const repo = await mgr.subscribe('https://github.com/org/prfail');
+    mkdirSync(repo.localPath, { recursive: true });
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-pr','pr','sp',?)`).run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-pr','r-pr','x.md','X','body',?,'public')
+    `).run(new Date().toISOString());
+
+    await mgr.publish({
+      repoId: repo.id, pointIds: ['p-pr'],
+      message: 'will-fail-pr',
+    });
+
+    expect(warnCalls.length).toBe(1);
+    expect(warnCalls[0]!.msg).toBe('publish_pr_create_failed');
+    expect((warnCalls[0]!.data as { error?: string }).error).toMatch(/gh: not authenticated/);
+  });
 });

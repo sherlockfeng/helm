@@ -35,7 +35,7 @@ const SCREENSHOT_DIR = join(__dirname, '__screenshots__');
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
 let app: ElectronApplication;
-let window: Page;
+let page: Page;
 let userDataDir: string;
 const consoleMessages: string[] = [];
 const pageErrors: string[] = [];
@@ -64,16 +64,16 @@ beforeAll(async () => {
     }
   });
 
-  window = await app.firstWindow({ timeout: 60_000 });
-  window.on('console', (m) => consoleMessages.push(`${m.type()}:${m.text()}`));
-  window.on('pageerror', (err) => pageErrors.push(err.message));
-  await window.waitForLoadState('domcontentloaded');
+  page = await app.firstWindow({ timeout: 60_000 });
+  page.on('console', (m) => consoleMessages.push(`${m.type()}:${m.text()}`));
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+  await page.waitForLoadState('domcontentloaded');
 }, 90_000);
 
 afterAll(async () => {
   // Always dump the final state for debugging, even on success.
   try {
-    if (window && !window.isClosed()) {
+    if (page && !page.isClosed()) {
       writeFileSync(
         join(SCREENSHOT_DIR, 'console.txt'),
         ['== console messages ==', ...consoleMessages, '', '== page errors ==', ...pageErrors].join('\n'),
@@ -85,55 +85,59 @@ afterAll(async () => {
 });
 
 describe('renderer smoke', () => {
-  it('window paints, new IA sidebar, conversations index, every primary page reachable, no JS errors', async () => {
+  it('page paints, new IA sidebar, conversations index, every primary page reachable, no JS errors', async () => {
     // ── 1. Sidebar paint + IA structure ────────────────────────────────
     // PR 1 (conversations-knowledge IA): primary surfaces are
     // Conversations / Knowledge / Verification, plus Settings pinned
     // bottom. Approvals/Bindings/Harness live under Settings › Advanced
     // (hidden until enabled). The renderer must paint without a
     // BrowserWindow under HashRouter (file:// context).
-    await window.waitForSelector('h1', { timeout: 30_000 });
-    await window.screenshot({
+    await page.waitForSelector('h1', { timeout: 30_000 });
+    await page.screenshot({
       path: join(SCREENSHOT_DIR, 'conversations-loaded.png'),
       fullPage: true,
     });
 
     // <h1>Helm</h1> in the sidebar — the bare-minimum-rendered signal.
-    expect((await window.locator('h1').first().textContent())?.trim()).toBe('Helm');
+    expect((await page.locator('h1').first().textContent())?.trim()).toBe('Helm');
 
     // Every primary nav entry must be present. Catches a Layout refactor
     // that silently drops a route.
-    const navText = await window.locator('nav.helm-nav').textContent();
+    const navText = await page.locator('nav.helm-nav').textContent();
     for (const label of ['Conversations', 'Knowledge', 'Library', 'Review', 'Sources', 'Verification', 'Cases', 'Runs', 'Coverage', 'Settings']) {
       expect(navText, `nav missing "${label}"`).toContain(label);
     }
 
     // Advanced section should be hidden by default (new install: no
     // historical approval data → autoEnableIfHistoricalData persists '0').
-    const advancedNav = window.locator('[data-testid="helm-nav-advanced"]');
+    const advancedNav = page.locator('[data-testid="helm-nav-advanced"]');
     expect(await advancedNav.count(), 'Advanced section should be hidden by default').toBe(0);
 
     // The Conversations page is the index target — heading must render,
     // not stay blank or render a router fallback.
     expect(
-      (await window.locator('main.helm-main h2').first().textContent())?.trim(),
+      (await page.locator('main.helm-main h2').first().textContent())?.trim(),
     ).toBeTruthy();
 
     // Wait for backend connectivity confirmation. The "Connected" pill
     // proves the renderer's API client actually reached the helm HTTP
     // server — guards against the white-screen / "Backend offline" bug.
-    await window.waitForFunction(
+    await page.waitForFunction(
       () => /Connected/.test(document.querySelector('.helm-status')?.textContent ?? ''),
       { timeout: 15_000 },
     );
 
     // ── 2. Router back-compat: /chats redirects to /conversations ──────
-    await window.evaluate(() => { window.location.hash = '#/chats'; });
-    await window.waitForFunction(
-      () => window.location.hash === '#/conversations',
+    // `location` / `localStorage` / `dispatchEvent` inside evaluate /
+    // waitForFunction bodies run in browser context — refer to them as
+    // bare globals, not via `page.` (which would resolve to the
+    // Playwright Page object).
+    await page.evaluate(() => { location.hash = '#/chats'; });
+    await page.waitForFunction(
+      () => location.hash === '#/conversations',
       { timeout: 5000 },
     );
-    await window.screenshot({
+    await page.screenshot({
       path: join(SCREENSHOT_DIR, 'chats-redirect-loaded.png'),
       fullPage: true,
     });
@@ -150,43 +154,43 @@ describe('renderer smoke', () => {
       '/settings',
     ];
     for (const route of primaryRoutes) {
-      await window.evaluate((r) => { window.location.hash = `#${r}`; }, route);
-      await window.waitForFunction(
+      await page.evaluate((r) => { location.hash = `#${r}`; }, route);
+      await page.waitForFunction(
         () => Boolean(document.querySelector('main.helm-main h2')),
         { timeout: 5000 },
       );
       const slug = route.replace(/^\//, '').replace(/\//g, '-') || 'root';
-      await window.screenshot({
+      await page.screenshot({
         path: join(SCREENSHOT_DIR, `${slug}-loaded.png`),
         fullPage: true,
       });
     }
 
     // ── 4. Settings › Advanced toggle reveals the Advanced section ─────
-    await window.evaluate(() => {
-      window.localStorage.setItem('helm.ui.advanced', '1');
-      window.dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: true }));
+    await page.evaluate(() => {
+      localStorage.setItem('helm.ui.advanced', '1');
+      dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: true }));
     });
-    await window.waitForFunction(
+    await page.waitForFunction(
       () => Boolean(document.querySelector('[data-testid="helm-nav-advanced"]')),
       { timeout: 5000 },
     );
 
     // After toggle, legacy surfaces are reachable via direct hash nav.
     for (const route of ['/approvals', '/bindings', '/harness']) {
-      await window.evaluate((r) => { window.location.hash = `#${r}`; }, route);
-      await window.waitForFunction(
+      await page.evaluate((r) => { location.hash = `#${r}`; }, route);
+      await page.waitForFunction(
         () => Boolean(document.querySelector('main.helm-main h2')),
         { timeout: 5000 },
       );
     }
 
     // Toggle back off; Advanced should disappear from the sidebar.
-    await window.evaluate(() => {
-      window.localStorage.setItem('helm.ui.advanced', '0');
-      window.dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: false }));
+    await page.evaluate(() => {
+      localStorage.setItem('helm.ui.advanced', '0');
+      dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: false }));
     });
-    await window.waitForFunction(
+    await page.waitForFunction(
       () => document.querySelector('[data-testid="helm-nav-advanced"]') === null,
       { timeout: 5000 },
     );

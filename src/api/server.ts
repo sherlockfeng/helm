@@ -490,7 +490,8 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return mcpHub.handleMessage(req, res, url.searchParams.get('sessionId'));
       }
 
-      const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : '';
+      const body = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH'
+        ? await readBody(req) : '';
       const ctx: RouteContext = { url, request: req, response: res, body };
 
       if (url.pathname === '/api/health') {

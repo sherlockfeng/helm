@@ -31,9 +31,11 @@ import {
 } from '../storage/repos/knowledge-repo.js';
 import type { KnowledgeRepo } from '../storage/types.js';
 import {
+  addWorktree,
   cloneRepo,
   fetchRepo,
   GitCommandError,
+  removeWorktree,
   type GitRunner,
 } from './git.js';
 import {
@@ -49,7 +51,6 @@ import {
 import {
   PublishError,
   addAndCommit,
-  checkoutBranch,
   createPullRequest,
   pickPlatform,
   pushBranch,
@@ -138,7 +139,12 @@ export class KnowledgeRepoManager {
   private readonly git: GitRunner;
   private readonly reposRoot: string;
   private readonly extraInternalHosts: readonly string[];
-  private readonly locks = new Map<string, Promise<unknown>>();
+  /**
+   * Per-repo FIFO chain. The map value is the tail promise; each new
+   * caller chains off it (regardless of fulfilment) and replaces it
+   * with their own promise so subsequent callers serialize behind.
+   */
+  private readonly lockTails = new Map<string, Promise<unknown>>();
 
   private readonly prRunner?: PrPlatformRunner;
 
@@ -280,57 +286,84 @@ export class KnowledgeRepoManager {
       }
 
       const branchName = input.branchName ?? defaultBranchName(input.repoId);
-      await checkoutBranch(this.git, { cwd: repo.localPath, branch: branchName, force: true });
+      const worktreePath = join(
+        this.reposRoot,
+        `.publish-${sha256Short(input.repoId)}-${Date.now()}`,
+      );
 
-      const layout = input.layout ?? defaultLayout;
-      let filesWritten = 0;
-      for (const pid of input.pointIds) {
-        const chunk = getChunkById(this.db, pid);
-        if (!chunk) continue;
-        const aliases = getAliasesForPoint(this.db, pid);
-        const rel = getOutgoingRels(this.db, pid);
-        const text = serializePoint({
-          chunk, aliases, rel,
-          ...(input.profile ? { profile: input.profile } : {}),
-        });
-        const absPath = join(repo.localPath, layout(chunk));
-        mkdirSync(dirname(absPath), { recursive: true });
-        writeFileSync(absPath, text, 'utf8');
-        filesWritten += 1;
-      }
-
-      const userOverride = input.anonymous
-        ? { name: 'helm-anonymous', email: 'anonymous@helm.local' }
-        : undefined;
-      await addAndCommit(this.git, repo.localPath, input.message, userOverride);
-      await pushBranch(this.git, {
-        cwd: repo.localPath, branch: branchName, setUpstream: true,
+      // Run the whole publish in an ephemeral worktree forked off
+      // repo.branch so the user-facing clone never sees the new branch.
+      // Without this, the next importNow would read serialized .md
+      // files instead of the upstream content.
+      await addWorktree(this.git, {
+        cwd: repo.localPath,
+        worktreePath,
+        branch: branchName,
+        baseRef: repo.branch,
+        force: true,
       });
 
-      // PR creation is best-effort: when the user hasn't installed gh
-      // / glab we still push the branch and let them open the PR by
-      // hand. The branch + commit are already on the remote.
+      let filesWritten = 0;
       let prUrl = '';
-      if (this.prRunner) {
-        try {
-          const platform = pickPlatform(hostFromUrl(repo.url));
-          if (platform) {
-            const result: CreatePrResult = await createPullRequest(this.prRunner, {
-              cwd: repo.localPath,
-              platform,
-              title: firstLineOf(input.message),
-              body: bodyAfterFirstLine(input.message),
-              baseBranch: repo.branch,
-              headBranch: branchName,
-            });
-            prUrl = result.url;
-          }
-        } catch (err) {
-          // Log via stderr so the user sees the precise CLI failure
-          // but the publish itself stays "branch is on the remote".
-          // eslint-disable-next-line no-console
-          console.error(`[helm:publish] PR creation failed: ${(err as Error).message}`);
+      try {
+        const layout = input.layout ?? defaultLayout;
+        for (const pid of input.pointIds) {
+          const chunk = getChunkById(this.db, pid);
+          if (!chunk) continue;
+          const aliases = getAliasesForPoint(this.db, pid);
+          const rel = getOutgoingRels(this.db, pid);
+          const text = serializePoint({
+            chunk, aliases, rel,
+            ...(input.profile ? { profile: input.profile } : {}),
+          });
+          const absPath = join(worktreePath, layout(chunk));
+          mkdirSync(dirname(absPath), { recursive: true });
+          writeFileSync(absPath, text, 'utf8');
+          filesWritten += 1;
         }
+
+        const userOverride = input.anonymous
+          ? { name: 'helm-anonymous', email: 'anonymous@helm.local' }
+          : undefined;
+        await addAndCommit(this.git, worktreePath, input.message, userOverride);
+        await pushBranch(this.git, {
+          cwd: worktreePath, branch: branchName, setUpstream: true,
+        });
+
+        // PR creation is best-effort: when the user hasn't installed gh
+        // / glab we still push the branch and let them open the PR by
+        // hand. The branch + commit are already on the remote.
+        if (this.prRunner) {
+          try {
+            const platform = pickPlatform(hostFromUrl(repo.url));
+            if (platform) {
+              const result: CreatePrResult = await createPullRequest(this.prRunner, {
+                cwd: worktreePath,
+                platform,
+                title: firstLineOf(input.message),
+                body: bodyAfterFirstLine(input.message),
+                baseBranch: repo.branch,
+                headBranch: branchName,
+              });
+              prUrl = result.url;
+            }
+          } catch (err) {
+            // Log via stderr so the user sees the precise CLI failure
+            // but the publish itself stays "branch is on the remote".
+            // eslint-disable-next-line no-console
+            console.error(`[helm:publish] PR creation failed: ${(err as Error).message}`);
+          }
+        }
+      } finally {
+        // Always reap the worktree, even on failure. A leaked .publish-*
+        // dir would confuse the next subscribe + bloat ~/.helm/repos.
+        try {
+          await removeWorktree(this.git, repo.localPath, worktreePath);
+        } catch {
+          // Best-effort: the rmSync below catches anything `git
+          // worktree remove` refused to clean up.
+        }
+        safeRemoveDir(worktreePath);
       }
 
       return { branch: branchName, prUrl, filesWritten };
@@ -370,16 +403,27 @@ export class KnowledgeRepoManager {
     safeRemoveDir(repo.localPath);
   }
 
-  private async withRepoLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
-    const pending = this.locks.get(repoId) as Promise<T> | undefined;
-    if (pending) await pending.catch(() => undefined);
-    const promise = fn();
-    this.locks.set(repoId, promise);
-    try {
-      return await promise;
-    } finally {
-      if (this.locks.get(repoId) === promise) this.locks.delete(repoId);
-    }
+  private withRepoLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
+    // FIFO chain: every caller chains off the previous *tail* — not the
+    // current head — so three concurrent callers run strictly in
+    // arrival order (A → B → C), each waiting on its predecessor's
+    // settlement (success OR failure).
+    const previousTail = this.lockTails.get(repoId);
+    const myTask: Promise<T> = (previousTail
+      ? previousTail.then(() => fn(), () => fn())
+      : fn());
+    // Store the swallowed-error tail so subsequent enqueues don't
+    // reject the chain just because we did.
+    const newTail = myTask.then(() => undefined, () => undefined);
+    this.lockTails.set(repoId, newTail);
+    void newTail.then(() => {
+      // Only clear the slot if we're still the tail; otherwise a later
+      // caller has taken over already.
+      if (this.lockTails.get(repoId) === newTail) {
+        this.lockTails.delete(repoId);
+      }
+    });
+    return myTask;
   }
 }
 

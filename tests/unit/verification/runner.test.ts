@@ -18,7 +18,7 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
-import { insertCase } from '../../../src/storage/repos/benchmark.js';
+import { getCostForDate, insertCase, recordCostDelta } from '../../../src/storage/repos/benchmark.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 import {
   parseJudgeVerdict,
@@ -184,6 +184,66 @@ describe('runCase', () => {
       expect(err).toBeInstanceOf(RunCaseError);
       expect((err as RunCaseError).stage).toBe('answer');
     }
+  });
+});
+
+describe('runCase R-5 status guard', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => { db = openDb(); });
+  afterEach(() => { db.close(); });
+
+  it('refuses to run a proposed case unless allowUnconfirmed=true', async () => {
+    seedCase(db, 'c-prop', ['p-1']);
+    // Flip the case to 'proposed' to simulate an LLM-on-edit candidate
+    // that hasn't been human-confirmed yet (R-5).
+    db.prepare(`UPDATE benchmark_case SET status = 'proposed' WHERE id = ?`).run('c-prop');
+    const llm = makeLlm('a', '{"aligned": true, "score": 60, "summary": "ok"}');
+
+    await expect(runCase({
+      db, caseId: 'c-prop', providers, llm,
+      retrieve: passingRetriever, repoProbe,
+    })).rejects.toThrowError(/only confirmed cases run/);
+
+    // Explicit override still works (for debug paths).
+    const out = await runCase({
+      db, caseId: 'c-prop', providers, llm,
+      retrieve: passingRetriever, repoProbe,
+      options: { allowUnconfirmed: true },
+    });
+    expect(out.alignmentPct).toBe(60);
+  });
+});
+
+describe('runCase cost cap (§4.7.6)', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => { db = openDb(); });
+  afterEach(() => { db.close(); });
+
+  it('refuses to start when today\'s spend already exceeds the cap', async () => {
+    seedCase(db, 'c-cap', ['p-1']);
+    const today = new Date().toISOString().slice(0, 10);
+    // Seed today's row to look like we already spent $0.50.
+    recordCostDelta(db, today, null, 1, 0.50);
+
+    const llm = makeLlm('a', '{"aligned": true, "score": 60, "summary": "ok"}');
+    await expect(runCase({
+      db, caseId: 'c-cap', providers, llm,
+      retrieve: passingRetriever, repoProbe,
+      options: { costCapUsd: 0.10 },
+    })).rejects.toThrowError(/daily benchmark spend/);
+  });
+
+  it('records the run\'s cost into today\'s aggregate so the cap moves', async () => {
+    seedCase(db, 'c-acc', ['p-1']);
+    const llm = makeLlm('a', '{"aligned": true, "score": 60, "summary": "ok"}');
+    await runCase({
+      db, caseId: 'c-acc', providers, llm,
+      retrieve: passingRetriever, repoProbe,
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const row = getCostForDate(db, today, null);
+    expect(row?.llmCalls).toBe(2);
+    expect(row?.estimatedCostUsd).toBeCloseTo(0.03, 4);
   });
 });
 

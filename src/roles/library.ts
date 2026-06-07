@@ -496,6 +496,13 @@ export function findConflictingChunks(
 }
 
 export interface KnowledgeSearchResult {
+  /**
+   * PR 3 (Conversation Detail backend): canonical knowledge_chunks.id of
+   * the matched row. Threaded from HybridSearchHit so retrieval_log_points
+   * can record the point identity for reverse "which conversations cited
+   * this point?" queries from KnowledgePoint Detail.
+   */
+  chunkId: string;
   chunkText: string;
   sourceFile?: string;
   /** Phase 73: chunk kind discriminator — lets callers filter / weight by type. */
@@ -573,6 +580,7 @@ export async function searchKnowledge(
   });
   return hits.map((h) => {
     const r: KnowledgeSearchResult = {
+      chunkId: h.chunkId,
       chunkText: h.chunkText,
       kind: h.kind,
       score: h.score,

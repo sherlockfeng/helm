@@ -32,6 +32,7 @@ import {
   setHostSessionRole,
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
+import { getConversationDetail } from './conversation-detail.js';
 import {
   getCampaign,
   getCycle,
@@ -61,8 +62,10 @@ import {
   unarchiveChunk as unarchiveChunkRepo,
 } from '../storage/repos/roles.js';
 import {
+  bulkRejectCandidates,
   getCandidateById,
   listCandidatesForRole,
+  listReviewCandidates,
   pendingCountsByRole,
   setCandidateStatus,
   updateCandidateText,
@@ -453,6 +456,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return send(res, 200, { ok: true, name: appName, version: appVersion });
       }
 
+      // PR 3 (Conversation Detail): GET /api/conversations/:id returns the
+      // joined detail (header + timeline + knowledge_in_play + candidates).
+      // Aliased under both /api/conversations/ (new IA naming) and the
+      // legacy /api/active-chats/:id/detail for renderers that haven't
+      // migrated.
+      const conversationDetailMatch = url.pathname.match(
+        /^\/api\/(?:conversations|active-chats)\/([^/]+)\/detail$/,
+      );
+      if (conversationDetailMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const detail = getConversationDetail(deps.db, conversationDetailMatch[1]!);
+        if (!detail) return send(res, 404, { error: 'Conversation not found' });
+        return send(res, 200, detail);
+      }
+
       if (url.pathname === '/api/active-chats') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const sessions = listActiveSessions(deps.db);
@@ -671,6 +689,52 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           data: { chunkId, roleId: before.roleId, wasArchived: before.archived, restored },
         });
         return send(res, 200, { chunkId, restored });
+      }
+
+      // PR 4 (Review inbox): cross-role candidate list for the top-level
+      // Review surface (§5.3). Filters and sort are passed as query
+      // params; defaults to pending + recent. The single-role
+      // /api/roles/:id/candidates path below stays for the legacy Roles
+      // UI Candidates tab.
+      if (url.pathname === '/api/review/candidates') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const statusParam = url.searchParams.get('status') ?? 'pending';
+        const VALID_STATUSES_REVIEW = ['pending', 'accepted', 'rejected', 'expired', 'all'] as const;
+        if (!(VALID_STATUSES_REVIEW as readonly string[]).includes(statusParam)) {
+          return badRequest(res, `invalid status: '${statusParam}'`);
+        }
+        const sortParam = url.searchParams.get('sort') ?? 'recent';
+        if (sortParam !== 'recent' && sortParam !== 'score') {
+          return badRequest(res, `invalid sort: '${sortParam}'. Expected 'recent' or 'score'.`);
+        }
+        const roleId = url.searchParams.get('roleId') ?? undefined;
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+        if (limitParam && (!Number.isFinite(limit) || (limit ?? 0) < 1)) {
+          return badRequest(res, `invalid limit: '${limitParam}'`);
+        }
+        const candidates = listReviewCandidates(deps.db, {
+          status: statusParam as 'pending' | 'accepted' | 'rejected' | 'expired' | 'all',
+          sort: sortParam,
+          ...(roleId ? { roleId } : {}),
+          ...(limit ? { limit } : {}),
+        });
+        return send(res, 200, { candidates });
+      }
+
+      // PR 4 (Review inbox): bulk reject — never bulk accept (R-5).
+      //   POST /api/review/bulk-reject  body { candidateIds: string[] }
+      if (url.pathname === '/api/review/bulk-reject') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: { candidateIds?: unknown };
+        try { body = JSON.parse(ctx.body); }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (!Array.isArray(body.candidateIds)
+            || !body.candidateIds.every((x): x is string => typeof x === 'string')) {
+          return badRequest(res, 'candidateIds must be a string array');
+        }
+        const flipped = bulkRejectCandidates(deps.db, body.candidateIds, new Date().toISOString());
+        return send(res, 200, { flipped });
       }
 
       // Phase 78: list candidates for a role.

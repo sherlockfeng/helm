@@ -14,10 +14,10 @@ import {
   MessagesSquare, BookOpen, Inbox, Cloud,
   ListChecks, History, Target,
   Settings,
-  // Advanced (opt-in)
-  ShieldCheck, Link2, Workflow,
 } from './Icons.js';
-import { autoEnableIfHistoricalData, isAdvancedEnabled } from '../lib/advanced-flag.js';
+// R-18: removed the helm.ui.advanced flag entirely. Approvals /
+// Bindings / Harness are now reachable from Settings › Advanced (and
+// always via direct URL); no more sidebar-visibility toggle.
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -73,15 +73,11 @@ export const PRIMARY_NAV: NavEntry[] = [
   },
 ];
 
-/** Exported so the renderer e2e suite can assert IA structure. */
-export const ADVANCED_GROUP: NavGroup = {
-  label: 'Advanced',
-  items: [
-    { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
-    { to: '/bindings', label: 'Bindings', icon: Link2 },
-    { to: '/harness', label: 'Harness', icon: Workflow },
-  ],
-};
+// R-18: ADVANCED_GROUP removed. Approvals / Bindings / Harness are
+// surfaced as link cards under Settings › Advanced (and remain
+// reachable by direct URL). The renderer e2e assertions for these
+// pages now drive them through the Settings route or via direct
+// navigation.
 
 const SETTINGS_ITEM: NavItem = { to: '/settings', label: 'Settings', icon: Settings };
 
@@ -151,7 +147,6 @@ export function Layout() {
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [verificationBadge, setVerificationBadge] = useState<number>(0);
   const [healthy, setHealthy] = useState<boolean>(true);
-  const [advancedOn, setAdvancedOn] = useState<boolean>(isAdvancedEnabled());
 
   // Initial fetch + reconcile on every approval event.
   const refreshCount = async (): Promise<void> => {
@@ -159,12 +154,6 @@ export function Layout() {
       const r = await helmApi.approvals();
       setPendingCount(r.approvals.length);
       setHealthy(true);
-      // First-launch auto-enable: if user clearly has historical Advanced
-      // data (pending approvals from before the IA reshuffle), surface
-      // the section by default. This only runs if no decision is stored
-      // yet (see autoEnableIfHistoricalData).
-      autoEnableIfHistoricalData({ hasHistoricalAdvancedData: r.approvals.length > 0 });
-      setAdvancedOn(isAdvancedEnabled());
     } catch { setHealthy(false); }
   };
 
@@ -188,19 +177,6 @@ export function Layout() {
     void refresh();
     const id = setInterval(refresh, 60_000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
-
-  // Keep the sidebar in sync with the Settings › Advanced toggle without
-  // a full reload. `setAdvancedEnabled` fires a synthetic event for the
-  // same-tab case (browsers only fire `storage` cross-tab).
-  useEffect(() => {
-    const onChange = (): void => setAdvancedOn(isAdvancedEnabled());
-    window.addEventListener('helm:advanced-changed', onChange);
-    window.addEventListener('storage', onChange);
-    return () => {
-      window.removeEventListener('helm:advanced-changed', onChange);
-      window.removeEventListener('storage', onChange);
-    };
   }, []);
 
   // Phase 46: also refresh on `approval.decision_received`. Some decision
@@ -260,14 +236,8 @@ export function Layout() {
           ) : (
             <NavRow key={entry.to} item={entry} pendingCount={pendingCount} verificationBadge={verificationBadge} />
           ))}
-          {advancedOn && (
-            <div className="helm-nav-group" data-testid="helm-nav-advanced">
-              <div className="helm-nav-group-label">{ADVANCED_GROUP.label}</div>
-              {ADVANCED_GROUP.items.map((item) => (
-                <NavRow key={item.to} item={item} pendingCount={pendingCount} verificationBadge={verificationBadge} nested />
-              ))}
-            </div>
-          )}
+          {/* R-18: Advanced sidebar group removed; Approvals / Bindings /
+              Harness reachable from Settings › Advanced + direct URL. */}
           {/* Spacer pushes Settings to the bottom of the sidebar — the
               "infrequent / admin" item per the IA. */}
           <div className="helm-nav-spacer" aria-hidden="true" />

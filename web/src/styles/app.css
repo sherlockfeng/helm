@@ -1469,3 +1469,96 @@ code, pre {
 [data-sonner-toast] {
   box-shadow: var(--shadow-modal);
 }
+
+
+/* ── R-18: Settings sub-nav layout ──────────────────────────────── */
+/* Two-column shell — section rail on the left, active-section pane
+   on the right. Mirrors macOS System Settings; mental model every
+   helm user already has. */
+
+.helm-settings-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.helm-settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 16px;
+  /* Keep the rail compact even on tall sections so the user always
+     has the same anchor for navigation. */
+}
+
+.helm-settings-rail-item {
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.helm-settings-rail-item:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.04));
+}
+.helm-settings-rail-item.is-active {
+  background: var(--accent-soft, rgba(59,130,246,0.10));
+  color: var(--accent, #3b82f6);
+  font-weight: 600;
+}
+
+.helm-settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0; /* lets long lines wrap rather than blow out the grid */
+}
+
+.helm-settings-footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  /* Glass effect so the footer reads as "elevated above the pane
+     scroll" without looking like a separate card. */
+  backdrop-filter: blur(6px);
+  z-index: 1;
+}
+
+/* Engine sub-tabs inside Engines pane. Horizontal pill row. */
+.helm-settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  width: fit-content;
+}
+.helm-settings-tab {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.helm-settings-tab:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.04));
+}
+.helm-settings-tab.is-active {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+}

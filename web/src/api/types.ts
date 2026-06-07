@@ -155,14 +155,37 @@ export interface HelmConfig {
     lifecycle?: KnowledgeLifecycleConfig;
   };
   docFirst: { enforce: boolean };
-  cursor: { apiKey?: string; model: string; mode: 'local' | 'cloud' };
+  cursor: {
+    apiKey?: string;
+    model: string;
+    mode: 'local' | 'cloud';
+    /** R-18: auto-write helm's MCP entry into Cursor's MCP config. */
+    mcpAutoRegister?: boolean;
+  };
+  /** R-18: Claude Code CLI config. Optional — backend supplies defaults. */
+  claudeCode?: {
+    binaryPath?: string;
+    model: string;
+    trainerModel: string;
+    mcpAutoRegister: boolean;
+  };
+  /** R-18: Codex CLI config — symmetric with claudeCode. */
+  codex?: {
+    binaryPath?: string;
+    model: string;
+    trainerModel: string;
+    mcpAutoRegister: boolean;
+  };
   // Phase 67: global Harness conventions, injected into every reviewer
   // subprocess. Optional in the type so older saved configs still parse.
   harness?: { conventions: string };
-  // Phase 68: global default engine. Drives Roles modal, Harness reviewer,
-  // and Campaign summarizer. Optional so old configs parse; server applies
-  // a 'claude' default when missing.
-  engine?: { default: 'cursor' | 'claude' };
+  // Phase 68 + R-18: global default engine + default trainer engine.
+  // Optional so old configs parse; server applies defaults when missing.
+  engine?: {
+    default: 'cursor' | 'claude';
+    /** R-18: which CLI agent helm spawns as the train-via-chat subprocess. */
+    trainerDefault?: 'claude' | 'codex';
+  };
   // Phase 60b removed `anthropic` — role-trainer now shells out to claude CLI
   // and uses its own auth (`claude login`).
 }

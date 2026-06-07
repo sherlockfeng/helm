@@ -98,6 +98,46 @@ const CursorConfigSchema = z.object({
   apiKey: z.string().optional(),
   model: z.string().default('auto'),
   mode: z.enum(['local', 'cloud']).default('local'),
+  // R-18: opt-in auto-register helm's MCP server in Cursor's settings.
+  // When true, the boot path writes helm's MCP entry into
+  // ~/.cursor/mcp.json (or equivalent) so the user can invoke
+  // `train_role` etc. from inside Cursor without configuring by hand.
+  mcpAutoRegister: z.boolean().default(false),
+}).strict();
+
+/**
+ * R-18: Claude Code CLI config. helm needs five knobs that Cursor
+ * doesn't have because Claude Code is a spawnable CLI rather than a
+ * GUI app:
+ *
+ *   - binaryPath: override when `claude` isn't on PATH
+ *   - model: passed to `--model` on CLI invocations
+ *   - trainerModel: model used specifically when helm spawns claude
+ *     as the trainer subprocess (Roles › "train via chat"). Often
+ *     different from the day-to-day default — trainer workloads tend
+ *     to want a smarter / slower model.
+ *   - mcpAutoRegister: same semantics as Cursor's flag; writes the
+ *     helm MCP server into ~/.claude/settings.json on boot.
+ *
+ * All optional — claude CLI defaults itself when these are omitted.
+ */
+const ClaudeCodeConfigSchema = z.object({
+  binaryPath: z.string().optional(),
+  model: z.string().default('auto'),
+  trainerModel: z.string().default('auto'),
+  mcpAutoRegister: z.boolean().default(false),
+}).strict();
+
+/**
+ * R-18: Codex CLI config — same shape as Claude Code. Symmetric
+ * because Codex is also a spawnable CLI agent that helm can drive
+ * as a trainer or as a target for hook installation.
+ */
+const CodexConfigSchema = z.object({
+  binaryPath: z.string().optional(),
+  model: z.string().default('auto'),
+  trainerModel: z.string().default('auto'),
+  mcpAutoRegister: z.boolean().default(false),
 }).strict();
 
 // Phase 60b removed AnthropicConfigSchema. The role-trainer chat now
@@ -123,6 +163,11 @@ const HarnessConfigSchema = z.object({
 // reviewer / role-trainer paths assume.
 const EngineConfigSchema = z.object({
   default: z.enum(['cursor', 'claude']).default('claude'),
+  // R-18: which CLI agent helm spawns as the trainer subprocess for
+  // Roles › "train via chat". Restricted to the spawnable engines
+  // (cursor can't serve as a trainer — it's a GUI app). Defaults to
+  // 'claude' since that's the original trainer pipeline.
+  trainerDefault: z.enum(['claude', 'codex']).default('claude'),
 }).strict();
 
 // Phase 79: storage plugin system + role subscription. Two new top-level
@@ -153,6 +198,11 @@ export const HelmConfigSchema = z.object({
   knowledge: KnowledgeConfigSchema.default({}),
   docFirst: DocFirstConfigSchema.default({}),
   cursor: CursorConfigSchema.default({}),
+  // R-18: per-engine config blocks for the two spawnable CLI agents.
+  // Optional in schema (default {}) so an existing config.json that
+  // predates these blocks still parses cleanly.
+  claudeCode: ClaudeCodeConfigSchema.default({}),
+  codex: CodexConfigSchema.default({}),
   harness: HarnessConfigSchema.default({}),
   engine: EngineConfigSchema.default({}),
   // Phase 79

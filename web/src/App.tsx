@@ -28,7 +28,8 @@ import { VerificationCasesPage } from './pages/VerificationCases.js';
 import { VerificationRunsPage } from './pages/VerificationRuns.js';
 import { VerificationCoveragePage } from './pages/VerificationCoverage.js';
 import { SettingsPage } from './pages/Settings.js';
-import { SettingsAdvancedPage } from './pages/SettingsAdvanced.js';
+// R-18: SettingsAdvancedPage retired — Advanced is now a sub-nav
+// section inside the main Settings page.
 
 // Advanced + legacy surfaces (kept for back-compat + Settings › Advanced)
 import { ApprovalsPage } from './pages/Approvals.js';
@@ -71,7 +72,11 @@ export default function App() {
           <Route path="/verification/cases/:caseId/runs" element={<VerificationRunsPage />} />
           <Route path="/verification/coverage" element={<VerificationCoveragePage />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/settings/advanced" element={<SettingsAdvancedPage />} />
+          {/* R-18: legacy /settings/advanced route just lands on
+              Settings; the Advanced sub-nav section opens automatically
+              from localStorage memory or stays on whatever the user
+              last viewed. */}
+          <Route path="/settings/advanced" element={<Navigate to="/settings" replace />} />
 
           {/* Back-compat: old paths redirect to new ones. */}
           <Route path="/chats" element={<Navigate to="/conversations" replace />} />

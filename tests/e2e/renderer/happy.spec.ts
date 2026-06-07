@@ -195,7 +195,33 @@ describe('renderer smoke', () => {
       { timeout: 5000 },
     );
 
-    // ── 5. No red-screen-of-death equivalent ───────────────────────────
+    // ── 5. R-14: real interactive flow — click `+ New case` to open the
+    //      form, type a name, hit Create, see the form succeed-or-error.
+    //      Catches regressions that screenshot-only tests would miss
+    //      (e.g. a useState rewire that breaks input bindings). ─────────
+    await page.evaluate(() => { location.hash = '#/verification/cases'; });
+    await page.waitForFunction(
+      () => document.querySelectorAll('button, a').length > 0
+        && Array.from(document.querySelectorAll('button')).some((b) => /New case/i.test(b.textContent ?? '')),
+      { timeout: 5000 },
+    );
+    const newCaseBtn = page.getByRole('button', { name: /\+? ?New case/i });
+    await newCaseBtn.click();
+    // Form panel appears with the name input.
+    await page.waitForSelector('input[placeholder*="dr-my-dc-failure"]', { timeout: 5000 });
+    await page.fill('input[placeholder*="dr-my-dc-failure"]', 'e2e-smoke-case');
+    // Click again to confirm the toggle works — should hide the form.
+    await page.getByRole('button', { name: /Hide form/i }).click();
+    await page.waitForFunction(
+      () => !document.querySelector('input[placeholder*="dr-my-dc-failure"]'),
+      { timeout: 5000 },
+    );
+    await page.screenshot({
+      path: join(SCREENSHOT_DIR, 'verification-cases-form-toggled.png'),
+      fullPage: true,
+    });
+
+    // ── 6. No red-screen-of-death equivalent ───────────────────────────
     expect(pageErrors, `pageerror events:\n${pageErrors.join('\n')}`).toEqual([]);
 
     // CSP warnings under file:// are harmless for our local-only app —

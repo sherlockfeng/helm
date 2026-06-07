@@ -291,3 +291,240 @@ describe('KnowledgeRepoManager.unsubscribe', () => {
     expect(() => mgr.unsubscribe('does-not-exist')).not.toThrow();
   });
 });
+
+describe('KnowledgeRepoManager.withRepoLock (R-1 FIFO)', () => {
+  let db: BetterSqlite3.Database;
+  let reposRoot: string;
+
+  beforeEach(() => {
+    db = openDb();
+    reposRoot = mkdtempSync(join(tmpdir(), 'helm-repo-lock-'));
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(reposRoot, { recursive: true, force: true });
+  });
+
+  it('serializes three concurrent fetchNow calls strictly in arrival order', async () => {
+    // Drives the FIFO chain: A starts (and holds the runner with a
+    // manually-resolved promise), B + C queue, then we release A → B
+    // → C and assert the in-flight overlap is always exactly one.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order: string[] = [];
+
+    let cloneSeen = false;
+    const blockers: Array<() => void> = [];
+    const runner: GitRunner = async (args) => {
+      if (args[0] === 'clone' && !cloneSeen) {
+        cloneSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'rev-parse') {
+        return { stdout: 'sha-x\n', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'fetch') {
+        // Block here until the test releases — simulates "real fetch
+        // takes a while". The order in which blockers fire is the
+        // order in which the lock yielded the slot.
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise<void>((resolve) => blockers.push(() => {
+          inFlight -= 1;
+          resolve();
+        }));
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      throw new Error(`unexpected ${JSON.stringify(args)}`);
+    };
+
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/lockrepo');
+    mkdirSync(repo.localPath, { recursive: true });
+
+    const a = mgr.fetchNow(repo.id).then(() => order.push('A'));
+    const b = mgr.fetchNow(repo.id).then(() => order.push('B'));
+    const c = mgr.fetchNow(repo.id).then(() => order.push('C'));
+
+    // Let each in-flight blocker actually queue before releasing.
+    const releaseNext = async (): Promise<void> => {
+      // Wait until at least one blocker is registered.
+      while (blockers.length === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
+      blockers.shift()!();
+    };
+
+    await releaseNext();
+    await releaseNext();
+    await releaseNext();
+    await Promise.all([a, b, c]);
+
+    expect(maxInFlight).toBe(1);
+    expect(order).toEqual(['A', 'B', 'C']);
+  });
+
+  it('a rejection in the first task does not poison the chain', async () => {
+    let cloneSeen = false;
+    let revParseCalls = 0;
+    let fetchCalls = 0;
+    const runner: GitRunner = async (args) => {
+      if (args[0] === 'clone' && !cloneSeen) {
+        cloneSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'rev-parse') {
+        revParseCalls += 1;
+        return { stdout: 'sha-x\n', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'fetch') {
+        fetchCalls += 1;
+        // First call fails (simulates network blip), second succeeds.
+        return fetchCalls === 1
+          ? { stdout: '', stderr: 'network', exitCode: 1 }
+          : { stdout: '', stderr: '', exitCode: 0 };
+      }
+      throw new Error(`unexpected ${JSON.stringify(args)}`);
+    };
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/lockrecover');
+    mkdirSync(repo.localPath, { recursive: true });
+
+    const a = mgr.fetchNow(repo.id);
+    const b = mgr.fetchNow(repo.id);
+
+    await expect(a).rejects.toThrow();
+    await expect(b).resolves.toMatchObject({ repoId: repo.id });
+    // Both attempts actually issued — meaning B didn't get cancelled
+    // by A's failure (no chain poisoning).
+    expect(fetchCalls).toBe(2);
+    expect(revParseCalls).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
+  let db: BetterSqlite3.Database;
+  let reposRoot: string;
+
+  beforeEach(() => {
+    db = openDb();
+    reposRoot = mkdtempSync(join(tmpdir(), 'helm-publish-iso-'));
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(reposRoot, { recursive: true, force: true });
+  });
+
+  it('runs commit+push inside a worktree dir, never the main clone', async () => {
+    // Track which cwd the commit / push ran in.
+    const cwdSeen: Record<string, string> = {};
+    let cloneSeen = false;
+    let worktreeAddSeen = false;
+    let worktreeRemoveSeen = false;
+    let worktreePath = '';
+
+    const runner: GitRunner = async (args, cwd) => {
+      const first = args[0];
+      if (first === 'clone' && !cloneSeen) {
+        cloneSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'worktree' && args[1] === 'add' && !worktreeAddSeen) {
+        worktreeAddSeen = true;
+        // Manager passes: ['worktree','add','-B'|'-b',branch,path,base]
+        worktreePath = String(args[4]);
+        // Actually create the dir so the writeFile calls inside the
+        // manager succeed.
+        mkdirSync(worktreePath, { recursive: true });
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'worktree' && args[1] === 'remove') {
+        worktreeRemoveSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'add')    { cwdSeen['add']    = String(cwd); return { stdout: '', stderr: '', exitCode: 0 }; }
+      if (first === 'commit') { cwdSeen['commit'] = String(cwd); return { stdout: '', stderr: '', exitCode: 0 }; }
+      if (first === 'push')   { cwdSeen['push']   = String(cwd); return { stdout: '', stderr: '', exitCode: 0 }; }
+      // Allow `-c user.name=...` invocations through too: the commit
+      // path prefixes config flags.
+      if (args.includes('commit')) { cwdSeen['commit'] = String(cwd); return { stdout: '', stderr: '', exitCode: 0 }; }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/pubrepo');
+    // Stand in for the real clone so importNow style ops can read.
+    mkdirSync(repo.localPath, { recursive: true });
+
+    // Seed a published-eligible point: visibility=public so R-0 passes.
+    // We bypass the full chunk insert by mocking the get-chunk lookup
+    // is unnecessary — publish() with pointIds=[] is rejected, so we
+    // need at least one point. Insert a minimal role + chunk row.
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-iso','iso','sp',?)`).run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-iso','r-iso','iso.md','Iso','body',?,'public')
+    `).run(new Date().toISOString());
+
+    await mgr.publish({
+      repoId: repo.id,
+      pointIds: ['p-iso'],
+      message: 'publish iso\n\nbody',
+    });
+
+    expect(worktreeAddSeen).toBe(true);
+    expect(worktreeRemoveSeen).toBe(true);
+    expect(worktreePath.length).toBeGreaterThan(0);
+    expect(cwdSeen['commit']).toBe(worktreePath);
+    expect(cwdSeen['push']).toBe(worktreePath);
+    // Main clone was never touched by commit/push.
+    expect(cwdSeen['commit']).not.toBe(repo.localPath);
+    expect(cwdSeen['push']).not.toBe(repo.localPath);
+  });
+
+  it('still removes the worktree when commit fails partway through', async () => {
+    let worktreeAddSeen = false;
+    let worktreeRemoveSeen = false;
+    let worktreePath = '';
+
+    const runner: GitRunner = async (args, _cwd) => {
+      const first = args[0];
+      if (first === 'clone') return { stdout: '', stderr: '', exitCode: 0 };
+      if (first === 'worktree' && args[1] === 'add') {
+        worktreeAddSeen = true;
+        worktreePath = String(args[4]);
+        mkdirSync(worktreePath, { recursive: true });
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'worktree' && args[1] === 'remove') {
+        worktreeRemoveSeen = true;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'add') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args.includes('commit')) {
+        return { stdout: '', stderr: 'commit failed', exitCode: 1 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/pubrepofail');
+    mkdirSync(repo.localPath, { recursive: true });
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-fail','fail','sp',?)`).run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-fail','r-fail','f.md','F','body',?,'public')
+    `).run(new Date().toISOString());
+
+    await expect(mgr.publish({
+      repoId: repo.id,
+      pointIds: ['p-fail'],
+      message: 'failing publish',
+    })).rejects.toThrow();
+
+    expect(worktreeAddSeen).toBe(true);
+    expect(worktreeRemoveSeen).toBe(true);
+  });
+});

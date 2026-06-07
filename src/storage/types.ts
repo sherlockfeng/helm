@@ -107,9 +107,38 @@ export interface KnowledgeSource {
   createdAt: string;
 }
 
+/**
+ * Conversation-knowledge redesign (PR 2 / migration v20): which kind of
+ * provenance produced this KnowledgePoint. Drives the source-trace badge
+ * in KnowledgePoint Detail (§5.4) and gates the publish profile selector.
+ */
+export type KnowledgeChunkSourceKind = 'conversation' | 'subscription' | 'manual';
+
+/**
+ * §3.5 / R-1: a point is `internal` by default (chat captures lean
+ * defensive — never auto-publish to a public destination) and is
+ * promoted to `public` only via an explicit user action recorded in
+ * visibility_audit. The §7.4 R-0 publish gate reads this column.
+ */
+export type KnowledgePointVisibility = 'internal' | 'public';
+
 export interface KnowledgeChunk {
   id: string;
+  /**
+   * Legacy 1..1 role pointer. PR 2 introduces the N..N
+   * `knowledge_point_roles` table; new readers should prefer
+   * `getRolesForPoint(id)`. This column stays for back-compat so the
+   * existing single-role queries keep returning rows during the
+   * transition. PR 4 finishes the swap.
+   */
   roleId: string;
+  /**
+   * PR 2 (migration v20): all roles a point belongs to, read from the
+   * `knowledge_point_roles` join table. Optional on the type because
+   * not every read path needs it (BM25 hit reading by id stays cheap).
+   * Population is up to the caller.
+   */
+  roleIds?: string[];
   sourceFile?: string;
   chunkText: string;
   embedding?: Float32Array;
@@ -119,6 +148,49 @@ export interface KnowledgeChunk {
    * the v12 clean-slate migration, every chunk has a non-null source_id. */
   sourceId?: string;
   createdAt: string;
+  /**
+   * PR 2 (migration v20): user-facing title for the point — h1 if the
+   * body has one, else first-line heuristic. Backfilled lazily on the
+   * renderer side after migration, so existing chunks can transiently
+   * be NULL until the next boot scans them. Display-side callers
+   * substitute the first 60 chars of chunkText when this is absent.
+   */
+  title?: string;
+  /**
+   * PR 2 (migration v20): provenance discriminator + free-form ref. The
+   * shape is JSON-encoded in the source column. Manual creations write
+   * `{kind: 'manual'}`; capture writes `{kind: 'conversation', ref:
+   * conversationId}`; subscription pulls write `{kind: 'subscription',
+   * ref: repoUrl}`. Optional because legacy rows have NULL.
+   */
+  source?: { kind: KnowledgeChunkSourceKind; ref?: string };
+  /**
+   * PR 2 (migration v20): timestamp of the most recent retrieval that
+   * surfaced this point (epoch ms). Drives §14 stale detection and the
+   * Role health badge. NULL = never retrieved (or pre-migration).
+   */
+  lastReferencedAt?: number;
+  /**
+   * PR 2 (migration v20): optimistic-locking counter. Every successful
+   * UPDATE bumps it; callers pass the version they read and writes that
+   * don't match fail without trampling concurrent edits. Guards the G4
+   * race between Helm UI and Cursor MCP touching the same point.
+   * Default 1 on inserts; never NULL.
+   */
+  editVersion?: number;
+  /**
+   * PR 2 (migration v20) / R-1: default 'internal' so chat-derived
+   * knowledge is never auto-published. UI requires explicit per-point
+   * promotion to 'public' (with reason logged to visibility_audit).
+   */
+  visibility?: KnowledgePointVisibility;
+  /**
+   * PR 2 (migration v20): per-chunk monotonic version distinct from the
+   * role-level `roles.version` counter introduced in Phase 80 PR A. Bumps
+   * when content changes; PR 6 uses it to compute the local fingerprint
+   * for benchmark `knowledgeStateSha`.
+   */
+  versionExt?: number;
   /**
    * Phase 77 (lifecycle): how many times this chunk has been returned by
    * `searchKnowledge`. Fire-and-forget incremented after each search; cold
@@ -341,9 +413,89 @@ export interface CaptureSession {
 
 // ── Helm-new tables ────────────────────────────────────────────────────────
 
+/**
+ * PR 2 (migration v20): agent runtime discriminator for the
+ * Conversations facet tabs (§5.1). Distinct from `host` so we can
+ * introduce new hosts (Codex per PR 7) without rewriting downstream
+ * filters that key on the old single-value column.
+ */
+export type AgentKind = 'cursor' | 'claude_code' | 'codex';
+
+/**
+ * PR 2 (migration v20): per-point alias, normalized out of what used to
+ * be a JSON-in-TEXT column (caught in design rev 5 review — reverse
+ * lookup needed an index). `source` carries provenance so the UI can
+ * distinguish a user-typed alias from an LLM-suggested one.
+ */
+export interface KnowledgePointAlias {
+  pointId: string;
+  alias: string;
+  source: 'manual' | 'llm-suggested' | 'imported';
+  createdAt: number;
+}
+
+/**
+ * PR 2 (migration v20): typed edge in the knowledge graph between two
+ * points. `includes` is "X contains Y as a sub-concept"; `correspondsTo`
+ * is "X and Y describe the same thing from different angles";
+ * `supersedes` marks deprecation chains. §4.4.2 walks one hop after
+ * RRF fusion using these.
+ */
+export type KnowledgePointRelKind = 'includes' | 'correspondsTo' | 'supersedes';
+
+export interface KnowledgePointRel {
+  fromPointId: string;
+  toPointId: string;
+  relKind: KnowledgePointRelKind;
+  createdAt: number;
+}
+
+/**
+ * PR 2 (migration v20): a single retrieve() invocation against the
+ * KnowledgePointProvider. Header row keeps the query metadata; the
+ * actual point hits land in retrieval_log_points so reverse lookup
+ * ("which conversations cited this point?") goes through an index
+ * instead of a JSON scan.
+ */
+export interface RetrievalLog {
+  id: string;
+  hostSessionId: string;
+  turn: number;
+  queryText?: string;
+  ts: number;
+}
+
+/**
+ * PR 2 (migration v20): one row per (retrieve call × point returned).
+ * `legContrib` is a JSON blob describing which RRF legs (bm25 / cosine
+ * / entity / rel-expansion) contributed — write-many, read-rarely so
+ * JSON is OK; we never filter on it. `injected` flags whether the
+ * point actually made it into the LLM context (some hits are dropped
+ * by the diversification cap).
+ */
+export interface RetrievalLogPoint {
+  logId: string;
+  pointId: string;
+  rank: number;
+  fusionScore: number;
+  legContrib?: {
+    bm25Rank?: number;
+    cosineRank?: number;
+    entityRank?: number;
+    relExpansionFrom?: string;
+  };
+  injected: boolean;
+}
+
 export interface HostSession {
   id: string;
   host: 'cursor' | string;
+  /**
+   * PR 2 (migration v20): facet discriminator for the Conversations
+   * tabs. Backfilled from `host` for legacy rows. New sessions opened
+   * by the Claude Code or Codex adapters set this directly (PR 7).
+   */
+  agentKind?: AgentKind;
   cwd?: string;
   composerMode?: string;
   campaignId?: string;

@@ -623,6 +623,110 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE role_subscriptions ADD COLUMN last_pulled_version INTEGER;
     `,
   },
+  {
+    version: 20,
+    description:
+      'Conversation-knowledge redesign foundations'
+      + ' (docs/design/2026-06-06-conversation-knowledge-redesign.md PR 2).'
+      + ' Six concerns merged into one migration so the renderer-side PR'
+      + ' that reads against new columns/tables can land in a single rev:'
+      + ' (1) knowledge_chunks gains promotion fields — title (h1-or-firstline'
+      + ' filled by backfill), source (provenance JSON), lastReferencedAt'
+      + ' (Insights decay signal), editVersion (G4 optimistic lock; MCP +'
+      + ' Helm UI can race on the same row otherwise), visibility (R-1: chat'
+      + ' captures default internal so R-0 publish gate never accidentally'
+      + ' leaks them), and version_ext (per-chunk monotonic counter,'
+      + ' independent of role-level version from Phase 80 PR A).'
+      + ' (2) knowledge_point_alias is a normalized table (was JSON-in-TEXT'
+      + ' in design rev 1 → fixed in rev 5 after reviewer flagged it cannot'
+      + ' support indexed alias lookup). Lookups go through idx_alias_lookup.'
+      + ' (3) knowledge_point_rel: typed graph edges between points'
+      + ' (includes / correspondsTo / supersedes). 4.4.2 rel-expansion needs'
+      + ' indexed from→to traversal + reverse "who points at me" lookups.'
+      + ' (4) knowledge_point_roles is the N..N replacement for the existing'
+      + ' 1..1 knowledge_chunks.roleId. The old column STAYS for back-compat'
+      + ' so existing reads do not break; new code reads through the join'
+      + ' table. Backfill copies the existing single role mapping in.'
+      + ' (5) retrieval_log + retrieval_log_points let Conversation Detail'
+      + ' (§5.2) show "what knowledge was used in turn N" AND KnowledgePoint'
+      + ' Detail (§5.4) show "which conversations used this point". The'
+      + ' points table is normalized so the reverse query is cheap.'
+      + ' (6) host_sessions.agentKind discriminates Cursor / Claude Code /'
+      + ' Codex sessions for the Conversations facet tabs (§5.1). Backfilled'
+      + ' from the existing host column where present, NULL otherwise.'
+      + ' Backfills: knowledge_point_roles populated from chunks.roleId.'
+      + ' Title backfill runs on the renderer side at next boot (lazy; not'
+      + ' part of the SQL migration to keep this transactional).',
+    up: `
+      ALTER TABLE knowledge_chunks ADD COLUMN title TEXT;
+      ALTER TABLE knowledge_chunks ADD COLUMN source TEXT;
+      ALTER TABLE knowledge_chunks ADD COLUMN last_referenced_at INTEGER;
+      ALTER TABLE knowledge_chunks ADD COLUMN edit_version INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE knowledge_chunks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'internal';
+      ALTER TABLE knowledge_chunks ADD COLUMN version_ext INTEGER NOT NULL DEFAULT 1;
+
+      CREATE TABLE IF NOT EXISTS knowledge_point_alias (
+        point_id   TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        alias      TEXT NOT NULL,
+        source     TEXT NOT NULL DEFAULT 'manual',
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (point_id, alias)
+      );
+      CREATE INDEX IF NOT EXISTS idx_alias_lookup ON knowledge_point_alias(alias);
+
+      CREATE TABLE IF NOT EXISTS knowledge_point_rel (
+        from_point_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        to_point_id   TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        rel_kind      TEXT NOT NULL,
+        created_at    INTEGER NOT NULL,
+        PRIMARY KEY (from_point_id, to_point_id, rel_kind)
+      );
+      CREATE INDEX IF NOT EXISTS idx_rel_from ON knowledge_point_rel(from_point_id, rel_kind);
+      CREATE INDEX IF NOT EXISTS idx_rel_to   ON knowledge_point_rel(to_point_id,   rel_kind);
+
+      CREATE TABLE IF NOT EXISTS knowledge_point_roles (
+        point_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        role_id  TEXT NOT NULL REFERENCES roles(id)            ON DELETE CASCADE,
+        PRIMARY KEY (point_id, role_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_point_roles_role ON knowledge_point_roles(role_id);
+
+      -- Backfill the N..N join from the existing 1..1 chunks.roleId
+      -- column so retrieval code can read through the new table from
+      -- day one without losing any existing role assignment.
+      INSERT OR IGNORE INTO knowledge_point_roles (point_id, role_id)
+        SELECT id, role_id FROM knowledge_chunks WHERE role_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS retrieval_log (
+        id              TEXT PRIMARY KEY,
+        host_session_id TEXT NOT NULL,
+        turn            INTEGER NOT NULL,
+        query_text      TEXT,
+        ts              INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_retrieval_log_session_turn
+        ON retrieval_log(host_session_id, turn);
+
+      CREATE TABLE IF NOT EXISTS retrieval_log_points (
+        log_id        TEXT    NOT NULL REFERENCES retrieval_log(id) ON DELETE CASCADE,
+        point_id      TEXT    NOT NULL,
+        rank          INTEGER NOT NULL,
+        fusion_score  REAL    NOT NULL,
+        leg_contrib   TEXT,
+        injected      INTEGER NOT NULL,
+        PRIMARY KEY (log_id, point_id)
+      );
+      -- "Which conversations cited point X" is the load-bearing query
+      -- for KnowledgePoint Detail's "Used by conversations" panel.
+      CREATE INDEX IF NOT EXISTS idx_retrieval_log_point
+        ON retrieval_log_points(point_id);
+
+      ALTER TABLE host_sessions ADD COLUMN agent_kind TEXT;
+      -- Backfill the discriminator from the existing host column so the
+      -- Conversations facet tabs have non-NULL data for legacy rows.
+      UPDATE host_sessions SET agent_kind = host WHERE host IS NOT NULL;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

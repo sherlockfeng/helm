@@ -127,8 +127,8 @@ describe('knowledge-update lifecycle', () => {
 
       // Mirrors + subscriptions — schema lets these be sparse.
       h.db.prepare(`
-        INSERT INTO role_mirrors (id, role_id, target_url, target_kind, created_at, updated_at)
-        VALUES ('mir-1', 'r-doomed', 'tos://x', 'tos', ?, ?)
+        INSERT INTO role_mirrors (role_id, target_url, created_at, updated_at)
+        VALUES ('r-doomed', 'tos://x', ?, ?)
       `).run(new Date().toISOString(), new Date().toISOString());
       h.db.prepare(`
         INSERT INTO role_subscriptions

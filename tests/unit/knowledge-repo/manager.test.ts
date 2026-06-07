@@ -460,7 +460,7 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     // We bypass the full chunk insert by mocking the get-chunk lookup
     // is unnecessary — publish() with pointIds=[] is rejected, so we
     // need at least one point. Insert a minimal role + chunk row.
-    db.prepare(`INSERT INTO roles (id, name) VALUES ('r-iso','iso')`).run();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-iso','iso','sp',?)`).run(new Date().toISOString());
     db.prepare(`
       INSERT INTO knowledge_chunks
         (id, role_id, filename, title, body, position, created_at, visibility)
@@ -511,7 +511,7 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
     const repo = await mgr.subscribe('https://github.com/org/pubrepofail');
     mkdirSync(repo.localPath, { recursive: true });
-    db.prepare(`INSERT INTO roles (id, name) VALUES ('r-fail','fail')`).run();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-fail','fail','sp',?)`).run(new Date().toISOString());
     db.prepare(`
       INSERT INTO knowledge_chunks
         (id, role_id, filename, title, body, position, created_at, visibility)

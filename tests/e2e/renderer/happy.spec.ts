@@ -108,10 +108,11 @@ describe('renderer smoke', () => {
       expect(navText, `nav missing "${label}"`).toContain(label);
     }
 
-    // Advanced section should be hidden by default (new install: no
-    // historical approval data → autoEnableIfHistoricalData persists '0').
+    // R-18: Advanced sidebar group removed entirely; Approvals /
+    // Bindings / Harness now reachable from Settings › Advanced
+    // sub-nav + direct URL. The marker no longer exists in the DOM.
     const advancedNav = page.locator('[data-testid="helm-nav-advanced"]');
-    expect(await advancedNav.count(), 'Advanced section should be hidden by default').toBe(0);
+    expect(await advancedNav.count(), 'Advanced sidebar group should no longer exist').toBe(0);
 
     // The Conversations page is the index target — heading must render,
     // not stay blank or render a router fallback.
@@ -166,17 +167,8 @@ describe('renderer smoke', () => {
       });
     }
 
-    // ── 4. Settings › Advanced toggle reveals the Advanced section ─────
-    await page.evaluate(() => {
-      localStorage.setItem('helm.ui.advanced', '1');
-      dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: true }));
-    });
-    await page.waitForFunction(
-      () => Boolean(document.querySelector('[data-testid="helm-nav-advanced"]')),
-      { timeout: 5000 },
-    );
-
-    // After toggle, legacy surfaces are reachable via direct hash nav.
+    // ── 4. R-18: Advanced surfaces reachable via direct hash nav even
+    //      though they no longer live in the sidebar. ─────────────────
     for (const route of ['/approvals', '/bindings', '/harness']) {
       await page.evaluate((r) => { location.hash = `#${r}`; }, route);
       await page.waitForFunction(
@@ -184,16 +176,6 @@ describe('renderer smoke', () => {
         { timeout: 5000 },
       );
     }
-
-    // Toggle back off; Advanced should disappear from the sidebar.
-    await page.evaluate(() => {
-      localStorage.setItem('helm.ui.advanced', '0');
-      dispatchEvent(new CustomEvent('helm:advanced-changed', { detail: false }));
-    });
-    await page.waitForFunction(
-      () => document.querySelector('[data-testid="helm-nav-advanced"]') === null,
-      { timeout: 5000 },
-    );
 
     // ── 5. R-14: real interactive flow — click `+ New case` to open the
     //      form, type a name, hit Create, see the form succeed-or-error.

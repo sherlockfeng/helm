@@ -10,10 +10,14 @@ import { useEffect, useState, type ComponentType, type SVGProps } from 'react';
 import { helmApi } from '../api/client.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import {
-  MessagesSquare, Link2, ShieldCheck,
-  BookOpen, Cloud, Plug,
-  Workflow, Settings,
+  // Primary nav (PR 1 — conversations-knowledge IA)
+  MessagesSquare, BookOpen, Inbox, Cloud,
+  ListChecks, History, Target,
+  Settings,
+  // Advanced (opt-in)
+  ShieldCheck, Link2, Workflow,
 } from './Icons.js';
+import { autoEnableIfHistoricalData, isAdvancedEnabled } from '../lib/advanced-flag.js';
 
 type IconCmp = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -37,39 +41,47 @@ function isGroup(entry: NavEntry): entry is NavGroup {
   return 'items' in entry;
 }
 
-// Phase 79 follow-up: chat-adjacent surfaces (Active / Bindings / Approvals)
-// nest under a "Chats" group header — they're all "this Cursor chat I'm
-// observing" viewed from a different angle.
+// PR 1 — conversations-knowledge IA per docs/design/2026-06-06-conversation-
+// knowledge-redesign.md §2. Four top-level groups: Conversations / Knowledge
+// / Verification / Settings.
 //
-// helm-design PR 4: introduces a parallel "Knowledge" group for surfaces
-// that feed roles (Roles + Subscriptions + Plugins, the latter two
-// lifted out of Settings in PR 5). Harness stays top-level (different
-// subject). Settings stays top-level but is pinned to the bottom of the
-// sidebar via the .helm-nav-spacer flex element.
+// Approvals / Bindings / Harness are not top-level anymore. They live under
+// Settings › Advanced and only appear in the sidebar when the
+// `helm.ui.advanced` localStorage flag is on. The routes themselves always
+// resolve so deep links keep working.
 //
-// Campaigns + Requirements remain hidden from the nav; routes still
-// resolve for anyone with a direct link.
-const NAV: NavEntry[] = [
-  {
-    label: 'Chats',
-    items: [
-      { to: '/chats', label: 'Active', icon: MessagesSquare },
-      { to: '/bindings', label: 'Bindings', icon: Link2 },
-      { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
-    ],
-  },
+// Campaigns + Requirements + Cycle/TaskDetail remain hidden from nav (same
+// as before PR 1); routes still resolve for direct links.
+/** Exported so the renderer e2e suite can assert IA structure. */
+export const PRIMARY_NAV: NavEntry[] = [
+  { to: '/conversations', label: 'Conversations', icon: MessagesSquare },
   {
     label: 'Knowledge',
     items: [
-      { to: '/roles', label: 'Roles', icon: BookOpen },
-      { to: '/subscriptions', label: 'Subscriptions', icon: Cloud },
-      { to: '/plugins', label: 'Plugins', icon: Plug },
+      { to: '/knowledge/library', label: 'Library', icon: BookOpen },
+      { to: '/knowledge/review', label: 'Review', icon: Inbox },
+      { to: '/knowledge/sources', label: 'Sources', icon: Cloud },
     ],
   },
-  { to: '/harness', label: 'Harness', icon: Workflow },
-  // Settings is rendered separately so we can drop a flex spacer above
-  // it and pin it to the bottom of the sidebar.
+  {
+    label: 'Verification',
+    items: [
+      { to: '/verification/cases', label: 'Cases', icon: ListChecks },
+      { to: '/verification/runs', label: 'Runs', icon: History },
+      { to: '/verification/coverage', label: 'Coverage', icon: Target },
+    ],
+  },
 ];
+
+/** Exported so the renderer e2e suite can assert IA structure. */
+export const ADVANCED_GROUP: NavGroup = {
+  label: 'Advanced',
+  items: [
+    { to: '/approvals', label: 'Approvals', icon: ShieldCheck },
+    { to: '/bindings', label: 'Bindings', icon: Link2 },
+    { to: '/harness', label: 'Harness', icon: Workflow },
+  ],
+};
 
 const SETTINGS_ITEM: NavItem = { to: '/settings', label: 'Settings', icon: Settings };
 
@@ -117,6 +129,7 @@ function NavRow({
 export function Layout() {
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [healthy, setHealthy] = useState<boolean>(true);
+  const [advancedOn, setAdvancedOn] = useState<boolean>(isAdvancedEnabled());
 
   // Initial fetch + reconcile on every approval event.
   const refreshCount = async (): Promise<void> => {
@@ -124,6 +137,12 @@ export function Layout() {
       const r = await helmApi.approvals();
       setPendingCount(r.approvals.length);
       setHealthy(true);
+      // First-launch auto-enable: if user clearly has historical Advanced
+      // data (pending approvals from before the IA reshuffle), surface
+      // the section by default. This only runs if no decision is stored
+      // yet (see autoEnableIfHistoricalData).
+      autoEnableIfHistoricalData({ hasHistoricalAdvancedData: r.approvals.length > 0 });
+      setAdvancedOn(isAdvancedEnabled());
     } catch { setHealthy(false); }
   };
 
@@ -131,6 +150,19 @@ export function Layout() {
     void refreshCount();
     const id = setInterval(refreshCount, 30_000);
     return () => clearInterval(id);
+  }, []);
+
+  // Keep the sidebar in sync with the Settings › Advanced toggle without
+  // a full reload. `setAdvancedEnabled` fires a synthetic event for the
+  // same-tab case (browsers only fire `storage` cross-tab).
+  useEffect(() => {
+    const onChange = (): void => setAdvancedOn(isAdvancedEnabled());
+    window.addEventListener('helm:advanced-changed', onChange);
+    window.addEventListener('storage', onChange);
+    return () => {
+      window.removeEventListener('helm:advanced-changed', onChange);
+      window.removeEventListener('storage', onChange);
+    };
   }, []);
 
   // Phase 46: also refresh on `approval.decision_received`. Some decision
@@ -180,7 +212,7 @@ export function Layout() {
       <aside className="helm-sidebar">
         <HelmBrand />
         <nav className="helm-nav" aria-label="Main">
-          {NAV.map((entry) => isGroup(entry) ? (
+          {PRIMARY_NAV.map((entry) => isGroup(entry) ? (
             <div key={entry.label} className="helm-nav-group">
               <div className="helm-nav-group-label">{entry.label}</div>
               {entry.items.map((item) => (
@@ -190,8 +222,16 @@ export function Layout() {
           ) : (
             <NavRow key={entry.to} item={entry} pendingCount={pendingCount} />
           ))}
-          {/* helm-design PR 4: spacer pushes Settings to the bottom of the
-              sidebar — it's the only "infrequent / admin" item in the IA. */}
+          {advancedOn && (
+            <div className="helm-nav-group" data-testid="helm-nav-advanced">
+              <div className="helm-nav-group-label">{ADVANCED_GROUP.label}</div>
+              {ADVANCED_GROUP.items.map((item) => (
+                <NavRow key={item.to} item={item} pendingCount={pendingCount} nested />
+              ))}
+            </div>
+          )}
+          {/* Spacer pushes Settings to the bottom of the sidebar — the
+              "infrequent / admin" item per the IA. */}
           <div className="helm-nav-spacer" aria-hidden="true" />
           <NavRow item={SETTINGS_ITEM} pendingCount={pendingCount} />
         </nav>

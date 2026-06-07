@@ -700,3 +700,125 @@ export interface HarnessReview {
   spawnedAt: string;
   completedAt?: string;
 }
+
+// ── Verification (PR 5 / migration v21) ─────────────────────────────────────
+//
+// docs/design/2026-06-06-conversation-knowledge-redesign.md §3.5 + §4.7.
+// A BenchmarkCase is a small "did this knowledge point teach the agent
+// the right answer?" probe. The §4.7 case-proposal flow keeps writing
+// new cases as `status='proposed'`; only confirmed cases participate
+// in regression detection or coverage stats (R-5).
+
+/** Where the case came from. Drives the §5.6 review-dialog badge. */
+export type BenchmarkCaseProposedSource = 'manual' | 'llm-on-edit' | 'imported';
+
+/** What write-action proposed the case. NULL on manual creations. */
+export type BenchmarkCaseProposedEvent =
+  | 'candidate_accept'
+  | 'point_edit'
+  | 'subscription_pull'
+  | 'manual';
+
+/**
+ * Case lifecycle. `proposed` is the holding pen — does not feed
+ * regression / coverage / Insights. `confirmed` is the only state
+ * with score baseline meaning. `rejected` and `archived` are terminal.
+ */
+export type BenchmarkCaseStatus = 'proposed' | 'confirmed' | 'rejected' | 'archived';
+
+export interface BenchmarkCase {
+  id: string;
+  name: string;
+  question: string;
+  expectedTruth: string;
+  goldenPointIds: readonly string[];
+  targetRoleIds: readonly string[];
+  agentKindHint?: AgentKind;
+  notes?: string;
+  sourceRepoUrl?: string;
+  sourceRevision?: string;
+  proposedSource: BenchmarkCaseProposedSource;
+  proposedAt: number;
+  proposedFromPointId?: string;
+  proposedFromEvent?: BenchmarkCaseProposedEvent;
+  proposedQuestionHash?: string;
+  status: BenchmarkCaseStatus;
+  confirmedBy?: string;
+  confirmedAt?: number;
+  rejectedReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type BenchmarkTriggeringEventKind =
+  | 'candidate_accept'
+  | 'subscription_pull'
+  | 'mirror_merge'
+  | 'manual';
+
+export interface BenchmarkRun {
+  id: string;
+  caseId: string;
+  runAt: number;
+  answerProviderId: string;
+  judgeProviderId: string;
+  recallPct: number;
+  alignmentPct: number;
+  answerText: string;
+  judgeVerdictText: string;
+  judgeVerdictJson: string;
+  durationMs: number;
+  estimatedCostUsd?: number;
+  llmCallCount?: number;
+  /**
+   * Composite git-as-substrate fingerprint of the knowledge state
+   * that produced this score. sha256 of sorted (repoUrl, repoSha)
+   * tuples, or `local-<contentHash+editVersion>` when one of the
+   * golden points was edited locally without being committed.
+   */
+  knowledgeStateSha: string;
+  isReproducible: boolean;
+  reproducedFromRunId?: string;
+  triggeringEventKind?: BenchmarkTriggeringEventKind;
+  triggeringEventRefId?: string;
+  baselineRunId?: string;
+}
+
+/** Per-(runId, repoUrl) repo state. Joined to benchmark_run by runId. */
+export interface BenchmarkRunRepoState {
+  runId: string;
+  repoUrl: string;
+  repoSha: string;
+}
+
+export type RegressionAlertStatus = 'open' | 'acknowledged' | 'resolved';
+
+export interface RegressionAlert {
+  id: string;
+  caseId: string;
+  prevRunId: string;
+  currentRunId: string;
+  prevScore: number;
+  currentScore: number;
+  /** `currentScore - prevScore`. Negative = regression. */
+  delta: number;
+  triggeringEventKind: BenchmarkTriggeringEventKind;
+  triggeringEventRefId: string;
+  status: RegressionAlertStatus;
+  resolvedNote?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Daily cost roll-up powering §4.7.6 caps. `roleId=null` row is the
+ * global aggregate for that date; non-null rows are per-collection.
+ */
+export interface BenchmarkCostAuditRow {
+  id: string;
+  date: string;
+  roleId?: string;
+  llmCalls: number;
+  estimatedCostUsd: number;
+  updatedAt: number;
+}

@@ -124,6 +124,61 @@ export async function fetchRepo(
   };
 }
 
+export interface AddWorktreeOptions {
+  /** Existing clone whose .git the worktree attaches to. */
+  cwd: string;
+  /** Disk location for the new worktree. Parent must exist. */
+  worktreePath: string;
+  /** Branch to create inside the worktree. */
+  branch: string;
+  /** Base ref the new branch forks from. Defaults to current HEAD. */
+  baseRef?: string;
+  /** When true, overwrites an existing branch of the same name. */
+  force?: boolean;
+}
+
+/**
+ * `git worktree add` an ephemeral working tree for an isolated edit.
+ * Used by `KnowledgeRepoManager.publish` so file writes + commits never
+ * touch the user-facing clone — the next `importNow` reads the same
+ * tracked branch the user subscribed to.
+ *
+ * The companion `removeWorktree` must run in a `finally` so a failed
+ * publish doesn't leak the temp directory.
+ */
+export async function addWorktree(
+  run: GitRunner,
+  opts: AddWorktreeOptions,
+): Promise<void> {
+  const args = [
+    'worktree', 'add',
+    opts.force ? '-B' : '-b', opts.branch,
+    opts.worktreePath,
+    opts.baseRef ?? 'HEAD',
+  ];
+  const r = await run(args, opts.cwd);
+  if (r.exitCode !== 0) {
+    throw new GitCommandError(
+      `git worktree add failed: ${r.stderr.slice(0, 512)}`,
+      r.stderr, r.exitCode,
+    );
+  }
+}
+
+export async function removeWorktree(
+  run: GitRunner,
+  cwd: string,
+  worktreePath: string,
+): Promise<void> {
+  const r = await run(['worktree', 'remove', '--force', worktreePath], cwd);
+  if (r.exitCode !== 0) {
+    throw new GitCommandError(
+      `git worktree remove failed: ${r.stderr.slice(0, 512)}`,
+      r.stderr, r.exitCode,
+    );
+  }
+}
+
 /**
  * Read the current HEAD without touching the network. Used by the
  * sync loop to decide whether the local state already matches a

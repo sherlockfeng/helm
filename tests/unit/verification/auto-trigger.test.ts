@@ -21,6 +21,7 @@ import {
 } from '../../../src/storage/repos/benchmark.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 import {
+  _resetCaseLocksForTests,
   caseAlignmentDeltas,
   enqueueAffectedRuns,
   type RunnerFn,
@@ -218,5 +219,69 @@ describe('caseAlignmentDeltas', () => {
     expect(out[0]!.latest).toBe(65);
     expect(out[0]!.baseline).toBeUndefined();
     expect(out[0]!.delta).toBeUndefined();
+  });
+});
+
+describe('enqueueAffectedRuns per-case lock (R-5)', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => {
+    db = openDb();
+    _resetCaseLocksForTests();
+    seedRoleAndPoint(db, 'r-1', 'p-1');
+    insertCase(db, {
+      id: 'c-lock', name: 'L', question: 'q', expectedTruth: 't',
+      goldenPointIds: ['p-1'],
+    });
+  });
+  afterEach(() => {
+    _resetCaseLocksForTests();
+    db.close();
+  });
+
+  it('serializes two concurrent triggers against the same case', async () => {
+    // The runner holds for a tick so a second concurrent trigger has
+    // a chance to overlap. With the lock we expect strict serial
+    // execution; without it, both runners overlap.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order: string[] = [];
+
+    const slowRunner: RunnerFn = async (caseId) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        // Use a microtask + zero-delay timer to actually yield the
+        // event loop so the parallel call can grab the runner if the
+        // lock is broken.
+        await new Promise((r) => setTimeout(r, 5));
+        order.push(caseId);
+        const id = `run-${caseId}-${Date.now()}-${Math.random()}`;
+        insertRun(db, {
+          id, caseId, runAt: Date.now(),
+          answerProviderId: 'p', judgeProviderId: 'p',
+          recallPct: 100, alignmentPct: 80,
+          answerText: 'a', judgeVerdictText: 'v', judgeVerdictJson: '{}',
+          durationMs: 1, knowledgeStateSha: id, isReproducible: true,
+        });
+        return listRunsForCase(db, caseId, 1)[0] ?? null;
+      } finally {
+        inFlight -= 1;
+      }
+    };
+
+    const trigger = (refId: string) => enqueueAffectedRuns(db, {
+      pointIds: ['p-1'],
+      triggeringEventKind: 'candidate_accept',
+      triggeringEventRefId: refId,
+      runner: slowRunner,
+    });
+
+    await Promise.all([trigger('op-A'), trigger('op-B')]);
+
+    expect(maxInFlight).toBe(1);
+    // Both runs landed.
+    expect(order).toEqual(['c-lock', 'c-lock']);
+    const runs = listRunsForCase(db, 'c-lock', 5);
+    expect(runs).toHaveLength(2);
   });
 });

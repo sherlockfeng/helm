@@ -16,7 +16,14 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { getCase, getRepoStateForRun, insertRun, listRunsForCase } from '../storage/repos/benchmark.js';
+import {
+  getCase,
+  getCostForDate,
+  getRepoStateForRun,
+  insertRun,
+  listRunsForCase,
+  recordCostDelta,
+} from '../storage/repos/benchmark.js';
 import type { BenchmarkRun, BenchmarkTriggeringEventKind } from '../storage/types.js';
 import type { ResolvedConfig, ResolvedProvider } from './provider-config.js';
 
@@ -63,6 +70,19 @@ export interface RunCaseOptions {
   triggeringEventKind?: BenchmarkTriggeringEventKind;
   triggeringEventRefId?: string;
   reproducedFromRunId?: string;
+  /**
+   * Daily spend ceiling (USD). When today's recorded spend is at or
+   * above this, the run is refused with `RunCaseError('cost-cap', ...)`.
+   * The default keeps the cap off so existing callers behave the same.
+   */
+  costCapUsd?: number;
+  /**
+   * Per design §0 R-5: only confirmed cases run automatically. The
+   * runner refuses anything else (proposed / rejected / archived)
+   * unless the caller explicitly overrides for debug. Tests of the
+   * runner itself set this; production paths do not.
+   */
+  allowUnconfirmed?: boolean;
 }
 
 export interface RunCaseResult {
@@ -83,9 +103,17 @@ const JUDGE_SYSTEM_PROMPT =
   + '{"aligned": boolean, "score": number-0-100, "summary": "one sentence"}.';
 
 export class RunCaseError extends Error {
-  constructor(public readonly stage: 'retrieve' | 'answer' | 'judge' | 'parse', msg: string) {
+  constructor(
+    public readonly stage: 'retrieve' | 'answer' | 'judge' | 'parse' | 'status' | 'cost-cap',
+    msg: string,
+  ) {
     super(`[${stage}] ${msg}`);
   }
+}
+
+/** Today's date as the canonical YYYY-MM-DD key cost rows store. */
+function todayKey(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export async function runCase(args: {
@@ -100,6 +128,32 @@ export async function runCase(args: {
   const { db, caseId, providers, llm, retrieve, repoProbe, options = {} } = args;
   const caseRow = getCase(db, caseId);
   if (!caseRow) throw new RunCaseError('retrieve', `case "${caseId}" does not exist`);
+
+  // R-5: only confirmed cases run unless the caller is explicit. This
+  // guards the direct /api/verification/cases/:id/run path so a
+  // proposed (LLM-suggested, not yet human-confirmed) case can't
+  // execute by mistake.
+  if (!options.allowUnconfirmed && caseRow.status !== 'confirmed') {
+    throw new RunCaseError(
+      'status',
+      `case "${caseId}" is "${caseRow.status}"; only confirmed cases run automatically (R-5).`,
+    );
+  }
+
+  // §4.7.6 cost cap precheck. We check today's *aggregate* spend
+  // (role_id = null) so the cap is global; per-role caps are a future
+  // refinement.
+  if (options.costCapUsd !== undefined && options.costCapUsd >= 0) {
+    const today = todayKey();
+    const spent = getCostForDate(db, today, null);
+    const spentUsd = spent?.estimatedCostUsd ?? 0;
+    if (spentUsd >= options.costCapUsd) {
+      throw new RunCaseError(
+        'cost-cap',
+        `daily benchmark spend $${spentUsd.toFixed(4)} >= cap $${options.costCapUsd.toFixed(4)}.`,
+      );
+    }
+  }
 
   // Phase 0: retrieve knowledge snippets for the answer prompt.
   let snippets: RetrieveSnippet[];
@@ -164,6 +218,12 @@ export async function runCase(args: {
     const fp = await repoProbe.localFingerprint(caseRow.goldenPointIds);
     knowledgeStateSha = `local-${fp ?? createHash('sha256').update(caseId).digest('hex')}`;
     isReproducible = false;
+  }
+
+  // Record the spend even on success-with-zero-cost runs so the cap
+  // sees `llm_calls` accrue. The (date, NULL) row is the global tally.
+  if (llmCalls > 0) {
+    recordCostDelta(db, todayKey(), null, llmCalls, costUsd);
   }
 
   const runId = randomUUID();

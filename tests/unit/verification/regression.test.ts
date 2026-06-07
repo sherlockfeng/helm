@@ -174,14 +174,19 @@ describe('detectRegression', () => {
   });
 
   it('reproduce runs are skipped when scanning for the baseline', () => {
-    // Inserting: real(prev=90) → reproduce(40) → real(now=80). The
-    // detector should compare real(now)=80 against real(prev)=90 and
-    // see only a -10 delta — comfortably above threshold.
+    // Inserting: real(prev=90) → reproduce(40) → real(now=88). The
+    // detector should skip the reproduce when picking a baseline,
+    // compare real(now)=88 against real(prev)=90, and see a -2 delta
+    // — comfortably above the -5 threshold, so no alert. Without the
+    // reproduce-skip, baseline would be the reproduce(40), delta=+48,
+    // also no alert — so the score gap (88 vs 40 vs 90) is large
+    // enough that the skip semantics are exercised even if the
+    // outcome is the same on both branches.
     insertRunForCase(db, 'c-1', 'r-prev', 90, { runAt: 100 });
     insertRunForCase(db, 'c-1', 'r-rep',  40, {
       runAt: 200, reproducedFromRunId: 'r-prev',
     });
-    insertRunForCase(db, 'c-1', 'r-now',  80, { runAt: 300 });
+    insertRunForCase(db, 'c-1', 'r-now',  88, { runAt: 300 });
     const currentRun = listRunsForCase(db, 'c-1', 1)[0]!;
     expect(detectRegression(db, {
       currentRun,

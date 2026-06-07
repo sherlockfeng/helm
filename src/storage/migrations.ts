@@ -674,9 +674,14 @@ export const MIGRATIONS: Migration[] = [
       );
       CREATE INDEX IF NOT EXISTS idx_alias_lookup ON knowledge_point_alias(alias);
 
+      -- to_point_id intentionally NOT a strict FK: knowledge edges can
+      -- reference points that haven't been imported yet (cross-repo,
+      -- cross-role, or external) and the importer should not refuse
+      -- those edges. Source-side FK keeps cleanup straightforward —
+      -- deleting a point cascades away its outgoing edges.
       CREATE TABLE IF NOT EXISTS knowledge_point_rel (
         from_point_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
-        to_point_id   TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        to_point_id   TEXT NOT NULL,
         rel_kind      TEXT NOT NULL,
         created_at    INTEGER NOT NULL,
         PRIMARY KEY (from_point_id, to_point_id, rel_kind)

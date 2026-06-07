@@ -15,9 +15,16 @@
  *     `RunnerFn` so tests can substitute a no-op or a faking runner
  *     without rebooting an HTTP LLM client
  *
- * Cost guardrails (§4.7.6) are not enforced here yet — that lives in
- * the cost_audit table and gets wired into the runner queue in a
- * follow-up PR. This file's job is the trigger mechanics only.
+ * Cost guardrails (§4.7.6) are enforced inside `runCase` itself, which
+ * the `RunnerFn` wraps — the trigger only orchestrates which cases
+ * should fire.
+ *
+ * Per-case lock: two writes can land in the same millisecond on the
+ * same case (e.g. accept + verify-on-edit both fire). Without
+ * serialization both runs would read identical baseline history and
+ * each compute its own regression alert. The module-level
+ * `caseLockTails` map keeps a FIFO chain per caseId so the second
+ * trigger sees the first run already persisted.
  */
 
 import type Database from 'better-sqlite3';
@@ -67,6 +74,34 @@ export interface AutoTriggerResult {
 const DEFAULT_MAX_RUNS = 5;
 
 /**
+ * Module-level FIFO chains keyed by caseId. Lives at module scope (not
+ * per-call) because parallel `enqueueAffectedRuns` calls from different
+ * triggers must still serialize against each other when they overlap
+ * on the same case.
+ */
+const caseLockTails = new Map<string, Promise<unknown>>();
+
+function withCaseLock<T>(caseId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = caseLockTails.get(caseId);
+  const task: Promise<T> = previous
+    ? previous.then(() => fn(), () => fn())
+    : fn();
+  const newTail = task.then(() => undefined, () => undefined);
+  caseLockTails.set(caseId, newTail);
+  void newTail.then(() => {
+    if (caseLockTails.get(caseId) === newTail) {
+      caseLockTails.delete(caseId);
+    }
+  });
+  return task;
+}
+
+/** Test-only: drop all in-flight chains. Production never needs this. */
+export function _resetCaseLocksForTests(): void {
+  caseLockTails.clear();
+}
+
+/**
  * Synchronous entrypoint. Awaits every selected runner call so the
  * caller can decide whether to background-fire-and-forget. Errors from
  * one runner do not abort the others — each is captured in
@@ -85,13 +120,19 @@ export async function enqueueAffectedRuns(
   };
   for (const caseId of targets) {
     try {
-      const run = await input.runner(caseId);
+      const run = await withCaseLock(caseId, () => input.runner(caseId));
       if (!run) {
         out.errors[caseId] = 'runner returned null';
         continue;
       }
       out.rerun.push(caseId);
-      const alert = detectRegression(db, makeDetectInput(run, input));
+      // Detect under the same lock so the baseline read sees the just-
+      // inserted run as the latest. Without this, two concurrent
+      // triggers could both compute a delta against the same prior
+      // baseline and double-alert the user.
+      const alert = await withCaseLock(caseId, async () =>
+        detectRegression(db, makeDetectInput(run, input)),
+      );
       if (alert) out.alertIds.push(alert.alertId);
     } catch (err) {
       out.errors[caseId] = (err as Error).message;

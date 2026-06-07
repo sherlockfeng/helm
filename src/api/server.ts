@@ -57,6 +57,12 @@ import {
   findSeedById,
 } from '../knowledge-repo/seeds.js';
 import {
+  getMergeConflict,
+  listMergeConflicts,
+  resolveMergeConflict,
+} from '../storage/repos/knowledge-merge-conflict.js';
+import { updateChunkWithVersionCheck } from '../storage/repos/roles.js';
+import {
   getCampaign,
   getCycle,
   getTask,
@@ -956,6 +962,59 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           }
         }
         return methodNotAllowed(res);
+      }
+
+      // PR 5.5c: merge-conflict surface.
+      //   GET    /api/knowledge-repos/conflicts[?status&repoId]
+      //   POST   /api/knowledge-repos/conflicts/:id/resolve  body { body }
+      if (url.pathname === '/api/knowledge-repos/conflicts') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const statusParam = url.searchParams.get('status') ?? 'open';
+        const VALID = ['open', 'resolved', 'all'] as const;
+        if (!(VALID as readonly string[]).includes(statusParam)) {
+          return badRequest(res, `invalid status: '${statusParam}'`);
+        }
+        const repoId = url.searchParams.get('repoId') ?? undefined;
+        const conflicts = listMergeConflicts(deps.db, {
+          status: statusParam as typeof VALID[number],
+          ...(repoId ? { repoId } : {}),
+        });
+        return send(res, 200, { conflicts });
+      }
+      const conflictResolveMatch = url.pathname.match(
+        /^\/api\/knowledge-repos\/conflicts\/([^/]+)\/resolve$/,
+      );
+      if (conflictResolveMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body['body'] !== 'string') {
+          return badRequest(res, 'body (the resolved body text) is required');
+        }
+        const conflict = getMergeConflict(deps.db, conflictResolveMatch[1]!);
+        if (!conflict) return notFound(res);
+        const resolved = resolveMergeConflict(deps.db, conflict.id, body['body'] as string);
+        if (!resolved) {
+          return send(res, 409, {
+            error: 'not_open',
+            message: 'Conflict is already resolved or missing.',
+          });
+        }
+        // Write the resolved body onto the chunk through the optimistic
+        // lock. Skipping the lock would silently overwrite any local
+        // edit that arrived after the conflict was created.
+        const r = updateChunkWithVersionCheck(
+          deps.db, conflict.pointId, conflict.localVersion, { body: body['body'] as string },
+        );
+        if (!r.applied) {
+          // The local row moved on; the user needs to refresh + retry.
+          return send(res, 409, {
+            error: 'stale',
+            message: 'Local chunk moved on while the conflict was open. Re-import to regenerate the conflict.',
+          });
+        }
+        return send(res, 200, { conflictId: conflict.id, applied: true });
       }
 
       // PR 5.5e: curated seed list. GET returns the catalogue;

@@ -34,11 +34,13 @@ import {
   type KnowledgeRepoProfile,
   type ParsedPoint,
 } from './profiles.js';
+import { randomUUID } from 'node:crypto';
 import {
   insertChunk,
   upsertRole,
   getChunkById,
 } from '../storage/repos/roles.js';
+import { insertMergeConflict } from '../storage/repos/knowledge-merge-conflict.js';
 import {
   setAliasesForPoint,
 } from '../storage/repos/knowledge-point-alias.js';
@@ -58,6 +60,15 @@ export interface ImporterInput {
   profile: KnowledgeRepoProfile;
   /** Mark every imported point with this source ref (e.g. repoId). */
   sourceRef?: string;
+  /**
+   * PR 5.5c: Repo id this import belongs to. When set, the importer
+   * uses it to record merge_conflict rows when the local body diverged
+   * from the row's previous import (edit_version > 1). When absent, the
+   * importer falls back to the legacy sync-overwrite behavior.
+   */
+  repoId?: string;
+  /** PR 5.5c: SHA the imported content came from; stored on conflict rows. */
+  remoteRevision?: string;
   /** Override fs functions for tests. */
   fs?: {
     readdirSync?: typeof readdirSync;
@@ -70,6 +81,8 @@ export interface ImporterInput {
 export interface ImportSummary {
   rolesImported: number;
   pointsUpserted: number;
+  /** PR 5.5c: count of conflicts recorded — these did NOT overwrite. */
+  conflictsDetected: number;
   /** Per-file failures (path → message). The importer continues on each. */
   errors: Record<string, string>;
 }
@@ -81,7 +94,7 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
     existsSync: input.fs?.existsSync ?? existsSync,
     statSync: input.fs?.statSync ?? statSync,
   };
-  const summary: ImportSummary = { rolesImported: 0, pointsUpserted: 0, errors: {} };
+  const summary: ImportSummary = { rolesImported: 0, pointsUpserted: 0, conflictsDetected: 0, errors: {} };
 
   const rolesRoot = join(input.localPath, 'roles');
   if (!fs.existsSync(rolesRoot)) {
@@ -114,8 +127,13 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         const parsed = parsePointFile({
           text: raw, relativePath: relPath, profile: input.profile,
         });
-        upsertPoint(input.db, roleId, parsed, input.sourceRef);
-        summary.pointsUpserted += 1;
+        const detected = upsertPoint(input.db, roleId, parsed, {
+          sourceRef: input.sourceRef,
+          ...(input.repoId        ? { repoId:         input.repoId } : {}),
+          ...(input.remoteRevision ? { remoteRevision: input.remoteRevision } : {}),
+        });
+        if (detected === 'conflict') summary.conflictsDetected += 1;
+        else summary.pointsUpserted += 1;
       } catch (err) {
         summary.errors[file] = (err as Error).message;
       }
@@ -173,8 +191,8 @@ function upsertPoint(
   db: Database.Database,
   roleId: string,
   parsed: ParsedPoint,
-  sourceRef: string | undefined,
-): void {
+  opts: { sourceRef?: string; repoId?: string; remoteRevision?: string },
+): 'inserted' | 'updated' | 'conflict' {
   const now = new Date().toISOString();
   const existing = getChunkById(db, parsed.id);
   if (!existing) {
@@ -186,16 +204,47 @@ function upsertPoint(
       chunkText: parsed.body, kind: parsed.kind,
       createdAt: now,
     });
-  } else {
-    // Re-import: refresh body / kind only. We do NOT bump
-    // edit_version here because the import is treated as a sync, not
-    // a user edit (sync overrides whatever the user had; PR 5.5c
-    // 3-way merge will introduce a conflict path for that case).
-    db.prepare(`
-      UPDATE knowledge_chunks SET chunk_text = ?, kind = ? WHERE id = ?
-    `).run(parsed.body, parsed.kind, parsed.id);
+    attachRoleToPoint(db, parsed.id, roleId);
+    syncAuxTables(db, parsed);
+    return 'inserted';
   }
+
+  // PR 5.5c: conflict detection. When the import would change the
+  // body AND the local row has been edited since the previous sync
+  // (edit_version > 1), record a merge conflict instead of clobbering.
+  // edit_version === 1 means the row was either freshly inserted or
+  // was last touched by the importer itself — safe to overwrite.
+  const bodiesDiffer = existing.chunkText !== parsed.body;
+  const localTouched = (existing.editVersion ?? 1) > 1;
+  if (bodiesDiffer && localTouched && opts.repoId) {
+    insertMergeConflict(db, {
+      id: `mc-${randomUUID()}`,
+      repoId: opts.repoId,
+      pointId: parsed.id,
+      localBody: existing.chunkText,
+      remoteBody: parsed.body,
+      localVersion: existing.editVersion ?? 1,
+      remoteRevision: opts.remoteRevision ?? 'unknown',
+    });
+    // Sync the aux tables (aliases / rel / role attach) to the remote
+    // shape anyway — metadata sync is safe; only the body waits on the
+    // user's resolution.
+    attachRoleToPoint(db, parsed.id, roleId);
+    syncAuxTables(db, parsed);
+    return 'conflict';
+  }
+
+  // Re-import: refresh body / kind. We do NOT bump edit_version here
+  // because the import is treated as a sync, not a user edit.
+  db.prepare(`
+    UPDATE knowledge_chunks SET chunk_text = ?, kind = ? WHERE id = ?
+  `).run(parsed.body, parsed.kind, parsed.id);
   attachRoleToPoint(db, parsed.id, roleId);
+  syncAuxTables(db, parsed);
+  return 'updated';
+}
+
+function syncAuxTables(db: Database.Database, parsed: ParsedPoint): void {
 
   // Aliases — replace the whole set so a removed entry on disk
   // disappears from the DB on next sync.
@@ -219,9 +268,4 @@ function upsertPoint(
       addRel(db, parsed.id, r.toPointId, r.relKind);
     }
   }
-
-  // Stamp a source row so the UI knows where the point came from. We
-  // keep the source ref as a free-form string here; PR 5.5c will
-  // surface it next to the conflict UI.
-  void sourceRef;
 }

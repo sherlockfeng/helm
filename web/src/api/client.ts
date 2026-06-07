@@ -264,6 +264,39 @@ export const helmApi = {
       { chunkText },
     ),
 
+  /**
+   * PR 4 — cross-role list of candidates for the global Review inbox
+   * (§5.3 wireframe). Pass `roleId` to scope to a single role.
+   * `sort='score'` ranks by entity-overlap + cosine (matches §4.4
+   * weights). Defaults: status=pending, sort=recent.
+   */
+  listReviewCandidates: (opts?: {
+    status?: import('./types.js').CandidateStatus | 'all';
+    sort?: 'score' | 'recent';
+    roleId?: string;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.status)  params.set('status', opts.status);
+    if (opts?.sort)    params.set('sort',   opts.sort);
+    if (opts?.roleId)  params.set('roleId', opts.roleId);
+    if (opts?.limit)   params.set('limit',  String(opts.limit));
+    const qs = params.toString();
+    return request<{ candidates: import('./types.js').KnowledgeCandidate[] }>(
+      'GET',
+      `/api/review/candidates${qs ? `?${qs}` : ''}`,
+    );
+  },
+
+  /**
+   * PR 4 — bulk reject. By design (R-5) there is no bulk accept;
+   * every accept is a separate human decision.
+   */
+  bulkRejectCandidates: (candidateIds: readonly string[]) =>
+    request<{ flipped: number }>(
+      'POST', '/api/review/bulk-reject', { candidateIds },
+    ),
+
   // ── Phase 79: storage plugins (read) + role subscriptions ───────
   /** List every storage plugin helm tried to load — OK + failed. */
   listPlugins: () =>

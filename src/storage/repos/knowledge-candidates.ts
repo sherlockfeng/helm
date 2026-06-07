@@ -168,6 +168,81 @@ export function updateCandidateText(
   return info.changes > 0;
 }
 
+/**
+ * PR 4 (Review inbox): cross-role list of candidates for the global
+ * Review surface (§5.3 wireframe). The page wants:
+ *   - default pending-only view
+ *   - sort by either score (highest entity+cosine first) or recency
+ *   - filter by roleId, status, or both
+ *   - capped at a sensible page size
+ *
+ * Ordering is done at the SQL boundary so the renderer doesn't have
+ * to load everything into memory just to sort.
+ */
+export interface ListReviewCandidatesOptions {
+  status?: CandidateStatus | 'all';
+  roleId?: string;
+  sort?: 'score' | 'recent';
+  limit?: number;
+}
+
+export function listReviewCandidates(
+  db: Database.Database,
+  opts: ListReviewCandidatesOptions = {},
+): KnowledgeCandidate[] {
+  const status = opts.status ?? 'pending';
+  const sort = opts.sort ?? 'recent';
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+
+  // 'score' ordering: higher is better. Combine entity (weighted ×0.4)
+  // and cosine (×0.6) into a single sortable expression — same weights
+  // §4.4 used to keep retrieval + review aligned.
+  const orderClause = sort === 'score'
+    ? `ORDER BY (COALESCE(score_entity, 0) * 0.4 + COALESCE(score_cosine, 0) * 0.6) DESC, created_at DESC`
+    : `ORDER BY created_at DESC`;
+
+  const where: string[] = [];
+  const params: (string | number)[] = [];
+  if (status !== 'all') { where.push(`status = ?`); params.push(status); }
+  if (opts.roleId)      { where.push(`role_id = ?`); params.push(opts.roleId); }
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  return (db.prepare(`
+    SELECT * FROM knowledge_candidates
+    ${whereClause}
+    ${orderClause}
+    LIMIT ?
+  `).all(...params, limit) as Record<string, unknown>[]).map(rowToCandidate);
+}
+
+/**
+ * PR 4 bulk-reject. Per R-5 + design §17.7.9 we **never** offer bulk
+ * accept (every accept requires a fresh human decision), but bulk
+ * reject is safe — the user is saying "none of these are knowledge
+ * worth keeping". Runs as a single transaction so a half-applied
+ * batch never leaks. Returns the count of rows actually flipped.
+ */
+export function bulkRejectCandidates(
+  db: Database.Database,
+  candidateIds: readonly string[],
+  decidedAt: string,
+): number {
+  if (candidateIds.length === 0) return 0;
+  const stmt = db.prepare(`
+    UPDATE knowledge_candidates
+    SET status = 'rejected', decided_at = ?
+    WHERE id = ? AND status = 'pending'
+  `);
+  let changed = 0;
+  db.transaction(() => {
+    for (const id of candidateIds) {
+      const info = stmt.run(decidedAt, id);
+      changed += info.changes;
+    }
+  })();
+  return changed;
+}
+
 /** Count pending candidates for the role badge in the Roles UI. */
 export function countPendingCandidatesForRole(
   db: Database.Database,

@@ -33,6 +33,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # R-17 — fails when an e2e/<dir>/ has spec files but no
+      # attack.spec.ts (or .attack-exempt). Keeps the adversarial test
+      # axis from quietly slipping in new surfaces.
+      - name: Attack coverage lint
+        run: node scripts/check-attack-coverage.mjs
+
       - name: Unit tests
         run: pnpm test:unit
 

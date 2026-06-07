@@ -65,6 +65,7 @@ export default function App() {
           <Route path="/verification" element={<Navigate to="/verification/cases" replace />} />
           <Route path="/verification/cases" element={<VerificationCasesPage />} />
           <Route path="/verification/runs" element={<VerificationRunsPage />} />
+          <Route path="/verification/cases/:caseId/runs" element={<VerificationRunsPage />} />
           <Route path="/verification/coverage" element={<VerificationCoveragePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/settings/advanced" element={<SettingsAdvancedPage />} />

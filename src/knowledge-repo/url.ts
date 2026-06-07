@@ -78,8 +78,8 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
     };
   }
 
-  // HTTPS / git+https. Strip the `git+` prefix; URL constructor takes
-  // it from there. We tolerate trailing slashes.
+  // HTTPS / git+https / file. Strip the `git+` prefix; URL constructor
+  // takes it from there. We tolerate trailing slashes.
   const stripped = withoutFragment.replace(/^git\+/, '');
   let parsed: URL;
   try {
@@ -87,20 +87,35 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
   } catch {
     throw new GitUrlError(`not a valid git URL: ${raw}`);
   }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new GitUrlError(`unsupported git URL scheme ${parsed.protocol}; use https or ssh (git@host:...)`);
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:'
+      && parsed.protocol !== 'file:') {
+    throw new GitUrlError(
+      `unsupported git URL scheme ${parsed.protocol}; use https, ssh (git@host:...), or file:// (local-bare repo)`,
+    );
   }
   const host = parsed.hostname.toLowerCase();
   // Strip the leading slash, then any trailing slash too — both forms
   // are common in user input.
   const pathPart = parsed.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
-  const { owner, repo } = splitPath(pathPart);
+  // splitPath needs at least one segment. http(s) URLs with no repo
+  // segment (`https://github.com/`) are still an error; file:// URLs
+  // can address a single-segment local path like /tmp/x.git so we
+  // allow them through even when pathPart is empty.
+  const { owner, repo } = (pathPart.length > 0 || parsed.protocol !== 'file:')
+    ? splitPath(pathPart)
+    : { owner: undefined, repo: 'local' };
   // Canonical form drops the `git+` prefix and trailing `.git` so all
   // callers compute the same UNIQUE key regardless of typed shape.
   const canonicalPath = pathPart.replace(/\.git$/, '');
-  const canonical = `https://${host}/${canonicalPath}${branch ? `#branch=${branch}` : ''}`;
+  // Preserve the protocol on file:// so two file:// URLs to the same
+  // path compare equal; https:// stays the canonical for http(s).
+  const canonicalScheme = parsed.protocol === 'file:' ? 'file://' : 'https://';
+  // file:// URLs don't carry a host; keep an empty host segment so
+  // the canonical reads `file:///path` (three slashes).
+  const canonicalHost = parsed.protocol === 'file:' ? '' : host;
+  const canonical = `${canonicalScheme}${canonicalHost}/${canonicalPath}${branch ? `#branch=${branch}` : ''}`;
   return {
-    canonical, host, owner, repo,
+    canonical, host, ...(owner ? { owner } : {}), repo,
     ...(branch ? { branch } : {}),
     ssh: false,
   };

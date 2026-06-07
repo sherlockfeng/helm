@@ -42,6 +42,26 @@ import {
 } from './url.js';
 import { importRepoIntoLibrary, type ImportSummary } from './importer.js';
 import type { KnowledgeRepoProfile } from './profiles.js';
+import {
+  serializePoint,
+  type SerializerProfile,
+} from './serializer.js';
+import {
+  PublishError,
+  addAndCommit,
+  checkoutBranch,
+  createPullRequest,
+  pickPlatform,
+  pushBranch,
+  type CreatePrResult,
+  type PrPlatformRunner,
+} from './publish.js';
+import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { getAliasesForPoint } from '../storage/repos/knowledge-point-alias.js';
+import { getOutgoingRels } from '../storage/repos/knowledge-point-rel.js';
+import { getChunkById } from '../storage/repos/roles.js';
+import type { KnowledgeChunk } from '../storage/types.js';
 
 export interface KnowledgeRepoManagerOptions {
   db: Database.Database;
@@ -54,6 +74,42 @@ export interface KnowledgeRepoManagerOptions {
   reposRoot?: string;
   /** §7.4 R-0: extra hosts to classify as internal. */
   extraInternalHosts?: readonly string[];
+  /**
+   * PR 5.5d: gh/glab subprocess runner. When absent, publish() still
+   * pushes the branch but the PR-creation step is skipped (returns a
+   * PublishResult with prUrl='' so the caller can copy the branch
+   * name into the platform manually).
+   */
+  prRunner?: PrPlatformRunner;
+}
+
+export interface PublishInput {
+  repoId: string;
+  /** Points to write out. Must be a non-empty subset of the local DB. */
+  pointIds: readonly string[];
+  /** New branch name. Defaults to `helm/publish/<repoId>-<yyyymmdd>`. */
+  branchName?: string;
+  /** Commit + PR message. */
+  message: string;
+  /** Profile to serialize with. Defaults to 'helm-native'. */
+  profile?: SerializerProfile;
+  /**
+   * Path inside the repo where points live. Defaults to
+   * `roles/<roleId>/points/<pointId>.md`. Override when the repo
+   * uses a different layout.
+   */
+  layout?: (chunk: KnowledgeChunk) => string;
+  /** Anonymous publisher mode (R-0 for public targets). */
+  anonymous?: boolean;
+}
+
+export interface PublishResult {
+  /** Final branch name pushed. */
+  branch: string;
+  /** PR / MR URL. Empty when no PR runner is wired. */
+  prUrl: string;
+  /** Number of .md files written. */
+  filesWritten: number;
 }
 
 export interface SubscribeOptions {
@@ -84,11 +140,14 @@ export class KnowledgeRepoManager {
   private readonly extraInternalHosts: readonly string[];
   private readonly locks = new Map<string, Promise<unknown>>();
 
+  private readonly prRunner?: PrPlatformRunner;
+
   constructor(opts: KnowledgeRepoManagerOptions) {
     this.db = opts.db;
     this.git = opts.git;
     this.reposRoot = opts.reposRoot ?? defaultReposRoot();
     this.extraInternalHosts = opts.extraInternalHosts ?? [];
+    if (opts.prRunner) this.prRunner = opts.prRunner;
   }
 
   async subscribe(url: string, opts: SubscribeOptions = {}): Promise<KnowledgeRepo> {
@@ -182,6 +241,103 @@ export class KnowledgeRepoManager {
   }
 
   /**
+   * Publish a subset of local KnowledgePoints back to the subscribed
+   * repo. The publish flow:
+   *   1. R-0 precheck — internal points cannot land on a public repo
+   *   2. Checkout a fresh branch in the local clone
+   *   3. Write serialized .md files for each point
+   *   4. git add + commit + push
+   *   5. gh pr create / glab mr create — best-effort, returns URL or ''
+   */
+  async publish(input: PublishInput): Promise<PublishResult> {
+    return this.withRepoLock(input.repoId, async () => {
+      const repo = getKnowledgeRepo(this.db, input.repoId);
+      if (!repo) {
+        throw new PublishError(`unknown repo: ${input.repoId}`, 'precheck');
+      }
+      if (input.pointIds.length === 0) {
+        throw new PublishError('pointIds is empty', 'precheck');
+      }
+
+      // R-0 precheck: when the target repo is public, refuse to push
+      // any KnowledgePoint marked internal. Anonymous mode does NOT
+      // bypass this — anonymizing the author doesn't change the
+      // sensitivity of the content.
+      if (repo.classification === 'public') {
+        const blocked: string[] = [];
+        for (const pid of input.pointIds) {
+          const chunk = getChunkById(this.db, pid);
+          if (chunk?.visibility !== 'public') blocked.push(pid);
+        }
+        if (blocked.length > 0) {
+          throw new PublishError(
+            `R-0: ${blocked.length} point(s) marked 'internal' cannot be `
+            + `published to a public repo (${repo.url}). Mark them 'public' `
+            + `in Library first.`,
+            'precheck',
+          );
+        }
+      }
+
+      const branchName = input.branchName ?? defaultBranchName(input.repoId);
+      await checkoutBranch(this.git, { cwd: repo.localPath, branch: branchName, force: true });
+
+      const layout = input.layout ?? defaultLayout;
+      let filesWritten = 0;
+      for (const pid of input.pointIds) {
+        const chunk = getChunkById(this.db, pid);
+        if (!chunk) continue;
+        const aliases = getAliasesForPoint(this.db, pid);
+        const rel = getOutgoingRels(this.db, pid);
+        const text = serializePoint({
+          chunk, aliases, rel,
+          ...(input.profile ? { profile: input.profile } : {}),
+        });
+        const absPath = join(repo.localPath, layout(chunk));
+        mkdirSync(dirname(absPath), { recursive: true });
+        writeFileSync(absPath, text, 'utf8');
+        filesWritten += 1;
+      }
+
+      const userOverride = input.anonymous
+        ? { name: 'helm-anonymous', email: 'anonymous@helm.local' }
+        : undefined;
+      await addAndCommit(this.git, repo.localPath, input.message, userOverride);
+      await pushBranch(this.git, {
+        cwd: repo.localPath, branch: branchName, setUpstream: true,
+      });
+
+      // PR creation is best-effort: when the user hasn't installed gh
+      // / glab we still push the branch and let them open the PR by
+      // hand. The branch + commit are already on the remote.
+      let prUrl = '';
+      if (this.prRunner) {
+        try {
+          const platform = pickPlatform(hostFromUrl(repo.url));
+          if (platform) {
+            const result: CreatePrResult = await createPullRequest(this.prRunner, {
+              cwd: repo.localPath,
+              platform,
+              title: firstLineOf(input.message),
+              body: bodyAfterFirstLine(input.message),
+              baseBranch: repo.branch,
+              headBranch: branchName,
+            });
+            prUrl = result.url;
+          }
+        } catch (err) {
+          // Log via stderr so the user sees the precise CLI failure
+          // but the publish itself stays "branch is on the remote".
+          // eslint-disable-next-line no-console
+          console.error(`[helm:publish] PR creation failed: ${(err as Error).message}`);
+        }
+      }
+
+      return { branch: branchName, prUrl, filesWritten };
+    });
+  }
+
+  /**
    * Walk the cloned repo and turn `.md` files into KnowledgePoints.
    * The repo doesn't yet carry a per-row profile column, so the
    * caller passes one — typically defaulting to 'helm-native'. PR
@@ -240,4 +396,33 @@ function safeRemoveDir(path: string): void {
   try {
     rmSync(path, { recursive: true, force: true });
   } catch { /* swallow — caller already failed */ }
+}
+
+function defaultBranchName(repoId: string): string {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return `helm/publish/${repoId.slice(0, 12)}-${date}`;
+}
+
+function defaultLayout(chunk: KnowledgeChunk): string {
+  // Mirror the importer's expected layout so a publish-then-import
+  // round-trip lands the points in the same files.
+  return `roles/${chunk.roleId}/points/${chunk.id}.md`;
+}
+
+function hostFromUrl(url: string): string {
+  // Mirror parseGitUrl's host extraction without re-parsing the whole
+  // URL — we already trust the row's canonical url.
+  const ssh = url.match(/^[^@]+@([^:]+):/);
+  if (ssh) return ssh[1]!.toLowerCase();
+  try { return new URL(url.replace(/^git\+/, '')).hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+function firstLineOf(message: string): string {
+  return message.split('\n', 1)[0]!.trim();
+}
+
+function bodyAfterFirstLine(message: string): string {
+  const idx = message.indexOf('\n');
+  return idx < 0 ? '' : message.slice(idx + 1).trim();
 }

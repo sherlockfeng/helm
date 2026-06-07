@@ -105,6 +105,7 @@ import type { HostStopRequest, HostStopResponse } from '../bridge/protocol.js';
 import { buildVerificationRunner } from '../verification/bootstrap.js';
 import { KnowledgeRepoManager } from '../knowledge-repo/manager.js';
 import { createNodeGitRunner } from '../knowledge-repo/git-runner.js';
+import { createNodePrRunner } from '../knowledge-repo/pr-runner.js';
 
 export interface HelmAppDeps {
   db: Database.Database;
@@ -1115,6 +1116,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const knowledgeRepoManager = new KnowledgeRepoManager({
     db: deps.db,
     git: createNodeGitRunner(),
+    // PR 5.5d: gh / glab subprocess runner — best-effort. Publish
+    // still pushes the branch when these CLIs are absent; the PR /
+    // MR creation step is the only thing that no-ops.
+    prRunner: createNodePrRunner(),
   });
 
   // PR 5b: try to bootstrap a real Verification runner from

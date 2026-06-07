@@ -954,6 +954,52 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return methodNotAllowed(res);
       }
 
+      // PR 5.5d: push selected local KnowledgePoints back to the
+      // subscribed repo as a new branch + PR.
+      //   POST /api/knowledge-repos/:id/publish
+      //   body { pointIds, message, branchName?, profile?, anonymous? }
+      const repoPublishMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/publish$/);
+      if (repoPublishMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (!Array.isArray(body['pointIds'])
+            || !body['pointIds'].every((x): x is string => typeof x === 'string')
+            || body['pointIds'].length === 0) {
+          return badRequest(res, 'pointIds must be a non-empty string array');
+        }
+        if (typeof body['message'] !== 'string' || body['message'].length === 0) {
+          return badRequest(res, 'message is required');
+        }
+        try {
+          const result = await deps.knowledgeRepoManager.publish({
+            repoId: repoPublishMatch[1]!,
+            pointIds: body['pointIds'] as string[],
+            message: body['message'] as string,
+            ...(typeof body['branchName'] === 'string'
+              ? { branchName: body['branchName'] } : {}),
+            ...(typeof body['profile'] === 'string'
+              ? { profile: body['profile'] as 'helm-native' | 'llm-wiki' } : {}),
+            ...(typeof body['anonymous'] === 'boolean'
+              ? { anonymous: body['anonymous'] } : {}),
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          if (err instanceof Error && err.name === 'PublishError') {
+            const stage = (err as { stage?: string }).stage ?? 'unknown';
+            const status = stage === 'precheck' ? 403 : 500;
+            return send(res, status, {
+              error: 'publish_failed', stage, message: err.message,
+            });
+          }
+          return internalError(res, err);
+        }
+      }
+
       // PR 5.5b: walk the cloned repo and import its .md files into
       // knowledge_chunks / knowledge_point_alias / knowledge_point_rel.
       //   POST /api/knowledge-repos/:id/import-now  body { profile? }

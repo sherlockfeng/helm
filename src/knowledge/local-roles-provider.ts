@@ -19,6 +19,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import {
   getRole,
   listRoles,
@@ -26,6 +27,7 @@ import {
   type KnowledgeSearchResult,
 } from '../roles/library.js';
 import { getChunksForRole } from '../storage/repos/roles.js';
+import { recordRetrieval } from '../storage/repos/retrieval-log.js';
 import type {
   KnowledgeContext,
   KnowledgeProvider,
@@ -118,7 +120,7 @@ export class LocalRolesProvider implements KnowledgeProvider {
     return blocks.join('\n\n');
   }
 
-  async search(query: string, _ctx?: KnowledgeContext): Promise<KnowledgeSnippet[]> {
+  async search(query: string, ctx?: KnowledgeContext): Promise<KnowledgeSnippet[]> {
     const roles = listRoles(this.db);
     const allResults: Array<KnowledgeSearchResult & { roleId: string; roleName: string }> = [];
 
@@ -131,16 +133,52 @@ export class LocalRolesProvider implements KnowledgeProvider {
       }
     }
 
-    return allResults
+    const fused = allResults
       .sort((a, b) => b.score - a.score)
-      .slice(0, this.topK)
-      .map((r) => ({
-        source: this.id,
-        title: `${r.roleName}${r.sourceFile ? ` — ${r.sourceFile}` : ''}`,
-        body: r.chunkText,
-        score: r.score,
-        citation: `local-roles:${r.roleId}${r.sourceFile ? `:${r.sourceFile}` : ''}`,
-      }));
+      .slice(0, this.topK);
+
+    // PR 3 (Conversation Detail backend): persist a retrieval_log entry so
+    // the Conversation Detail right rail can show "knowledge in play at
+    // turn N" and KnowledgePoint Detail can answer "which conversations
+    // cited me?". Best-effort: a writer failure must NEVER bubble up — the
+    // chat surface is more important than the audit row.
+    if (ctx?.hostSessionId) {
+      try {
+        recordRetrieval(this.db, {
+          id: randomUUID(),
+          hostSessionId: ctx.hostSessionId,
+          turn: ctx.turn ?? 0,
+          queryText: query,
+          ts: Date.now(),
+        }, fused.map((r, i) => ({
+          // `chunkId` is the canonical id of the underlying knowledge_chunks
+          // row; KnowledgePoint Detail reverse-lookups go through this id.
+          pointId: r.chunkId,
+          rank: i,
+          fusionScore: r.score,
+          legContrib: {
+            bm25Rank: r.bm25Score != null ? i : undefined,
+            cosineRank: r.cosineScore != null ? i : undefined,
+            entityRank: r.entityScore != null ? i : undefined,
+          },
+          // Every fused hit returned to the agent counts as "injected"
+          // for v1 — the trimming above the topK boundary is what we'd
+          // mark `injected:false` for. Future refinements (diversification,
+          // de-dup) can flip this individually.
+          injected: true,
+        })));
+      } catch {
+        // swallow — fire-and-forget audit
+      }
+    }
+
+    return fused.map((r) => ({
+      source: this.id,
+      title: `${r.roleName}${r.sourceFile ? ` — ${r.sourceFile}` : ''}`,
+      body: r.chunkText,
+      score: r.score,
+      citation: `local-roles:${r.roleId}${r.sourceFile ? `:${r.sourceFile}` : ''}`,
+    }));
   }
 
   async healthcheck(): Promise<KnowledgeProviderHealth> {

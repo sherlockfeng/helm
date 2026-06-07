@@ -15,6 +15,15 @@ export interface KnowledgeContext {
   hostSessionId: string;
   cwd: string;
   filePath?: string;
+  /**
+   * PR 3 (Conversation Detail backend): 0-based turn index used by the
+   * retrieval_log writer to anchor "knowledge in play at turn N" in the
+   * Conversation Detail right rail (design §5.2). Optional because some
+   * call sites (e.g. the bare `search_knowledge` MCP tool from a fresh
+   * agent) genuinely don't know it; the writer falls back to a sentinel
+   * value when omitted so the audit row is still recoverable.
+   */
+  turn?: number;
 }
 
 export interface KnowledgeSnippet {

@@ -699,8 +699,21 @@ export const MIGRATIONS: Migration[] = [
       -- Backfill the N..N join from the existing 1..1 chunks.roleId
       -- column so retrieval code can read through the new table from
       -- day one without losing any existing role assignment.
+      --
+      -- R-16 retro-fix: the inner JOIN to roles filters out orphan
+      -- chunks (rows whose role_id points to a deleted role --
+      -- possible if a historical script deleted a role with
+      -- foreign_keys=OFF and left chunks behind). Without the JOIN
+      -- the FK on knowledge_point_roles.role_id would throw and
+      -- abort the migration; INSERT OR IGNORE only swallows PK /
+      -- UNIQUE conflicts, not FK violations. Orphans are silently
+      -- dropped from the join; the underlying knowledge_chunks rows
+      -- are left intact so a future cleanup can audit them.
       INSERT OR IGNORE INTO knowledge_point_roles (point_id, role_id)
-        SELECT id, role_id FROM knowledge_chunks WHERE role_id IS NOT NULL;
+        SELECT k.id, k.role_id
+          FROM knowledge_chunks k
+          JOIN roles r ON r.id = k.role_id
+         WHERE k.role_id IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS retrieval_log (
         id              TEXT PRIMARY KEY,

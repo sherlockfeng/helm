@@ -155,6 +155,43 @@ describe('importRepoIntoLibrary', () => {
     });
   });
 
+  it('R-10: indexes entities for each imported chunk so retrieval picks it up', () => {
+    const fs = makeFs({
+      '/repo/roles/r/points/p.md': [
+        '---', 'id: p-ent',
+        '---', '',
+        '# DR overview',
+        'observability dashboards live in qps.argos; failover is via gateway-handler.',
+      ].join('\n'),
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'helm-native', fs });
+    const rows = db.prepare(
+      `SELECT entity FROM knowledge_chunk_entities WHERE chunk_id = 'p-ent'`,
+    ).all() as Array<{ entity: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it('R-11: round-trips visibility + source through frontmatter', () => {
+    const fs = makeFs({
+      '/repo/roles/r/points/p-rt.md': [
+        '---', 'id: p-rt',
+        'visibility: public',
+        'source: {"kind":"conversation","ref":"sess-123"}',
+        '---', '',
+        '# Round-trip body',
+        'this body survives round-trip.',
+      ].join('\n'),
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'helm-native', fs });
+    const row = db.prepare(
+      `SELECT visibility, source FROM knowledge_chunks WHERE id = 'p-rt'`,
+    ).get() as { visibility: string; source: string };
+    expect(row.visibility).toBe('public');
+    expect(JSON.parse(row.source)).toEqual({
+      kind: 'conversation', ref: 'sess-123',
+    });
+  });
+
   it('captures per-file errors in the errors map without aborting siblings', () => {
     const fs = makeFs({
       '/repo/roles/r/points/good.md': '---\nid: good\n---\nbody',

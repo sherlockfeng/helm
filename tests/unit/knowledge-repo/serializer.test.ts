@@ -48,6 +48,30 @@ describe('serializePoint helm-native', () => {
     expect(out).not.toContain('kind:');
   });
 
+  it('R-11: emits visibility frontmatter only when non-default (public)', () => {
+    const outDefault = serializePoint({
+      chunk: chunk({ visibility: 'internal' }),
+      aliases: [], rel: [],
+    });
+    expect(outDefault).not.toContain('visibility:');
+
+    const outPublic = serializePoint({
+      chunk: chunk({ visibility: 'public' }),
+      aliases: [], rel: [],
+    });
+    expect(outPublic).toContain('visibility: public');
+  });
+
+  it('R-11: emits source as compact JSON when provided', () => {
+    const out = serializePoint({
+      chunk: chunk({
+        source: { kind: 'conversation', ref: 'sess-42' },
+      }),
+      aliases: [], rel: [],
+    });
+    expect(out).toContain('source: {"kind":"conversation","ref":"sess-42"}');
+  });
+
   it('is deterministic — same input twice yields identical output', () => {
     const input = {
       chunk: chunk({ id: 'p', chunkText: 'body' }),

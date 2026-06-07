@@ -37,6 +37,10 @@ export interface ParsedPoint {
   aliases: string[];
   /** Outbound rel edges (canonical kind names). */
   rel: Array<{ relKind: ParsedPointRelKind; toPointId: string }>;
+  /** R-11: round-tripped R-0 publish gate. Missing → 'internal'. */
+  visibility?: 'internal' | 'public';
+  /** R-11: round-tripped origin metadata blob (inline JSON in frontmatter). */
+  source?: Record<string, unknown>;
 }
 
 export interface ParseFileInput {
@@ -69,6 +73,24 @@ function parseHelmNative(text: string, relativePath: string): ParsedPoint {
   };
   const title = titleFromFrontmatter ?? titleFromBody;
   if (title) point.title = title;
+  // R-11: round-tripped visibility / source — pulled from frontmatter
+  // emitted by the serializer. Missing → caller defaults to 'internal'.
+  const vis = stringValue(data['visibility']);
+  if (vis === 'internal' || vis === 'public') point.visibility = vis;
+  // The subset YAML parser keeps inline `{ ... }` JSON as a raw
+  // string. Try to JSON.parse so the round-trip recovers the object
+  // shape the serializer emitted; bail silently on malformed input.
+  const sourceRaw = data['source'];
+  if (typeof sourceRaw === 'string' && sourceRaw.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(sourceRaw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        point.source = parsed as Record<string, unknown>;
+      }
+    } catch { /* malformed inline JSON — leave source undefined */ }
+  } else if (sourceRaw && typeof sourceRaw === 'object' && !Array.isArray(sourceRaw)) {
+    point.source = sourceRaw as Record<string, unknown>;
+  }
   return point;
 }
 

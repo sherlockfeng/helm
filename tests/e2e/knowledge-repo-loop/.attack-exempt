@@ -1,0 +1,1 @@
+attack tests live in loop.spec.ts alongside the happy path (R-12 + R-13 share the same git-init-bare setup)

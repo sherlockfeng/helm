@@ -43,6 +43,26 @@ import {
 } from '../storage/repos/benchmark.js';
 import { enqueueAffectedRuns } from '../verification/auto-trigger.js';
 import {
+  KnowledgeRepoManager,
+  KnowledgeRepoManagerError,
+} from '../knowledge-repo/manager.js';
+import {
+  deleteKnowledgeRepo,
+  getKnowledgeRepo,
+  listKnowledgeRepos,
+} from '../storage/repos/knowledge-repo.js';
+import { GitUrlError } from '../knowledge-repo/url.js';
+import {
+  KNOWLEDGE_REPO_SEEDS,
+  findSeedById,
+} from '../knowledge-repo/seeds.js';
+import {
+  getMergeConflict,
+  listMergeConflicts,
+  resolveMergeConflict,
+} from '../storage/repos/knowledge-merge-conflict.js';
+import { updateChunkWithVersionCheck } from '../storage/repos/roles.js';
+import {
   getCampaign,
   getCycle,
   getTask,
@@ -170,6 +190,13 @@ export interface HttpApiDeps {
    * (existing tests + CI without LLM credentials run cleanly).
    */
   verificationRunner?: (caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>;
+  /**
+   * PR 5.5a: optional KnowledgeRepoManager bound to the same DB.
+   * Absent = `/api/knowledge-repos` endpoints respond 501 so the
+   * renderer can hide the git surface in environments where git is
+   * unavailable. Production wires this from orchestrator.
+   */
+  knowledgeRepoManager?: KnowledgeRepoManager;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -877,6 +904,259 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           `SELECT COUNT(*) AS n FROM regression_alert WHERE status = 'open'`,
         ).get() as { n: number }).n;
         return send(res, 200, { proposed, openAlerts });
+      }
+
+      // PR 5.5a: KnowledgeRepo subscription surface.
+      //   GET    /api/knowledge-repos                — list
+      //   POST   /api/knowledge-repos                — subscribe (body { url, branch?, syncIntervalMinutes?, autoApply? })
+      //   POST   /api/knowledge-repos/:id/fetch-now  — pull on demand
+      //   DELETE /api/knowledge-repos/:id?removeData=true  — unsubscribe
+      // 501 surface when no manager is wired so the renderer can hide
+      // the git surface gracefully on environments without git.
+      if (url.pathname === '/api/knowledge-repos') {
+        if (req.method === 'GET') {
+          const statusParam = url.searchParams.get('status') ?? 'all';
+          const VALID = ['active', 'paused', 'error', 'conflict', 'all'] as const;
+          if (!(VALID as readonly string[]).includes(statusParam)) {
+            return badRequest(res, `invalid status: '${statusParam}'`);
+          }
+          const repos = listKnowledgeRepos(deps.db, {
+            status: statusParam as typeof VALID[number],
+          });
+          return send(res, 200, { repos });
+        }
+        if (req.method === 'POST') {
+          if (!deps.knowledgeRepoManager) {
+            return send(res, 501, {
+              error: 'no_repo_manager',
+              message: 'Git repo subscription is not enabled in this helm build.',
+            });
+          }
+          let body: Record<string, unknown>;
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          if (typeof body['url'] !== 'string' || body['url'].length === 0) {
+            return badRequest(res, 'url is required');
+          }
+          try {
+            const subscribeOpts: Parameters<KnowledgeRepoManager['subscribe']>[1] = {};
+            if (typeof body['branch'] === 'string') subscribeOpts.branch = body['branch'];
+            if (typeof body['syncIntervalMinutes'] === 'number') {
+              subscribeOpts.syncIntervalMinutes = body['syncIntervalMinutes'];
+            }
+            if (typeof body['autoApply'] === 'boolean') {
+              subscribeOpts.autoApply = body['autoApply'];
+            }
+            const repo = await deps.knowledgeRepoManager.subscribe(
+              body['url'] as string, subscribeOpts,
+            );
+            return send(res, 201, { repo });
+          } catch (err) {
+            if (err instanceof GitUrlError) {
+              return badRequest(res, err.message);
+            }
+            if (err instanceof KnowledgeRepoManagerError) {
+              return send(res, 409, { error: 'subscribe_failed', message: err.message });
+            }
+            return internalError(res, err);
+          }
+        }
+        return methodNotAllowed(res);
+      }
+
+      // PR 5.5c: merge-conflict surface.
+      //   GET    /api/knowledge-repos/conflicts[?status&repoId]
+      //   POST   /api/knowledge-repos/conflicts/:id/resolve  body { body }
+      if (url.pathname === '/api/knowledge-repos/conflicts') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const statusParam = url.searchParams.get('status') ?? 'open';
+        const VALID = ['open', 'resolved', 'all'] as const;
+        if (!(VALID as readonly string[]).includes(statusParam)) {
+          return badRequest(res, `invalid status: '${statusParam}'`);
+        }
+        const repoId = url.searchParams.get('repoId') ?? undefined;
+        const conflicts = listMergeConflicts(deps.db, {
+          status: statusParam as typeof VALID[number],
+          ...(repoId ? { repoId } : {}),
+        });
+        return send(res, 200, { conflicts });
+      }
+      const conflictResolveMatch = url.pathname.match(
+        /^\/api\/knowledge-repos\/conflicts\/([^/]+)\/resolve$/,
+      );
+      if (conflictResolveMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body['body'] !== 'string') {
+          return badRequest(res, 'body (the resolved body text) is required');
+        }
+        const conflict = getMergeConflict(deps.db, conflictResolveMatch[1]!);
+        if (!conflict) return notFound(res);
+        const resolved = resolveMergeConflict(deps.db, conflict.id, body['body'] as string);
+        if (!resolved) {
+          return send(res, 409, {
+            error: 'not_open',
+            message: 'Conflict is already resolved or missing.',
+          });
+        }
+        // Write the resolved body onto the chunk through the optimistic
+        // lock. Skipping the lock would silently overwrite any local
+        // edit that arrived after the conflict was created.
+        const r = updateChunkWithVersionCheck(
+          deps.db, conflict.pointId, conflict.localVersion, { body: body['body'] as string },
+        );
+        if (!r.applied) {
+          // The local row moved on; the user needs to refresh + retry.
+          return send(res, 409, {
+            error: 'stale',
+            message: 'Local chunk moved on while the conflict was open. Re-import to regenerate the conflict.',
+          });
+        }
+        return send(res, 200, { conflictId: conflict.id, applied: true });
+      }
+
+      // PR 5.5e: curated seed list. GET returns the catalogue;
+      // POST /:id/subscribe enrolls the seed via the manager.
+      if (url.pathname === '/api/knowledge-repos/seeds') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        return send(res, 200, { seeds: KNOWLEDGE_REPO_SEEDS });
+      }
+      const seedSubMatch = url.pathname.match(/^\/api\/knowledge-repos\/seeds\/([^/]+)\/subscribe$/);
+      if (seedSubMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        const seed = findSeedById(seedSubMatch[1]!);
+        if (!seed) return notFound(res);
+        try {
+          const repo = await deps.knowledgeRepoManager.subscribe(seed.url, {
+            branch: seed.branch,
+          });
+          return send(res, 201, { repo, seedId: seed.id });
+        } catch (err) {
+          return send(res, 409, {
+            error: 'subscribe_failed', message: (err as Error).message,
+          });
+        }
+      }
+
+      // PR 5.5d: push selected local KnowledgePoints back to the
+      // subscribed repo as a new branch + PR.
+      //   POST /api/knowledge-repos/:id/publish
+      //   body { pointIds, message, branchName?, profile?, anonymous? }
+      const repoPublishMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/publish$/);
+      if (repoPublishMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (!Array.isArray(body['pointIds'])
+            || !body['pointIds'].every((x): x is string => typeof x === 'string')
+            || body['pointIds'].length === 0) {
+          return badRequest(res, 'pointIds must be a non-empty string array');
+        }
+        if (typeof body['message'] !== 'string' || body['message'].length === 0) {
+          return badRequest(res, 'message is required');
+        }
+        try {
+          const result = await deps.knowledgeRepoManager.publish({
+            repoId: repoPublishMatch[1]!,
+            pointIds: body['pointIds'] as string[],
+            message: body['message'] as string,
+            ...(typeof body['branchName'] === 'string'
+              ? { branchName: body['branchName'] } : {}),
+            ...(typeof body['profile'] === 'string'
+              ? { profile: body['profile'] as 'helm-native' | 'llm-wiki' } : {}),
+            ...(typeof body['anonymous'] === 'boolean'
+              ? { anonymous: body['anonymous'] } : {}),
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          if (err instanceof Error && err.name === 'PublishError') {
+            const stage = (err as { stage?: string }).stage ?? 'unknown';
+            const status = stage === 'precheck' ? 403 : 500;
+            return send(res, status, {
+              error: 'publish_failed', stage, message: err.message,
+            });
+          }
+          return internalError(res, err);
+        }
+      }
+
+      // PR 5.5b: walk the cloned repo and import its .md files into
+      // knowledge_chunks / knowledge_point_alias / knowledge_point_rel.
+      //   POST /api/knowledge-repos/:id/import-now  body { profile? }
+      const repoImportMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/import-now$/);
+      if (repoImportMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: { profile?: unknown } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as { profile?: unknown }; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const VALID_PROFILES = ['helm-native', 'llm-wiki', 'generic'] as const;
+        const profile = typeof body.profile === 'string'
+          && (VALID_PROFILES as readonly string[]).includes(body.profile)
+          ? body.profile as typeof VALID_PROFILES[number]
+          : 'helm-native';
+        try {
+          const summary = deps.knowledgeRepoManager.importNow(repoImportMatch[1]!, profile);
+          return send(res, 200, summary);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 404, { error: 'import_failed', message: err.message });
+          }
+          return send(res, 500, { error: 'import_failed', message: (err as Error).message });
+        }
+      }
+
+      const repoFetchMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/fetch-now$/);
+      if (repoFetchMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        try {
+          const outcome = await deps.knowledgeRepoManager.fetchNow(repoFetchMatch[1]!);
+          return send(res, 200, outcome);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, err.message.startsWith('unknown repo') ? 404 : 409, {
+              error: 'fetch_failed', message: err.message,
+            });
+          }
+          return send(res, 500, { error: 'fetch_failed', message: (err as Error).message });
+        }
+      }
+
+      const repoIdMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)$/);
+      if (repoIdMatch) {
+        if (req.method === 'GET') {
+          const repo = getKnowledgeRepo(deps.db, repoIdMatch[1]!);
+          if (!repo) return notFound(res);
+          return send(res, 200, { repo });
+        }
+        if (req.method === 'DELETE') {
+          const removeData = url.searchParams.get('removeData') === 'true';
+          if (deps.knowledgeRepoManager) {
+            deps.knowledgeRepoManager.unsubscribe(repoIdMatch[1]!, { removeData });
+          } else {
+            // Even without a manager (no git), let the user clear the
+            // row so the UI doesn't trap them.
+            deleteKnowledgeRepo(deps.db, repoIdMatch[1]!);
+          }
+          return send(res, 200, { ok: true });
+        }
+        return methodNotAllowed(res);
       }
 
       if (url.pathname === '/api/verification/alerts') {

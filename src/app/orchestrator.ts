@@ -103,6 +103,9 @@ import { createEventBus, type EventBus } from '../events/bus.js';
 import { attachLarkChannel, type LarkWiringHandle } from './lark-wiring.js';
 import type { HostStopRequest, HostStopResponse } from '../bridge/protocol.js';
 import { buildVerificationRunner } from '../verification/bootstrap.js';
+import { KnowledgeRepoManager } from '../knowledge-repo/manager.js';
+import { createNodeGitRunner } from '../knowledge-repo/git-runner.js';
+import { createNodePrRunner } from '../knowledge-repo/pr-runner.js';
 
 export interface HelmAppDeps {
   db: Database.Database;
@@ -1105,6 +1108,20 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   }
 
+  // PR 5.5a: KnowledgeRepoManager — wraps the system `git` binary.
+  // Failures inside subscribe / fetch land in the row's last_error
+  // column; this constructor cannot fail because we don't probe git
+  // here. Production runs against the user's PATH; tests inject the
+  // manager directly via deps when present.
+  const knowledgeRepoManager = new KnowledgeRepoManager({
+    db: deps.db,
+    git: createNodeGitRunner(),
+    // PR 5.5d: gh / glab subprocess runner — best-effort. Publish
+    // still pushes the branch when these CLIs are absent; the PR /
+    // MR creation step is the only thing that no-ops.
+    prRunner: createNodePrRunner(),
+  });
+
   // PR 5b: try to bootstrap a real Verification runner from
   // `~/.helm/benchmark/providers.json`. Failures (missing file →
   // null; malformed JSON / unresolvable env → caught + logged) leave
@@ -1129,6 +1146,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       db: deps.db, registry, policy, events, logger: deps.loggers.module('api'),
       mcpFactory,
       ...(effectiveVerificationRunner ? { verificationRunner: effectiveVerificationRunner } : {}),
+      knowledgeRepoManager,
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

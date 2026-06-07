@@ -822,3 +822,48 @@ export interface BenchmarkCostAuditRow {
   estimatedCostUsd: number;
   updatedAt: number;
 }
+
+// ── Knowledge Repo (PR 5.5a / migration v22) ───────────────────────────────
+
+/** §7.4 host-allow-list outcome. Drives R-0 publish gating. */
+export type KnowledgeRepoClassification = 'internal' | 'public';
+
+/** Lifecycle of a subscribed repo. `paused` is opt-out without delete. */
+export type KnowledgeRepoStatus = 'active' | 'paused' | 'error' | 'conflict';
+
+export interface KnowledgeRepo {
+  id: string;
+  url: string;
+  branch: string;
+  localPath: string;
+  lastFetchedSha?: string;
+  lastFetchedAt?: number;
+  syncIntervalMinutes: number;
+  autoApply: boolean;
+  classification: KnowledgeRepoClassification;
+  status: KnowledgeRepoStatus;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── KnowledgeMergeConflict (PR 5.5c / migration v23) ───────────────────────
+
+export type KnowledgeMergeConflictStatus = 'open' | 'resolved';
+
+export interface KnowledgeMergeConflict {
+  id: string;
+  repoId: string;
+  pointId: string;
+  localBody: string;
+  remoteBody: string;
+  /** edit_version the local chunk was at when the conflict was recorded. */
+  localVersion: number;
+  /** Commit SHA the remote body came from. */
+  remoteRevision: string;
+  status: KnowledgeMergeConflictStatus;
+  resolvedBody?: string;
+  resolvedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}

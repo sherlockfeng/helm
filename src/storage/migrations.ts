@@ -674,9 +674,14 @@ export const MIGRATIONS: Migration[] = [
       );
       CREATE INDEX IF NOT EXISTS idx_alias_lookup ON knowledge_point_alias(alias);
 
+      -- to_point_id intentionally NOT a strict FK: knowledge edges can
+      -- reference points that haven't been imported yet (cross-repo,
+      -- cross-role, or external) and the importer should not refuse
+      -- those edges. Source-side FK keeps cleanup straightforward —
+      -- deleting a point cascades away its outgoing edges.
       CREATE TABLE IF NOT EXISTS knowledge_point_rel (
         from_point_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
-        to_point_id   TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        to_point_id   TEXT NOT NULL,
         rel_kind      TEXT NOT NULL,
         created_at    INTEGER NOT NULL,
         PRIMARY KEY (from_point_id, to_point_id, rel_kind)
@@ -853,6 +858,76 @@ export const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_date_role
         ON benchmark_cost_audit(date, role_id);
       CREATE INDEX IF NOT EXISTS idx_cost_date ON benchmark_cost_audit(date DESC);
+    `,
+  },
+  {
+    version: 22,
+    description:
+      'Git-as-substrate KnowledgeRepo subscription (docs/design/2026-06-06-'
+      + 'conversation-knowledge-redesign.md §7 / PR 5.5a). knowledge_repo'
+      + ' stores one row per subscribed git repository — the local clone'
+      + ' path, last fetched commit, sync cadence, host classification'
+      + ' (internal vs public per §7.4 R-0), and lifecycle status. The'
+      + ' table is intentionally separate from role_subscriptions so the'
+      + ' URL-based legacy path (a single .helmrole bundle URL) can'
+      + ' continue to coexist while the git-based path takes over as the'
+      + ' main sharing primitive. PR 5.5b will land the frontmatter ↔'
+      + ' DB mapper that turns clones in this table into KnowledgePoint'
+      + ' rows; PR 5.5c/d add merge UI + PR-platform push.'
+      + ' classification is filled at subscribe time by the host'
+      + ' allow-list classifier — internal hosts (code.byted.org by'
+      + ' default) yield "internal"; everything else is "public" and'
+      + ' R-0 stops internal-marked points from being published there.',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_repo (
+        id                      TEXT PRIMARY KEY,
+        url                     TEXT NOT NULL UNIQUE,
+        branch                  TEXT NOT NULL DEFAULT 'main',
+        local_path              TEXT NOT NULL,
+        last_fetched_sha        TEXT,
+        last_fetched_at         INTEGER,
+        sync_interval_minutes   INTEGER NOT NULL DEFAULT 30,
+        auto_apply              INTEGER NOT NULL DEFAULT 0,
+        classification          TEXT NOT NULL,
+        status                  TEXT NOT NULL DEFAULT 'active',
+        last_error              TEXT,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_repo_status
+        ON knowledge_repo(status, last_fetched_at);
+      CREATE INDEX IF NOT EXISTS idx_repo_branch
+        ON knowledge_repo(url, branch);
+    `,
+  },
+  {
+    version: 23,
+    description:
+      'Knowledge merge conflicts (PR 5.5c). When import-now would'
+      + ' overwrite a chunk that diverged locally (edit_version moved'
+      + ' past the last imported version), the importer records a row'
+      + ' here instead of clobbering. The Library shows pending'
+      + ' conflicts and surfaces local / remote / merged-draft panes so'
+      + ' the user picks a winner. status open / resolved.',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_merge_conflict (
+        id              TEXT PRIMARY KEY,
+        repo_id         TEXT NOT NULL REFERENCES knowledge_repo(id) ON DELETE CASCADE,
+        point_id        TEXT NOT NULL,
+        local_body      TEXT NOT NULL,
+        remote_body     TEXT NOT NULL,
+        local_version   INTEGER NOT NULL,
+        remote_revision TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        resolved_body   TEXT,
+        resolved_at     INTEGER,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_merge_conflict_status
+        ON knowledge_merge_conflict(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_merge_conflict_repo
+        ON knowledge_merge_conflict(repo_id);
     `,
   },
 ];

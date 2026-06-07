@@ -828,6 +828,43 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return send(res, 200, { runs });
       }
 
+      // PR 5b: POST /api/verification/cases/:id/run synchronously
+      // executes the case via the bound runner and returns the new
+      // run row. 503 when no runner is configured — UI surfaces a
+      // "configure providers.json" hint. The auto-trigger from PR 6
+      // still fires through this same runner on candidate accept;
+      // this endpoint is the explicit "run now" path.
+      const caseRunMatch = url.pathname.match(/^\/api\/verification\/cases\/([^/]+)\/run$/);
+      if (caseRunMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.verificationRunner) {
+          return send(res, 503, {
+            error: 'no_runner',
+            message: 'Verification runner is not configured. Set up '
+              + '`~/.helm/benchmark/providers.json` (schema same as '
+              + 'llm-wiki) and restart helm.',
+          });
+        }
+        const caseId = caseRunMatch[1]!;
+        const c = getCase(deps.db, caseId);
+        if (!c) return notFound(res);
+        try {
+          const run = await deps.verificationRunner(caseId);
+          if (!run) {
+            return send(res, 500, { error: 'runner_returned_null' });
+          }
+          return send(res, 200, { run });
+        } catch (err) {
+          deps.logger?.warn('verification_run_failed', {
+            data: { caseId, message: (err as Error).message },
+          });
+          return send(res, 500, {
+            error: 'run_failed',
+            message: (err as Error).message,
+          });
+        }
+      }
+
       // PR 6: cheap badge count for the sidebar Verification entry
       // and the proposals review surface. Returns just numbers so the
       // renderer can poll without paying for the full row payload.

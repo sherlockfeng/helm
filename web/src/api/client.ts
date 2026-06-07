@@ -379,6 +379,16 @@ export const helmApi = {
       'GET', '/api/verification/counts',
     ),
 
+  /**
+   * Trigger a synchronous run of one case. Returns the new run row on
+   * success. 503 when no provider config is wired (the renderer
+   * surfaces a "configure ~/.helm/benchmark/providers.json" hint).
+   */
+  runVerificationCase: (id: string) =>
+    request<{ run: import('./types.js').BenchmarkRun }>(
+      'POST', `/api/verification/cases/${encodeURIComponent(id)}/run`,
+    ),
+
   // ── Phase 79: storage plugins (read) + role subscriptions ───────
   /** List every storage plugin helm tried to load — OK + failed. */
   listPlugins: () =>

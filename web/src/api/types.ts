@@ -317,6 +317,54 @@ export interface RoleChunk {
   /** Phase 77 — soft-archive flag. Archived chunks render in a folded
    * "Archived (N)" section with an "unarchive" button. */
   archived: boolean;
+  /** R-7 — Internal (default) chunks cannot be published to a public
+   * repo via the R-0 gate; flip to Public to enable publishing. */
+  visibility?: ChunkVisibility;
+  /** Optimistic-lock cookie sent back on visibility / body PATCHes. */
+  editVersion?: number;
+}
+
+/** R-7 — chunk publish gate. Defaults to 'internal' for safety. */
+export type ChunkVisibility = 'internal' | 'public';
+
+/** R-6 — one KnowledgeRepo subscription row. */
+export interface KnowledgeRepo {
+  id: string;
+  url: string;
+  branch: string;
+  localPath: string;
+  classification: 'internal' | 'public';
+  status: 'active' | 'paused' | 'error' | 'conflict';
+  syncIntervalMinutes: number;
+  autoApply: boolean;
+  lastFetchedSha?: string;
+  lastFetchedAt?: number;
+  lastError?: string;
+  createdAt: number;
+}
+
+/** R-6 — curated seed catalogue entry (e.g. llm-wiki one-click). */
+export interface KnowledgeRepoSeed {
+  id: string;
+  label: string;
+  description: string;
+  url: string;
+  branch?: string;
+  classification: 'internal' | 'public';
+}
+
+/** R-6 — 3-way merge conflict surfaced by the importer. */
+export interface KnowledgeMergeConflict {
+  id: string;
+  repoId: string;
+  pointId: string;
+  localBody: string;
+  remoteBody: string;
+  localVersion: number;
+  remoteRevision: string;
+  status: 'open' | 'resolved';
+  createdAt: number;
+  resolvedAt?: number;
 }
 
 /** Phase 73: one row in the Sources block of the Role detail page. */

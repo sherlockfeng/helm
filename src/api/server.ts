@@ -707,6 +707,11 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           accessCount: c.accessCount,
           lastAccessedAt: c.lastAccessedAt,
           archived: c.archived,
+          // R-7: visibility drives the Internal / Public toggle in
+          // Library. editVersion is the optimistic-lock cookie the
+          // PATCH endpoint validates against.
+          visibility: c.visibility,
+          editVersion: c.editVersion,
         }));
         // Phase 73: include every knowledge_source row for this role with
         // chunk counts. The Roles page renders a "Sources" block driven by
@@ -731,6 +736,51 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           data: { chunkId, roleId: before.roleId, wasArchived: before.archived, restored },
         });
         return send(res, 200, { chunkId, restored });
+      }
+
+      // R-7 (reviewer follow-up): PATCH /api/knowledge-chunks/:id/visibility
+      //   body { visibility: 'internal' | 'public', expectedEditVersion }
+      // Flipping to 'public' is the manual escape hatch the R-0 publish
+      // gate needs — without this surface, an internal chunk can never
+      // be promoted into a publishable point. Optimistic-locked on
+      // editVersion so two flippers can't silently overwrite.
+      const visibilityMatch = url.pathname.match(/^\/api\/knowledge-chunks\/([^/]+)\/visibility$/);
+      if (visibilityMatch) {
+        if (req.method !== 'PATCH' && req.method !== 'POST') {
+          return methodNotAllowed(res);
+        }
+        const chunkId = visibilityMatch[1]!;
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        const visibility = body['visibility'];
+        if (visibility !== 'internal' && visibility !== 'public') {
+          return badRequest(res, "visibility must be 'internal' or 'public'");
+        }
+        const expectedEditVersion = body['expectedEditVersion'];
+        if (typeof expectedEditVersion !== 'number' || !Number.isFinite(expectedEditVersion)) {
+          return badRequest(res, 'expectedEditVersion must be a number');
+        }
+        const before = getChunkByIdRepo(deps.db, chunkId);
+        if (!before) return notFound(res);
+        const result = updateChunkWithVersionCheck(
+          deps.db, chunkId, expectedEditVersion, { visibility },
+        );
+        if (!result.applied) {
+          return send(res, 409, {
+            error: 'stale',
+            message: 'Chunk has been edited since you loaded it. Refresh and retry.',
+            currentEditVersion: before.editVersion,
+          });
+        }
+        deps.logger?.info('knowledge_chunk_visibility_changed', {
+          data: { chunkId, roleId: before.roleId, from: before.visibility, to: visibility },
+        });
+        return send(res, 200, {
+          chunkId,
+          visibility,
+          editVersion: result.newEditVersion,
+        });
       }
 
       // PR 4 (Review inbox): cross-role candidate list for the top-level

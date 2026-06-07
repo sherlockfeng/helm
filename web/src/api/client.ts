@@ -12,10 +12,14 @@ import type {
   Campaign,
   CampaignSummary,
   ChannelBinding,
+  ChunkVisibility,
   Cycle,
   CycleScreenshotInput,
   DocAuditEntry,
   HelmConfig,
+  KnowledgeMergeConflict,
+  KnowledgeRepo,
+  KnowledgeRepoSeed,
   PendingApproval,
   PendingBind,
   Requirement,
@@ -583,6 +587,93 @@ export const helmApi = {
       qs ? `/api/harness/archive?${qs}` : '/api/harness/archive',
     );
   },
+
+  // ── R-7: chunk visibility toggle (the R-0 escape hatch) ──
+  setChunkVisibility: (
+    chunkId: string,
+    visibility: ChunkVisibility,
+    expectedEditVersion: number,
+  ) =>
+    request<{ chunkId: string; visibility: ChunkVisibility; editVersion: number }>(
+      'PATCH',
+      `/api/knowledge-chunks/${encodeURIComponent(chunkId)}/visibility`,
+      { visibility, expectedEditVersion },
+    ),
+
+  // ── R-6: KnowledgeRepo subscriptions ──
+  listKnowledgeRepos: (status?: 'active' | 'paused' | 'error' | 'conflict' | 'all') => {
+    const qs = status ? `?status=${status}` : '';
+    return request<{ repos: KnowledgeRepo[] }>('GET', `/api/knowledge-repos${qs}`);
+  },
+  subscribeKnowledgeRepo: (input: {
+    url: string;
+    branch?: string;
+    syncIntervalMinutes?: number;
+    autoApply?: boolean;
+  }) => request<{ repo: KnowledgeRepo }>('POST', '/api/knowledge-repos', input),
+  fetchKnowledgeRepoNow: (repoId: string) =>
+    request<{ repoId: string; moved: boolean; headSha: string }>(
+      'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/fetch-now`,
+    ),
+  importKnowledgeRepoNow: (
+    repoId: string,
+    profile?: 'helm-native' | 'llm-wiki' | 'generic',
+  ) =>
+    request<{
+      repoId: string;
+      summary: {
+        rolesImported: number;
+        pointsUpserted: number;
+        conflictsDetected: number;
+        errors: Record<string, string>;
+      };
+    }>(
+      'POST',
+      `/api/knowledge-repos/${encodeURIComponent(repoId)}/import-now`,
+      profile ? { profile } : {},
+    ),
+  publishKnowledgeRepo: (
+    repoId: string,
+    input: {
+      pointIds: string[];
+      message: string;
+      branchName?: string;
+      profile?: 'helm-native' | 'llm-wiki' | 'generic';
+      anonymous?: boolean;
+    },
+  ) =>
+    request<{ branch: string; prUrl: string; filesWritten: number }>(
+      'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
+    ),
+  unsubscribeKnowledgeRepo: (repoId: string, removeData?: boolean) => {
+    const qs = removeData ? '?removeData=true' : '';
+    return request<{ ok: true; repoId: string }>(
+      'DELETE',
+      `/api/knowledge-repos/${encodeURIComponent(repoId)}${qs}`,
+    );
+  },
+  listKnowledgeRepoConflicts: (opts: { status?: 'open' | 'resolved' | 'all'; repoId?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.status) params.set('status', opts.status);
+    if (opts.repoId) params.set('repoId', opts.repoId);
+    const qs = params.toString();
+    return request<{ conflicts: KnowledgeMergeConflict[] }>(
+      'GET',
+      qs ? `/api/knowledge-repos/conflicts?${qs}` : '/api/knowledge-repos/conflicts',
+    );
+  },
+  resolveKnowledgeRepoConflict: (conflictId: string, body: string) =>
+    request<{ conflictId: string; applied: boolean }>(
+      'POST',
+      `/api/knowledge-repos/conflicts/${encodeURIComponent(conflictId)}/resolve`,
+      { body },
+    ),
+  listKnowledgeRepoSeeds: () =>
+    request<{ seeds: KnowledgeRepoSeed[] }>('GET', '/api/knowledge-repos/seeds'),
+  subscribeKnowledgeRepoSeed: (seedId: string) =>
+    request<{ repo: KnowledgeRepo; seedId: string }>(
+      'POST', `/api/knowledge-repos/seeds/${encodeURIComponent(seedId)}/subscribe`,
+    ),
 };
 
 export interface HarnessTaskView {

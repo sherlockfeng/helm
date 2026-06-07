@@ -1130,6 +1130,74 @@ describe('/api/roles (B3)', () => {
     expect(r.status).toBe(404);
   });
 
+  describe('PATCH /api/knowledge-chunks/:id/visibility (R-7)', () => {
+    const seed = (): void => {
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run('r-vis', 'R', 'p', 0, now);
+      db.prepare(`
+        INSERT INTO knowledge_chunks
+          (id, role_id, source_file, chunk_text, embedding, created_at, visibility, edit_version)
+        VALUES (?, ?, ?, ?, ?, ?, 'internal', 1)
+      `).run('chunk-vis', 'r-vis', 'x.md', 'body', new Uint8Array(0), now);
+    };
+
+    it('flips internal → public with the correct editVersion', async () => {
+      seed();
+      const r = await fetchJson('/api/knowledge-chunks/chunk-vis/visibility', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: 'public', expectedEditVersion: 1 }),
+      });
+      expect(r.status).toBe(200);
+      const body = r.body as { chunkId: string; visibility: string; editVersion: number };
+      expect(body.visibility).toBe('public');
+      expect(body.editVersion).toBe(2);
+    });
+
+    it('refuses an invalid target visibility', async () => {
+      seed();
+      const r = await fetchJson('/api/knowledge-chunks/chunk-vis/visibility', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: 'world-readable', expectedEditVersion: 1 }),
+      });
+      expect(r.status).toBe(400);
+    });
+
+    it('returns 404 for an unknown chunk', async () => {
+      seed();
+      const r = await fetchJson('/api/knowledge-chunks/ghost/visibility', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: 'public', expectedEditVersion: 1 }),
+      });
+      expect(r.status).toBe(404);
+    });
+
+    it('returns 409 when editVersion is stale', async () => {
+      seed();
+      // Race: someone else wrote first, bumping editVersion 1 → 2.
+      db.prepare(`UPDATE knowledge_chunks SET edit_version = 2 WHERE id = 'chunk-vis'`).run();
+      const r = await fetchJson('/api/knowledge-chunks/chunk-vis/visibility', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: 'public', expectedEditVersion: 1 }),
+      });
+      expect(r.status).toBe(409);
+    });
+
+    it('attack: rejects missing expectedEditVersion', async () => {
+      seed();
+      const r = await fetchJson('/api/knowledge-chunks/chunk-vis/visibility', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: 'public' }),
+      });
+      expect(r.status).toBe(400);
+    });
+  });
+
   it('POST /api/roles/:id/train invokes the factory', async () => {
     await api.stop();
     let received: unknown = null;

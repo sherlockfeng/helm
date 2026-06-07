@@ -17,6 +17,7 @@
 import { HashRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { Layout } from './components/Layout.js';
+import { useProposalBootToast } from './lib/proposal-notifications.js';
 
 // Primary surfaces (new IA)
 import { ConversationsPage } from './pages/Conversations.js';
@@ -40,6 +41,8 @@ import { HarnessPage } from './pages/Harness.js';
 import { PluginsPage } from './pages/Plugins.js';
 
 export default function App() {
+  // R-9: once-per-session toast if proposed verification cases exist.
+  useProposalBootToast();
   return (
     <Router>
       {/* helm-design PR 9: bottom-right toaster. Inherits CSS-var

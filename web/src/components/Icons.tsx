@@ -18,14 +18,20 @@
 
 export {
   // ─── Sidebar nav ────────────────────────────────────────────────
-  MessagesSquare,    // Active Chats
+  // PR 1 (conversations-knowledge IA):
+  MessagesSquare,    // Conversations (was Active Chats)
+  BookOpen,          // Knowledge › Library
+  Inbox,             // Knowledge › Review (candidates)
+  Cloud,             // Knowledge › Sources (subscriptions + mirrors)
+  ListChecks,        // Verification › Cases
+  History,           // Verification › Runs
+  Target,            // Verification › Coverage
+  Settings,          // Settings
+  // Advanced (opt-in via Settings):
   Link2,             // Bindings
   ShieldCheck,       // Approvals
-  BookOpen,          // Roles ("knowledge")
-  Cloud,             // Subscriptions (remote bundles)
   Plug,              // Plugins
   Workflow,          // Harness
-  Settings,          // Settings
 
   // ─── Action verbs ───────────────────────────────────────────────
   Check,             // Allow / success

@@ -59,6 +59,7 @@ import {
 } from './publish.js';
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type { Logger } from '../logger/index.js';
 import { getAliasesForPoint } from '../storage/repos/knowledge-point-alias.js';
 import { getOutgoingRels } from '../storage/repos/knowledge-point-rel.js';
 import { getChunkById } from '../storage/repos/roles.js';
@@ -82,6 +83,13 @@ export interface KnowledgeRepoManagerOptions {
    * name into the platform manually).
    */
   prRunner?: PrPlatformRunner;
+  /**
+   * R-21: injected logger for best-effort failure paths (PR creation
+   * gives up, worktree cleanup fails). Falls back to console.error
+   * when absent so unit tests don't have to wire a logger to get
+   * actionable output on stderr.
+   */
+  logger?: Logger;
 }
 
 export interface PublishInput {
@@ -147,6 +155,7 @@ export class KnowledgeRepoManager {
   private readonly lockTails = new Map<string, Promise<unknown>>();
 
   private readonly prRunner?: PrPlatformRunner;
+  private readonly logger?: Logger;
 
   constructor(opts: KnowledgeRepoManagerOptions) {
     this.db = opts.db;
@@ -154,6 +163,7 @@ export class KnowledgeRepoManager {
     this.reposRoot = opts.reposRoot ?? defaultReposRoot();
     this.extraInternalHosts = opts.extraInternalHosts ?? [];
     if (opts.prRunner) this.prRunner = opts.prRunner;
+    if (opts.logger) this.logger = opts.logger;
   }
 
   async subscribe(url: string, opts: SubscribeOptions = {}): Promise<KnowledgeRepo> {
@@ -348,10 +358,19 @@ export class KnowledgeRepoManager {
               prUrl = result.url;
             }
           } catch (err) {
-            // Log via stderr so the user sees the precise CLI failure
-            // but the publish itself stays "branch is on the remote".
-            // eslint-disable-next-line no-console
-            console.error(`[helm:publish] PR creation failed: ${(err as Error).message}`);
+            // Surface the precise CLI failure but keep the publish as
+            // "branch is on the remote". Goes through the injected
+            // logger when wired so prod failures land in the renderer
+            // log surface; falls back to console.error for tests.
+            const msg = (err as Error).message;
+            if (this.logger) {
+              this.logger.warn('publish_pr_create_failed', {
+                data: { repoId: input.repoId, branch: branchName, error: msg },
+              });
+            } else {
+              // eslint-disable-next-line no-console
+              console.error(`[helm:publish] PR creation failed: ${msg}`);
+            }
           }
         }
       } finally {

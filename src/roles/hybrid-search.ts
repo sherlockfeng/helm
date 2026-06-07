@@ -382,10 +382,24 @@ async function runEntityOnly(input: HybridSearchInput): Promise<HybridSearchHit[
 }
 
 /**
+ * R-21: optional module-level logger. Same pattern as
+ * `roles/library.ts` — leaf modules shouldn't reach for console
+ * directly when production has a structured logger available, but
+ * unit tests that drive these functions don't need to wire one up.
+ */
+type SearchLogger = { warn(msg: string, fields?: { data?: unknown }): void };
+let searchLogger: SearchLogger | null = null;
+export function setHybridSearchLogger(logger: SearchLogger | null): void {
+  searchLogger = logger;
+}
+
+/**
  * Phase 77: fire-and-forget access bump. Scheduled on the microtask queue
  * via `queueMicrotask` so the caller's `await searchKnowledge(...)`
- * resolves before the DB write. Failures are swallowed (just warned via
- * console) — a stale access_count is not worth crashing search over.
+ * resolves before the DB write. Failures are routed through the
+ * injected logger when one is wired, or swallowed onto stderr via
+ * console.warn — a stale access_count is not worth crashing search
+ * over.
  *
  * Skipped entirely when `includeArchived` is true: an agent paging
  * through archived chunks shouldn't accidentally rescue them from the
@@ -404,11 +418,13 @@ function scheduleAccessBump(
     try {
       bumpChunkAccess(db, ids, now);
     } catch (err) {
-      // No logger injected here; this is a best-effort write. Surfacing
-      // via console.warn matches how the orchestrator logs other low-
-      // priority warnings from leaf code paths.
-      // eslint-disable-next-line no-console
-      console.warn('[hybrid-search] access-bump failed:', (err as Error).message);
+      const message = (err as Error).message;
+      if (searchLogger) {
+        searchLogger.warn('access_bump_failed', { data: { count: ids.length, message } });
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[hybrid-search] access-bump failed:', message);
+      }
     }
   });
 }

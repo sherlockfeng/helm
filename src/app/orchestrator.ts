@@ -43,7 +43,13 @@ import { LarkChannel } from '../channel/lark/adapter.js';
 import { createLarkCliRunner } from '../channel/lark/cli-runner.js';
 import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
-import { seedBuiltinRoles, setLifecycleSweepTrigger, trainRole } from '../roles/library.js';
+import {
+  seedBuiltinRoles,
+  setLifecycleSweepLogger,
+  setLifecycleSweepTrigger,
+  trainRole,
+} from '../roles/library.js';
+import { setHybridSearchLogger } from '../roles/hybrid-search.js';
 import { runArchivalSweep } from '../roles/lifecycle.js';
 import { captureFromAgentResponse } from '../capture/index.js';
 import {
@@ -270,6 +276,12 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   setLifecycleSweepTrigger((roleId) => {
     queueMicrotask(() => runSweepWithLogging(roleId));
   });
+  // R-21: route the leaf modules' best-effort failure logs through the
+  // structured logger so they land in ~/.helm/logs/ alongside the
+  // rest. Tests that don't pass a loggerFactory simply skip the wiring
+  // — the leaf modules fall back to console.warn in that case.
+  setLifecycleSweepLogger(deps.loggers.module('roles.library'));
+  setHybridSearchLogger(deps.loggers.module('roles.hybrid-search'));
   // Boot sweep — synchronous so failures show up in the boot log.
   runSweepWithLogging();
   // 24h cron tick.
@@ -1120,6 +1132,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     // still pushes the branch when these CLIs are absent; the PR /
     // MR creation step is the only thing that no-ops.
     prRunner: createNodePrRunner(),
+    // R-21: route best-effort PR-creation failure into the structured
+    // log so it surfaces in ~/.helm/logs/ instead of stderr.
+    logger: deps.loggers.module('knowledge-repo.manager'),
   });
 
   // PR 5b: try to bootstrap a real Verification runner from
@@ -1366,6 +1381,11 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // schedule new sweep work onto a tearing-down DB connection.
       clearInterval(lifecycleCron);
       setLifecycleSweepTrigger(null);
+      // R-21: detach the module-level loggers so a post-shutdown
+      // failure in another HelmApp instance (tests) doesn't write
+      // into our closed log files.
+      setLifecycleSweepLogger(null);
+      setHybridSearchLogger(null);
       // Phase 80 (PR B): stop the mirror runner BEFORE the plugins
       // shutdown. Unhooks the setMirrorSyncTrigger callback + cancels
       // pending debounce timers; in-flight uploads will reject when

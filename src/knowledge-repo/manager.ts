@@ -40,6 +40,8 @@ import {
   classifyHost,
   parseGitUrl,
 } from './url.js';
+import { importRepoIntoLibrary, type ImportSummary } from './importer.js';
+import type { KnowledgeRepoProfile } from './profiles.js';
 
 export interface KnowledgeRepoManagerOptions {
   db: Database.Database;
@@ -176,6 +178,23 @@ export class KnowledgeRepoManager {
         recordRepoError(this.db, repoId, message);
         throw err;
       }
+    });
+  }
+
+  /**
+   * Walk the cloned repo and turn `.md` files into KnowledgePoints.
+   * The repo doesn't yet carry a per-row profile column, so the
+   * caller passes one — typically defaulting to 'helm-native'. PR
+   * 5.5b's mapper handles missing roles/, missing role.yaml, etc.
+   * gracefully.
+   */
+  importNow(repoId: string, profile: KnowledgeRepoProfile = 'helm-native'): ImportSummary {
+    const repo = getKnowledgeRepo(this.db, repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${repoId}`);
+    }
+    return importRepoIntoLibrary({
+      db: this.db, localPath: repo.localPath, profile, sourceRef: repoId,
     });
   }
 

@@ -40,6 +40,19 @@ function serializeHelmNative(input: SerializePointInput): string {
   if (input.chunk.kind && input.chunk.kind !== 'other') {
     lines.push(`kind: ${input.chunk.kind}`);
   }
+  // R-11: round-trip visibility so publish → fetch → import preserves
+  // the R-0 publish gate. `internal` is the default; emit it only when
+  // it was explicitly the chunk's value (we always have it set, but
+  // omit when default to keep frontmatter terse).
+  if (input.chunk.visibility && input.chunk.visibility !== 'internal') {
+    lines.push(`visibility: ${input.chunk.visibility}`);
+  }
+  // R-11: round-trip source provenance so an imported chunk that came
+  // from a particular session / mirror retains that origin through a
+  // publish round-trip. Stored as compact inline JSON.
+  if (input.chunk.source) {
+    lines.push(`source: ${JSON.stringify(input.chunk.source)}`);
+  }
   if (input.title) lines.push(`title: ${quoteIfNeeded(input.title)}`);
   if (input.aliases.length > 0) {
     // Stable ordering: alphabetical so unrelated edits don't reshuffle

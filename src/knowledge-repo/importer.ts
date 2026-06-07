@@ -37,9 +37,11 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   insertChunk,
+  insertChunkEntity,
   upsertRole,
   getChunkById,
 } from '../storage/repos/roles.js';
+import { extractEntities } from '../roles/entity-extract.js';
 import { insertMergeConflict } from '../storage/repos/knowledge-merge-conflict.js';
 import {
   setAliasesForPoint,
@@ -69,6 +71,14 @@ export interface ImporterInput {
   repoId?: string;
   /** PR 5.5c: SHA the imported content came from; stored on conflict rows. */
   remoteRevision?: string;
+  /**
+   * R-10: optional embedding factory. When provided, each upserted /
+   * inserted chunk gets its embedding column populated so the cosine
+   * retrieval leg treats imported content the same as locally-trained
+   * chunks. When absent, embeddings stay NULL — the entity leg still
+   * works, but cosine matching is degraded.
+   */
+  embedFn?: (text: string) => Promise<Float32Array>;
   /** Override fs functions for tests. */
   fs?: {
     readdirSync?: typeof readdirSync;
@@ -134,6 +144,10 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         });
         if (detected === 'conflict') summary.conflictsDetected += 1;
         else summary.pointsUpserted += 1;
+        // R-10: enrich the chunk so retrieval picks it up. Entity leg is
+        // always populated (cheap, deterministic); embedding leg only when
+        // an embedFn was injected (production wires this; some tests skip).
+        enrichChunk(input.db, parsed, roleId, relPath, input.embedFn);
       } catch (err) {
         summary.errors[file] = (err as Error).message;
       }
@@ -141,6 +155,48 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
   }
 
   return summary;
+}
+
+/**
+ * R-10: keep imported chunks searchable by indexing entities + writing
+ * an embedding when the caller injected one. Best-effort: failures
+ * during the embedFn don't abort the import — the entity leg is
+ * enough to surface the chunk in retrieval even without cosine.
+ */
+function enrichChunk(
+  db: Database.Database,
+  parsed: ParsedPoint,
+  roleId: string,
+  filename: string,
+  embedFn?: (text: string) => Promise<Float32Array>,
+): void {
+  const now = new Date().toISOString();
+  // Wipe existing entity rows for this chunk so a re-import that
+  // changed the body doesn't carry stale entities. Cheap on the
+  // current row count — (chunk_id) is in the PK.
+  db.prepare(`DELETE FROM knowledge_chunk_entities WHERE chunk_id = ?`).run(parsed.id);
+  const entities = extractEntities(parsed.body, filename);
+  for (const e of entities) {
+    insertChunkEntity(db, {
+      chunkId: parsed.id, roleId, entity: e.entity, createdAt: now,
+    });
+  }
+  if (embedFn) {
+    // Fire-and-forget: the import returns the synchronous summary
+    // immediately and the embedding lands when the LLM call returns.
+    // Imported chunks without a current embedding still rank below
+    // already-embedded ones, but the entity leg covers them in the
+    // meantime.
+    void embedFn(parsed.body)
+      .then((vec) => {
+        db.prepare(`UPDATE knowledge_chunks SET embedding = ? WHERE id = ?`)
+          .run(Buffer.from(vec.buffer), parsed.id);
+      })
+      .catch(() => {
+        // Same rationale as elsewhere in the importer: per-chunk
+        // failures shouldn't poison a 500-chunk pull.
+      });
+  }
 }
 
 /** Read role.yaml as frontmatter-style key/value pairs. */
@@ -204,6 +260,9 @@ function upsertPoint(
       chunkText: parsed.body, kind: parsed.kind,
       createdAt: now,
     });
+    // R-11: round-trip visibility + source out-of-band from insertChunk
+    // (the legacy signature doesn't take them). Same row, single UPDATE.
+    applyRoundTripFields(db, parsed);
     attachRoleToPoint(db, parsed.id, roleId);
     syncAuxTables(db, parsed);
     return 'inserted';
@@ -239,9 +298,27 @@ function upsertPoint(
   db.prepare(`
     UPDATE knowledge_chunks SET chunk_text = ?, kind = ? WHERE id = ?
   `).run(parsed.body, parsed.kind, parsed.id);
+  applyRoundTripFields(db, parsed);
   attachRoleToPoint(db, parsed.id, roleId);
   syncAuxTables(db, parsed);
   return 'updated';
+}
+
+/**
+ * R-11: persist visibility + source onto the chunk row after the
+ * primary insert / update path. Both fields are nullable; we only
+ * write them when the parser surfaced a value, so a `.md` that didn't
+ * carry a visibility frontmatter doesn't clobber a row's local value.
+ */
+function applyRoundTripFields(db: Database.Database, parsed: ParsedPoint): void {
+  if (parsed.visibility) {
+    db.prepare(`UPDATE knowledge_chunks SET visibility = ? WHERE id = ?`)
+      .run(parsed.visibility, parsed.id);
+  }
+  if (parsed.source) {
+    db.prepare(`UPDATE knowledge_chunks SET source = ? WHERE id = ?`)
+      .run(JSON.stringify(parsed.source), parsed.id);
+  }
 }
 
 function syncAuxTables(db: Database.Database, parsed: ParsedPoint): void {

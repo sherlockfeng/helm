@@ -37,6 +37,10 @@ export interface ParsedPoint {
   aliases: string[];
   /** Outbound rel edges (canonical kind names). */
   rel: Array<{ relKind: ParsedPointRelKind; toPointId: string }>;
+  /** R-11: round-tripped R-0 publish gate. Missing → 'internal'. */
+  visibility?: 'internal' | 'public';
+  /** R-11: round-tripped origin metadata blob (inline JSON in frontmatter). */
+  source?: Record<string, unknown>;
 }
 
 export interface ParseFileInput {
@@ -69,6 +73,14 @@ function parseHelmNative(text: string, relativePath: string): ParsedPoint {
   };
   const title = titleFromFrontmatter ?? titleFromBody;
   if (title) point.title = title;
+  // R-11: round-tripped visibility / source — pulled from frontmatter
+  // emitted by the serializer. Missing → caller defaults to 'internal'.
+  const vis = stringValue(data['visibility']);
+  if (vis === 'internal' || vis === 'public') point.visibility = vis;
+  const source = data['source'];
+  if (source && typeof source === 'object' && !Array.isArray(source)) {
+    point.source = source as Record<string, unknown>;
+  }
   return point;
 }
 

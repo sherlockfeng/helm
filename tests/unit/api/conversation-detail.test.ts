@@ -34,8 +34,10 @@ function seedSession(db: BetterSqlite3.Database, id: string): void {
 }
 
 function seedRoleAndChunk(db: BetterSqlite3.Database, roleId: string, chunkId: string): void {
+  // OR IGNORE on roles so two chunks under the same role don't trip
+  // the PRIMARY KEY constraint when the helper is called twice.
   db.prepare(`
-    INSERT INTO roles (id, name, system_prompt, is_builtin, created_at, version)
+    INSERT OR IGNORE INTO roles (id, name, system_prompt, is_builtin, created_at, version)
     VALUES (?, ?, 'sp', 0, ?, 1)
   `).run(roleId, `Role-${roleId}`, new Date().toISOString());
   db.prepare(`
@@ -114,23 +116,17 @@ describe('getConversationDetail', () => {
     seedRoleAndChunk(db, 'r-1', 'p-1');
     // Two pending for s-1, one accepted, one for s-2 → only the two
     // pending for s-1 should appear in the detail.
-    db.prepare(`
-      INSERT INTO knowledge_candidates
-        (id, role_id, host_session_id, chunk_text, source_segment_index, kind,
-         score_entity, score_cosine, text_hash, status, provenance, created_at, updated_at)
-      VALUES (?, 'r-1', ?, ?, 0, 'other', 3, 0.7, ?, ?, 'chat_capture', ?, ?)
-    `);
     const now = new Date().toISOString();
     const insert = db.prepare(`
       INSERT INTO knowledge_candidates
         (id, role_id, host_session_id, chunk_text, source_segment_index, kind,
-         score_entity, score_cosine, text_hash, status, provenance, created_at, updated_at)
-      VALUES (?, 'r-1', ?, ?, 0, 'other', ?, ?, ?, ?, 'chat_capture', ?, ?)
+         score_entity, score_cosine, text_hash, status, provenance, created_at)
+      VALUES (?, 'r-1', ?, ?, 0, 'other', ?, ?, ?, ?, 'chat_capture', ?)
     `);
-    insert.run('cand-1', 's-1', 'first body',  3, 0.8, 'h1', 'pending',  now, now);
-    insert.run('cand-2', 's-1', 'second body', 2, 0.7, 'h2', 'pending',  now, now);
-    insert.run('cand-3', 's-1', 'third body',  4, 0.9, 'h3', 'accepted', now, now);
-    insert.run('cand-4', 's-2', 'other body',  3, 0.8, 'h4', 'pending',  now, now);
+    insert.run('cand-1', 's-1', 'first body',  3, 0.8, 'h1', 'pending',  now);
+    insert.run('cand-2', 's-1', 'second body', 2, 0.7, 'h2', 'pending',  now);
+    insert.run('cand-3', 's-1', 'third body',  4, 0.9, 'h3', 'accepted', now);
+    insert.run('cand-4', 's-2', 'other body',  3, 0.8, 'h4', 'pending',  now);
 
     const detail = getConversationDetail(db, 's-1')!;
     expect(detail.candidates.map((c) => c.id).sort()).toEqual(['cand-1', 'cand-2']);

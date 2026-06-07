@@ -701,11 +701,11 @@ export const MIGRATIONS: Migration[] = [
       -- day one without losing any existing role assignment.
       --
       -- R-16 retro-fix: the inner JOIN to roles filters out orphan
-      -- chunks (rows whose role_id points to a deleted role —
+      -- chunks (rows whose role_id points to a deleted role --
       -- possible if a historical script deleted a role with
       -- foreign_keys=OFF and left chunks behind). Without the JOIN
       -- the FK on knowledge_point_roles.role_id would throw and
-      -- abort the migration; `INSERT OR IGNORE` only swallows PK /
+      -- abort the migration; INSERT OR IGNORE only swallows PK /
       -- UNIQUE conflicts, not FK violations. Orphans are silently
       -- dropped from the join; the underlying knowledge_chunks rows
       -- are left intact so a future cleanup can audit them.

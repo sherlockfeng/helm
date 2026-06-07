@@ -97,9 +97,11 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
   // Strip the leading slash, then any trailing slash too — both forms
   // are common in user input.
   const pathPart = parsed.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
-  // splitPath needs at least one segment; file:// URLs to a bare repo
-  // can legitimately be a single path like /tmp/x/remote.git.
-  const { owner, repo } = pathPart.length > 0
+  // splitPath needs at least one segment. http(s) URLs with no repo
+  // segment (`https://github.com/`) are still an error; file:// URLs
+  // can address a single-segment local path like /tmp/x.git so we
+  // allow them through even when pathPart is empty.
+  const { owner, repo } = (pathPart.length > 0 || parsed.protocol !== 'file:')
     ? splitPath(pathPart)
     : { owner: undefined, repo: 'local' };
   // Canonical form drops the `git+` prefix and trailing `.git` so all

@@ -905,12 +905,19 @@ type ChatTarget =
   | { mode: 'create' }
   | { mode: 'update'; roleId: string; name: string };
 
+// R-19: English greeting with Chinese fallback. The trainer agent
+// speaks whichever language the user opens with — but the seed
+// message has to land before either side has said anything, so we
+// pick English as the default and keep the Chinese form right next
+// to it so future i18n wiring can swap by user locale.
 const CREATE_GREETING = [
-  '你好！我会帮你定义一个新的 helm role。',
+  "Hi! I'll help you define a new helm role.",
   '',
-  '我跑在你机器上的 Claude Code CLI 里 — 默认带文件读取、grep、shell、web fetch；helm 还接了 `train_role`、`read_lark_doc` 等 MCP 工具。',
+  "I'm running inside the Claude Code CLI on your machine — file read, grep, shell, web fetch out of the box; helm wires `train_role`, `read_lark_doc`, etc. as MCP tools.",
   '',
-  '先告诉我：你想训练什么样的专家？领域、关心的项目、想沉淀的文档/代码都可以一起说。当你确认方案后，直接说"保存这个为 XXX role"，我就调 `train_role` 存下来。',
+  "Tell me what kind of expert you want to train: the domain, the projects you care about, the docs / code you want to distill. Once we've agreed on a shape, say \"save this as the XXX role\" and I'll call `train_role` to persist it.",
+  '',
+  '(中文起手：你好！我会帮你定义一个新的 helm role。直接用中文继续就行。)',
 ].join('\n');
 
 function updateGreeting(roleName: string, roleId: string): string {

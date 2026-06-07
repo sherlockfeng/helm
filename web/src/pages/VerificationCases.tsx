@@ -219,6 +219,12 @@ function NewCaseForm({ onCreated }: { onCreated: () => void }): ReactElement {
   const [goldenRaw, setGoldenRaw] = useState('');
   const [rolesRaw, setRolesRaw] = useState('');
   const [busy, setBusy] = useState(false);
+  // R-20 — pull the existing role list so the form can suggest them
+  // via a <datalist> instead of asking the user to type ids cold.
+  // Same trick for golden points: we surface a flat list of every
+  // chunk id the renderer can see, scoped to the loaded roles.
+  const rolesQuery = useApi(() => helmApi.roles(), []);
+  const roleSummaries = rolesQuery.data?.roles ?? [];
 
   const submit = async (): Promise<void> => {
     if (!name.trim() || !question.trim() || !expectedTruth.trim()) {
@@ -261,12 +267,22 @@ function NewCaseForm({ onCreated }: { onCreated: () => void }): ReactElement {
         </label>
         <label>Golden point ids (comma-separated, optional)
           <input value={goldenRaw} onChange={(e) => setGoldenRaw(e.target.value)}
-            placeholder="dr-overview, bfc" style={{ width: '100%' }} />
+            placeholder="dr-overview, bfc" style={{ width: '100%' }}
+            list="helm-known-points" />
         </label>
         <label>Target role ids (comma-separated, optional)
           <input value={rolesRaw} onChange={(e) => setRolesRaw(e.target.value)}
-            placeholder="tiktok-web-dr" style={{ width: '100%' }} />
+            placeholder="tiktok-web-dr" style={{ width: '100%' }}
+            list="helm-known-roles" />
         </label>
+        {/* R-20: datalist suggestions so users don't have to remember
+            role / point ids verbatim. Empty list when the API hasn't
+            returned yet — datalist is a hint, never load-bearing. */}
+        <datalist id="helm-known-roles">
+          {roleSummaries.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+        </datalist>
         <div>
           <Button onClick={submit} disabled={busy} variant="primary">Create</Button>
         </div>

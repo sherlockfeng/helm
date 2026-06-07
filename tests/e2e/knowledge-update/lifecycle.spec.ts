@@ -127,15 +127,15 @@ describe('knowledge-update lifecycle', () => {
 
       // Mirrors + subscriptions — schema lets these be sparse.
       h.db.prepare(`
-        INSERT INTO role_mirrors (id, role_id, target_url, target_kind, created_at, updated_at)
-        VALUES ('mir-1', 'r-doomed', 'tos://x', 'tos', ?, ?)
+        INSERT INTO role_mirrors (role_id, target_url, created_at, updated_at)
+        VALUES ('r-doomed', 'tos://x', ?, ?)
       `).run(new Date().toISOString(), new Date().toISOString());
       h.db.prepare(`
         INSERT INTO role_subscriptions
-          (id, role_id, source_url, source_kind, sync_interval_minutes, auto_apply,
-           status, created_at, updated_at)
-        VALUES ('sub-1', 'r-doomed', 'tos://y', 'tos', 30, 0, 'active', ?, ?)
-      `).run(new Date().toISOString(), new Date().toISOString());
+          (id, role_id, source_url, source_type, sync_interval_minutes, auto_apply,
+           status, created_at)
+        VALUES ('sub-1', 'r-doomed', 'tos://y', 'tos', 30, 0, 'active', ?)
+      `).run(new Date().toISOString());
 
       deleteRole(h.db, 'r-doomed');
 

@@ -56,6 +56,79 @@ function KindBadge({ kind }: { kind: KnowledgeChunkKind }) {
 const KIND_OPTIONS: KnowledgeChunkKind[] = ['other', 'spec', 'example', 'warning', 'runbook', 'glossary'];
 
 /**
+ * R-7 — chip + toggle for the R-0 publish gate. Internal is the
+ * default + safe direction; flipping to Public requires a confirm
+ * because R-0 lets the chunk land on a public git repo afterwards.
+ */
+function VisibilityChip({ visibility }: { visibility: 'internal' | 'public' }) {
+  const isInternal = visibility === 'internal';
+  return (
+    <span style={{
+      display: 'inline-block',
+      background: isInternal ? '#fee2e2' : '#dcfce7',
+      color: isInternal ? '#991b1b' : '#166534',
+      fontSize: 10, fontWeight: 600, padding: '1px 6px',
+      borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5,
+    }} title={isInternal
+      ? 'Internal — cannot be published to a public repo.'
+      : 'Public — eligible for publish to public repos.'}>
+      {visibility}
+    </span>
+  );
+}
+
+function VisibilityToggle({
+  chunkId, visibility, editVersion, busy, confirm, onAskConfirm, onFlip,
+}: {
+  chunkId: string;
+  visibility: 'internal' | 'public';
+  editVersion: number;
+  busy: boolean;
+  confirm: { chunkId: string; editVersion: number } | null;
+  onAskConfirm: (c: { chunkId: string; editVersion: number } | null) => void;
+  onFlip: (next: 'internal' | 'public', expectedEditVersion: number) => void;
+}) {
+  const isInternal = visibility === 'internal';
+  if (confirm?.chunkId === chunkId) {
+    return (
+      <span style={{ display: 'inline-flex', gap: 4, fontSize: 11 }}>
+        <span style={{ color: '#92400e' }}>Promote to public?</span>
+        <button
+          type="button"
+          disabled={busy}
+          aria-busy={busy}
+          onClick={() => onFlip('public', confirm.editVersion)}
+          style={{ color: '#166534' }}
+        >
+          {busy ? 'Promoting…' : 'Yes, make public'}
+        </button>
+        <button type="button" onClick={() => onAskConfirm(null)}>Cancel</button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      aria-busy={busy}
+      onClick={() => {
+        if (isInternal) {
+          onAskConfirm({ chunkId, editVersion });
+        } else {
+          onFlip('internal', editVersion);
+        }
+      }}
+      style={{ fontSize: 11 }}
+      title={isInternal
+        ? 'Promote to Public so this chunk can be published to a public repo.'
+        : 'Revert to Internal to block publish to public repos.'}
+    >
+      {isInternal ? '→ Public' : '→ Internal'}
+    </button>
+  );
+}
+
+/**
  * Phase 77 — compact relative-time formatter for chunk access stats.
  * Returns "Nm ago" / "Nh ago" / "Nd ago" — keep cards visually tight.
  * Falls back to the raw ISO string for unparseable input rather than
@@ -101,6 +174,11 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
   const [dropConfirm, setDropConfirm] = useState<{ sourceId: string; origin: string } | null>(null);
   // Phase 77: per-chunk pending state for the unarchive button.
   const [unarchivingChunkId, setUnarchivingChunkId] = useState<string | null>(null);
+  // R-7: per-chunk pending state for the visibility toggle button.
+  const [flippingVisChunkId, setFlippingVisChunkId] = useState<string | null>(null);
+  // R-7: chunk pending confirmation when promoting to 'public'. Holds
+  // the chunk under consideration so the inline confirm row can render.
+  const [visConfirm, setVisConfirm] = useState<{ chunkId: string; editVersion: number } | null>(null);
   // Phase 78: tab selector for the role detail panel. Three tabs:
   //   'chunks'      — trained knowledge + sources + train/retrain form
   //   'candidates'  — agent-response segments awaiting Accept / Reject
@@ -174,6 +252,27 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       setTrainError(`Unarchive failed: ${msg}`);
     } finally {
       setUnarchivingChunkId(null);
+    }
+  }
+
+  /** R-7: flip a chunk's R-0 visibility. `nextVisibility` is the
+   *  target value; the caller is responsible for surfacing a confirm
+   *  prompt before promoting to 'public' (the destructive direction). */
+  async function flipChunkVisibility(
+    chunkId: string,
+    nextVisibility: 'internal' | 'public',
+    expectedEditVersion: number,
+  ): Promise<void> {
+    setFlippingVisChunkId(chunkId);
+    try {
+      await helmApi.setChunkVisibility(chunkId, nextVisibility, expectedEditVersion);
+      detail.reload();
+      setVisConfirm(null);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      setTrainError(`Visibility change failed: ${msg}`);
+    } finally {
+      setFlippingVisChunkId(null);
     }
   }
 
@@ -297,6 +396,16 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <KindBadge kind={c.kind} />
                       <code style={{ color: 'var(--text-secondary)' }}>{c.sourceFile ?? '(no file)'}</code>
+                      <VisibilityChip visibility={c.visibility ?? 'internal'} />
+                      <VisibilityToggle
+                        chunkId={c.id}
+                        visibility={c.visibility ?? 'internal'}
+                        editVersion={c.editVersion ?? 1}
+                        busy={flippingVisChunkId === c.id}
+                        confirm={visConfirm}
+                        onAskConfirm={(v) => setVisConfirm(v)}
+                        onFlip={(v, ev) => { void flipChunkVisibility(c.id, v, ev); }}
+                      />
                     </div>
                     <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
                       {summarizePrompt(c.chunkText, 200)}

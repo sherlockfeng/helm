@@ -148,9 +148,9 @@ describe('e2e Conversation Detail — attacks', () => {
     h.db.prepare(`
       INSERT INTO knowledge_candidates
         (id, role_id, host_session_id, chunk_text, source_segment_index, kind,
-         score_entity, score_cosine, text_hash, status, provenance, created_at, updated_at)
-      VALUES (?, 'r-1', ?, ?, 0, 'other', 3, 0.8, ?, 'pending', 'chat_capture', ?, ?)
-    `).run('cand-other', 's-other', 'body', 'hash-1', ts, ts);
+         score_entity, score_cosine, text_hash, status, provenance, created_at)
+      VALUES (?, 'r-1', ?, ?, 0, 'other', 3, 0.8, ?, 'pending', 'chat_capture', ?)
+    `).run('cand-other', 's-other', 'body', 'hash-1', ts);
 
     const port = h.app.httpPort();
     if (port == null) throw new Error('httpPort not bound — orchestrator boot failed?');

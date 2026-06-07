@@ -71,7 +71,17 @@ describe('e2e /run endpoint — happy', () => {
         judgeVerdictJson: JSON.stringify({ aligned: true, score: alignmentPct, summary: 'ok' }),
         durationMs: 1, knowledgeStateSha: id, isReproducible: true,
       });
-      return h.db.prepare(`SELECT * FROM benchmark_run WHERE id = ?`).get(id) as BenchmarkRun;
+      // The SELECT * round-trip returns snake_case keys; the API path
+      // sends the object as-is to the renderer, which expects camelCase
+      // BenchmarkRun. Bypass the row mapper by hand-constructing.
+      return {
+        id, caseId, runAt: Date.now(),
+        answerProviderId: 'fake-answer', judgeProviderId: 'fake-judge',
+        recallPct: 100, alignmentPct,
+        answerText: 'fake answer', judgeVerdictText: 'fake',
+        judgeVerdictJson: JSON.stringify({ aligned: true, score: alignmentPct, summary: 'ok' }),
+        durationMs: 1, knowledgeStateSha: id, isReproducible: true,
+      };
     };
   }
 

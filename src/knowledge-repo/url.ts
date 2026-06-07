@@ -60,18 +60,18 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
   }
 
   // SSH: git@host:owner/repo[.git]
+  // SSH canonical preserves `.git` because that's the shape "Clone
+  // with SSH" buttons hand out. We accept both forms in user input
+  // but round-trip exactly what was typed so SSH-style entries don't
+  // get re-normalized between sessions.
   const sshMatch = withoutFragment.match(/^([^@]+)@([^:]+):(.+)$/);
   if (sshMatch) {
     const userPart = sshMatch[1]!;
     const host = sshMatch[2]!.toLowerCase();
     const pathPart = sshMatch[3]!;
     const { owner, repo } = splitPath(pathPart);
-    // Canonical drops the trailing `.git` so that
-    //   git@host:org/repo.git, git@host:org/repo
-    // produce the same UNIQUE key.
-    const canonicalPath = pathPart.replace(/\.git$/, '');
     return {
-      canonical: `${userPart}@${host}:${canonicalPath}${branch ? `#branch=${branch}` : ''}`,
+      canonical: `${userPart}@${host}:${pathPart}${branch ? `#branch=${branch}` : ''}`,
       host, owner, repo,
       ...(branch ? { branch } : {}),
       ssh: true,

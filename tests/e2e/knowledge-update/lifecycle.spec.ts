@@ -132,10 +132,10 @@ describe('knowledge-update lifecycle', () => {
       `).run(new Date().toISOString(), new Date().toISOString());
       h.db.prepare(`
         INSERT INTO role_subscriptions
-          (id, role_id, source_url, source_kind, sync_interval_minutes, auto_apply,
-           status, created_at, updated_at)
-        VALUES ('sub-1', 'r-doomed', 'tos://y', 'tos', 30, 0, 'active', ?, ?)
-      `).run(new Date().toISOString(), new Date().toISOString());
+          (id, role_id, source_url, source_type, sync_interval_minutes, auto_apply,
+           status, created_at)
+        VALUES ('sub-1', 'r-doomed', 'tos://y', 'tos', 30, 0, 'active', ?)
+      `).run(new Date().toISOString());
 
       deleteRole(h.db, 'r-doomed');
 

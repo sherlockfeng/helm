@@ -66,8 +66,12 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
     const host = sshMatch[2]!.toLowerCase();
     const pathPart = sshMatch[3]!;
     const { owner, repo } = splitPath(pathPart);
+    // Canonical drops the trailing `.git` so that
+    //   git@host:org/repo.git, git@host:org/repo
+    // produce the same UNIQUE key.
+    const canonicalPath = pathPart.replace(/\.git$/, '');
     return {
-      canonical: `${userPart}@${host}:${pathPart}${branch ? `#branch=${branch}` : ''}`,
+      canonical: `${userPart}@${host}:${canonicalPath}${branch ? `#branch=${branch}` : ''}`,
       host, owner, repo,
       ...(branch ? { branch } : {}),
       ssh: true,
@@ -91,9 +95,10 @@ export function parseGitUrl(raw: string): ParsedGitUrl {
   // are common in user input.
   const pathPart = parsed.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
   const { owner, repo } = splitPath(pathPart);
-  // Canonical form drops the `git+` prefix so all callers compute the
-  // same UNIQUE key regardless of typed shape.
-  const canonical = `https://${host}/${pathPart}${branch ? `#branch=${branch}` : ''}`;
+  // Canonical form drops the `git+` prefix and trailing `.git` so all
+  // callers compute the same UNIQUE key regardless of typed shape.
+  const canonicalPath = pathPart.replace(/\.git$/, '');
+  const canonical = `https://${host}/${canonicalPath}${branch ? `#branch=${branch}` : ''}`;
   return {
     canonical, host, owner, repo,
     ...(branch ? { branch } : {}),

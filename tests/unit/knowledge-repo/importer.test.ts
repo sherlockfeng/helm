@@ -150,7 +150,9 @@ describe('importRepoIntoLibrary', () => {
     const summary = importRepoIntoLibrary({
       db, localPath: '/repo', profile: 'helm-native', fs,
     });
-    expect(summary).toEqual({ rolesImported: 0, pointsUpserted: 0, errors: {} });
+    expect(summary).toEqual({
+      rolesImported: 0, pointsUpserted: 0, conflictsDetected: 0, errors: {},
+    });
   });
 
   it('captures per-file errors in the errors map without aborting siblings', () => {

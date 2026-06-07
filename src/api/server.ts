@@ -32,6 +32,7 @@ import {
   setHostSessionRole,
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
+import { getConversationDetail } from './conversation-detail.js';
 import {
   getCampaign,
   getCycle,
@@ -451,6 +452,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/health') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         return send(res, 200, { ok: true, name: appName, version: appVersion });
+      }
+
+      // PR 3 (Conversation Detail): GET /api/conversations/:id returns the
+      // joined detail (header + timeline + knowledge_in_play + candidates).
+      // Aliased under both /api/conversations/ (new IA naming) and the
+      // legacy /api/active-chats/:id/detail for renderers that haven't
+      // migrated.
+      const conversationDetailMatch = url.pathname.match(
+        /^\/api\/(?:conversations|active-chats)\/([^/]+)\/detail$/,
+      );
+      if (conversationDetailMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const detail = getConversationDetail(deps.db, conversationDetailMatch[1]!);
+        if (!detail) return send(res, 404, { error: 'Conversation not found' });
+        return send(res, 200, detail);
       }
 
       if (url.pathname === '/api/active-chats') {

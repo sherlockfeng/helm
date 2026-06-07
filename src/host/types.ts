@@ -21,7 +21,7 @@ export type HostEventKind =
   | 'progress'
   | 'stop';
 
-export type HostId = 'cursor' | 'claude-code';
+export type HostId = 'cursor' | 'claude-code' | 'codex';
 
 export interface HostEventBase {
   host: HostId;

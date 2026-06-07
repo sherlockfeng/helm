@@ -34,6 +34,15 @@ import {
 } from '../storage/repos/host-sessions.js';
 import { getConversationDetail } from './conversation-detail.js';
 import {
+  flipCaseStatus,
+  getCase,
+  insertCase,
+  listAlerts,
+  listCases,
+  listRunsForCase,
+} from '../storage/repos/benchmark.js';
+import { enqueueAffectedRuns } from '../verification/auto-trigger.js';
+import {
   getCampaign,
   getCycle,
   getTask,
@@ -155,6 +164,12 @@ export interface HttpApiDeps {
   saveConfig?: (input: unknown) => HelmConfig;
   /** Consume a pending_binds row and create a channel_bindings row. */
   consumePendingBind?: (code: string, hostSessionId: string) => { id: string } | null;
+  /**
+   * PR 6 (auto-trigger): optional Verification runner the candidate
+   * accept path enqueues affected cases against. Absent = no-op
+   * (existing tests + CI without LLM credentials run cleanly).
+   */
+  verificationRunner?: (caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -696,6 +711,154 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // params; defaults to pending + recent. The single-role
       // /api/roles/:id/candidates path below stays for the legacy Roles
       // UI Candidates tab.
+      // PR 5 (Verification API): read-friendly endpoints for the
+      // Cases / Runs / Coverage placeholder pages from PR 1.
+      //
+      //   GET  /api/verification/cases?status&roleId&limit
+      //   POST /api/verification/cases  body { id?, name, question,
+      //         expectedTruth, goldenPointIds[], targetRoleIds[],
+      //         agentKindHint?, notes?, proposedSource?, ... }
+      //   GET  /api/verification/cases/:id
+      //   POST /api/verification/cases/:id/confirm  body { confirmedBy? }
+      //   POST /api/verification/cases/:id/reject   body { reason? }
+      //   GET  /api/verification/cases/:id/runs?limit
+      //   GET  /api/verification/alerts?status&limit
+      //
+      // POST /api/verification/cases/:id/run is intentionally absent
+      // from PR 5 — the runner requires an LLM provider config, which
+      // is the next PR's wiring. Keeping it out keeps this PR
+      // reviewable: schema + repo + provider validator + (mockable)
+      // runner library.
+      if (url.pathname === '/api/verification/cases') {
+        if (req.method === 'GET') {
+          const statusParam = url.searchParams.get('status') ?? 'confirmed';
+          const VALID = ['proposed', 'confirmed', 'rejected', 'archived', 'all'] as const;
+          if (!(VALID as readonly string[]).includes(statusParam)) {
+            return badRequest(res, `invalid status: '${statusParam}'`);
+          }
+          const roleId = url.searchParams.get('roleId') ?? undefined;
+          const limitParam = url.searchParams.get('limit');
+          const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+          const cases = listCases(deps.db, {
+            status: statusParam as typeof VALID[number],
+            ...(roleId ? { roleId } : {}),
+            ...(limit && Number.isFinite(limit) ? { limit } : {}),
+          });
+          return send(res, 200, { cases });
+        }
+        if (req.method === 'POST') {
+          let body: Record<string, unknown>;
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          const required = ['name', 'question', 'expectedTruth'] as const;
+          for (const k of required) {
+            if (typeof body[k] !== 'string' || (body[k] as string).length === 0) {
+              return badRequest(res, `${k} is required and must be a non-empty string`);
+            }
+          }
+          const id = typeof body['id'] === 'string' ? body['id'] : `bc-${randomUUID()}`;
+          const goldenPointIds = Array.isArray(body['goldenPointIds'])
+            ? (body['goldenPointIds'] as unknown[]).filter((x): x is string => typeof x === 'string')
+            : [];
+          const targetRoleIds = Array.isArray(body['targetRoleIds'])
+            ? (body['targetRoleIds'] as unknown[]).filter((x): x is string => typeof x === 'string')
+            : [];
+          insertCase(deps.db, {
+            id,
+            name: body['name'] as string,
+            question: body['question'] as string,
+            expectedTruth: body['expectedTruth'] as string,
+            goldenPointIds,
+            targetRoleIds,
+            ...(typeof body['agentKindHint'] === 'string'
+              ? { agentKindHint: body['agentKindHint'] as 'cursor' | 'claude_code' | 'codex' }
+              : {}),
+            ...(typeof body['notes'] === 'string' ? { notes: body['notes'] } : {}),
+            ...(typeof body['proposedSource'] === 'string'
+              ? { proposedSource: body['proposedSource'] as 'manual' | 'llm-on-edit' | 'imported' }
+              : {}),
+          });
+          const created = getCase(deps.db, id);
+          return send(res, 201, { case: created });
+        }
+        return methodNotAllowed(res);
+      }
+
+      const caseIdMatch = url.pathname.match(/^\/api\/verification\/cases\/([^/]+)$/);
+      if (caseIdMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const c = getCase(deps.db, caseIdMatch[1]!);
+        if (!c) return notFound(res);
+        return send(res, 200, { case: c });
+      }
+
+      const caseConfirmMatch = url.pathname.match(
+        /^\/api\/verification\/cases\/([^/]+)\/(confirm|reject)$/,
+      );
+      if (caseConfirmMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const caseId = caseConfirmMatch[1]!;
+        const action = caseConfirmMatch[2] as 'confirm' | 'reject';
+        let body: Record<string, unknown> = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const ok = flipCaseStatus(
+          deps.db, caseId,
+          action === 'confirm' ? 'confirmed' : 'rejected',
+          typeof body['confirmedBy'] === 'string' ? body['confirmedBy'] : undefined,
+          typeof body['reason'] === 'string' ? body['reason'] : undefined,
+        );
+        if (!ok) {
+          return send(res, 409, {
+            error: 'not_proposed',
+            message: `Case is not in 'proposed' state; only proposed cases can be confirmed/rejected.`,
+          });
+        }
+        return send(res, 200, { caseId, status: action === 'confirm' ? 'confirmed' : 'rejected' });
+      }
+
+      const caseRunsMatch = url.pathname.match(/^\/api\/verification\/cases\/([^/]+)\/runs$/);
+      if (caseRunsMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
+        const runs = listRunsForCase(deps.db, caseRunsMatch[1]!, Number.isFinite(limit) ? limit : 50);
+        return send(res, 200, { runs });
+      }
+
+      // PR 6: cheap badge count for the sidebar Verification entry
+      // and the proposals review surface. Returns just numbers so the
+      // renderer can poll without paying for the full row payload.
+      if (url.pathname === '/api/verification/counts') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const proposed = (deps.db.prepare(
+          `SELECT COUNT(*) AS n FROM benchmark_case WHERE status = 'proposed'`,
+        ).get() as { n: number }).n;
+        const openAlerts = (deps.db.prepare(
+          `SELECT COUNT(*) AS n FROM regression_alert WHERE status = 'open'`,
+        ).get() as { n: number }).n;
+        return send(res, 200, { proposed, openAlerts });
+      }
+
+      if (url.pathname === '/api/verification/alerts') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const statusParam = url.searchParams.get('status') ?? 'open';
+        const VALID_ALERT = ['open', 'acknowledged', 'resolved', 'all'] as const;
+        if (!(VALID_ALERT as readonly string[]).includes(statusParam)) {
+          return badRequest(res, `invalid status: '${statusParam}'`);
+        }
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? Number.parseInt(limitParam, 10) : 100;
+        const alerts = listAlerts(
+          deps.db,
+          statusParam as 'open' | 'acknowledged' | 'resolved' | 'all',
+          Number.isFinite(limit) ? limit : 100,
+        );
+        return send(res, 200, { alerts });
+      }
+
       if (url.pathname === '/api/review/candidates') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const statusParam = url.searchParams.get('status') ?? 'pending';
@@ -867,6 +1030,24 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               chunksAdded: result.chunksAdded, flipped,
             },
           });
+          // PR 6 (auto-trigger): when a Verification runner is wired,
+          // enqueue affected cases so the next time the user looks at
+          // the case it reflects the just-accepted knowledge. Done
+          // asynchronously without blocking the HTTP response — the
+          // candidate accept itself is the user-visible action.
+          if (deps.verificationRunner) {
+            const runner = deps.verificationRunner;
+            void enqueueAffectedRuns(deps.db, {
+              roleIds: [before.roleId],
+              triggeringEventKind: 'candidate_accept',
+              triggeringEventRefId: candidateId,
+              runner,
+            }).catch((err) => {
+              deps.logger?.warn('verification_auto_trigger_failed', {
+                data: { candidateId, message: (err as Error).message },
+              });
+            });
+          }
           return send(res, 200, {
             candidateId, status: 'accepted', flipped,
             chunksAdded: result.chunksAdded,

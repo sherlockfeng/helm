@@ -727,6 +727,134 @@ export const MIGRATIONS: Migration[] = [
       UPDATE host_sessions SET agent_kind = host WHERE host IS NOT NULL;
     `,
   },
+  {
+    version: 21,
+    description:
+      'Verification layer (docs/design/2026-06-06-conversation-knowledge-'
+      + 'redesign.md PR 5). Six tables that turn the §4.7 case-proposal +'
+      + ' run-and-judge loop into persistent state.'
+      + ' benchmark_case carries the question / expected_truth / state'
+      + ' machine — proposedSource discriminates manual / llm-on-edit /'
+      + ' imported authorship; status (proposed → confirmed → rejected →'
+      + ' archived) enforces R-5: only confirmed cases enter regression'
+      + ' detection or coverage stats.'
+      + ' benchmark_case_golden + benchmark_case_target_role are the'
+      + ' normalized N..N joins replacing the JSON-in-TEXT shapes the'
+      + ' reviewer flagged in design rev 1 — reverse queries like "which'
+      + ' cases use this point as a golden?" now hit an index.'
+      + ' benchmark_run holds one row per executed case; the companion'
+      + ' benchmark_run_repo_state table pins the (repoUrl, repoSha)'
+      + ' tuples that produced the score, so any run is reproducible by'
+      + ' anyone with the same repo tree.'
+      + ' regression_alert tracks score drops between consecutive runs of'
+      + ' the same case (§3.5).'
+      + ' benchmark_cost_audit aggregates daily spend per role (NULL ='
+      + ' global) for the §4.7.6 cost cap that prevents bulk-accept from'
+      + ' burning $$$.',
+    up: `
+      CREATE TABLE IF NOT EXISTS benchmark_case (
+        id                       TEXT PRIMARY KEY,
+        name                     TEXT NOT NULL,
+        question                 TEXT NOT NULL,
+        expected_truth           TEXT NOT NULL,
+        agent_kind_hint          TEXT,
+        notes                    TEXT,
+        source_repo_url          TEXT,
+        source_revision          TEXT,
+        proposed_source          TEXT NOT NULL DEFAULT 'manual',
+        proposed_at              INTEGER NOT NULL,
+        proposed_from_point_id   TEXT REFERENCES knowledge_chunks(id) ON DELETE SET NULL,
+        proposed_from_event      TEXT,
+        proposed_question_hash   TEXT,
+        status                   TEXT NOT NULL DEFAULT 'confirmed',
+        confirmed_by             TEXT,
+        confirmed_at             INTEGER,
+        rejected_reason          TEXT,
+        created_at               INTEGER NOT NULL,
+        updated_at               INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_case_status        ON benchmark_case(status, proposed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_case_proposed_from ON benchmark_case(proposed_from_point_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_case_proposed_hash
+        ON benchmark_case(proposed_question_hash) WHERE proposed_question_hash IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS benchmark_case_golden (
+        case_id  TEXT NOT NULL REFERENCES benchmark_case(id) ON DELETE CASCADE,
+        point_id TEXT NOT NULL,  -- intentionally NOT a FK: deleting the
+                                 -- point does NOT delete the case spec
+        PRIMARY KEY (case_id, point_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_case_golden_point ON benchmark_case_golden(point_id);
+
+      CREATE TABLE IF NOT EXISTS benchmark_case_target_role (
+        case_id TEXT NOT NULL REFERENCES benchmark_case(id) ON DELETE CASCADE,
+        role_id TEXT NOT NULL REFERENCES roles(id)         ON DELETE CASCADE,
+        PRIMARY KEY (case_id, role_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS benchmark_run (
+        id                      TEXT PRIMARY KEY,
+        case_id                 TEXT NOT NULL REFERENCES benchmark_case(id) ON DELETE CASCADE,
+        run_at                  INTEGER NOT NULL,
+        answer_provider_id      TEXT NOT NULL,
+        judge_provider_id       TEXT NOT NULL,
+        recall_pct              REAL NOT NULL,
+        alignment_pct           REAL NOT NULL,
+        answer_text             TEXT NOT NULL,
+        judge_verdict_text      TEXT NOT NULL,
+        judge_verdict_json      TEXT NOT NULL,
+        duration_ms             INTEGER NOT NULL,
+        estimated_cost_usd      REAL,
+        llm_call_count          INTEGER,
+        knowledge_state_sha     TEXT NOT NULL,
+        is_reproducible         INTEGER NOT NULL DEFAULT 0,
+        reproduced_from_run_id  TEXT REFERENCES benchmark_run(id) ON DELETE SET NULL,
+        triggering_event_kind   TEXT,
+        triggering_event_ref_id TEXT,
+        baseline_run_id         TEXT REFERENCES benchmark_run(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_case_time ON benchmark_run(case_id, run_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_sha       ON benchmark_run(case_id, knowledge_state_sha);
+
+      CREATE TABLE IF NOT EXISTS benchmark_run_repo_state (
+        run_id   TEXT NOT NULL REFERENCES benchmark_run(id) ON DELETE CASCADE,
+        repo_url TEXT NOT NULL,
+        repo_sha TEXT NOT NULL,
+        PRIMARY KEY (run_id, repo_url)
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_repo_state_sha
+        ON benchmark_run_repo_state(repo_url, repo_sha);
+
+      CREATE TABLE IF NOT EXISTS regression_alert (
+        id                       TEXT PRIMARY KEY,
+        case_id                  TEXT NOT NULL REFERENCES benchmark_case(id) ON DELETE CASCADE,
+        prev_run_id              TEXT NOT NULL REFERENCES benchmark_run(id)  ON DELETE CASCADE,
+        current_run_id           TEXT NOT NULL REFERENCES benchmark_run(id)  ON DELETE CASCADE,
+        prev_score               REAL NOT NULL,
+        current_score            REAL NOT NULL,
+        delta                    REAL NOT NULL,
+        triggering_event_kind    TEXT NOT NULL,
+        triggering_event_ref_id  TEXT NOT NULL,
+        status                   TEXT NOT NULL,
+        resolved_note            TEXT,
+        created_at               INTEGER NOT NULL,
+        updated_at               INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_alert_status ON regression_alert(status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS benchmark_cost_audit (
+        id                  TEXT PRIMARY KEY,
+        date                TEXT NOT NULL,
+        role_id             TEXT,
+        llm_calls           INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_usd  REAL    NOT NULL DEFAULT 0,
+        updated_at          INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_date_role
+        ON benchmark_cost_audit(date, role_id);
+      CREATE INDEX IF NOT EXISTS idx_cost_date ON benchmark_cost_audit(date DESC);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

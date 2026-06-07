@@ -384,3 +384,82 @@ export type AppEvent =
   | { type: 'channel.message_consumed'; hostSessionId: string; count: number };
 
 export type AppEventType = AppEvent['type'];
+
+// ── Verification (PR 5 + PR 6 surface for the renderer) ────────────────────
+
+export type BenchmarkCaseProposedSource = 'manual' | 'llm-on-edit' | 'imported';
+export type BenchmarkCaseStatus = 'proposed' | 'confirmed' | 'rejected' | 'archived';
+export type BenchmarkAgentKindHint = 'cursor' | 'claude_code' | 'codex';
+export type BenchmarkTriggeringEventKind =
+  | 'candidate_accept'
+  | 'subscription_pull'
+  | 'mirror_merge'
+  | 'manual';
+export type RegressionAlertStatus = 'open' | 'acknowledged' | 'resolved';
+
+export interface BenchmarkCase {
+  id: string;
+  name: string;
+  question: string;
+  expectedTruth: string;
+  goldenPointIds: readonly string[];
+  targetRoleIds: readonly string[];
+  agentKindHint?: BenchmarkAgentKindHint;
+  notes?: string;
+  sourceRepoUrl?: string;
+  sourceRevision?: string;
+  proposedSource: BenchmarkCaseProposedSource;
+  proposedAt: number;
+  proposedFromPointId?: string;
+  proposedFromEvent?: string;
+  proposedQuestionHash?: string;
+  status: BenchmarkCaseStatus;
+  confirmedBy?: string;
+  confirmedAt?: number;
+  rejectedReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BenchmarkRun {
+  id: string;
+  caseId: string;
+  runAt: number;
+  answerProviderId: string;
+  judgeProviderId: string;
+  recallPct: number;
+  alignmentPct: number;
+  answerText: string;
+  judgeVerdictText: string;
+  judgeVerdictJson: string;
+  durationMs: number;
+  estimatedCostUsd?: number;
+  llmCallCount?: number;
+  knowledgeStateSha: string;
+  isReproducible: boolean;
+  reproducedFromRunId?: string;
+  triggeringEventKind?: BenchmarkTriggeringEventKind;
+  triggeringEventRefId?: string;
+  baselineRunId?: string;
+}
+
+export interface RegressionAlert {
+  id: string;
+  caseId: string;
+  prevRunId: string;
+  currentRunId: string;
+  prevScore: number;
+  currentScore: number;
+  delta: number;
+  triggeringEventKind: BenchmarkTriggeringEventKind;
+  triggeringEventRefId: string;
+  status: RegressionAlertStatus;
+  resolvedNote?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface VerificationCounts {
+  proposed: number;
+  openAlerts: number;
+}

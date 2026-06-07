@@ -41,6 +41,7 @@ import {
   listCases,
   listRunsForCase,
 } from '../storage/repos/benchmark.js';
+import { enqueueAffectedRuns } from '../verification/auto-trigger.js';
 import {
   getCampaign,
   getCycle,
@@ -163,6 +164,12 @@ export interface HttpApiDeps {
   saveConfig?: (input: unknown) => HelmConfig;
   /** Consume a pending_binds row and create a channel_bindings row. */
   consumePendingBind?: (code: string, hostSessionId: string) => { id: string } | null;
+  /**
+   * PR 6 (auto-trigger): optional Verification runner the candidate
+   * accept path enqueues affected cases against. Absent = no-op
+   * (existing tests + CI without LLM credentials run cleanly).
+   */
+  verificationRunner?: (caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -821,6 +828,20 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return send(res, 200, { runs });
       }
 
+      // PR 6: cheap badge count for the sidebar Verification entry
+      // and the proposals review surface. Returns just numbers so the
+      // renderer can poll without paying for the full row payload.
+      if (url.pathname === '/api/verification/counts') {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        const proposed = (deps.db.prepare(
+          `SELECT COUNT(*) AS n FROM benchmark_case WHERE status = 'proposed'`,
+        ).get() as { n: number }).n;
+        const openAlerts = (deps.db.prepare(
+          `SELECT COUNT(*) AS n FROM regression_alert WHERE status = 'open'`,
+        ).get() as { n: number }).n;
+        return send(res, 200, { proposed, openAlerts });
+      }
+
       if (url.pathname === '/api/verification/alerts') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const statusParam = url.searchParams.get('status') ?? 'open';
@@ -1009,6 +1030,24 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               chunksAdded: result.chunksAdded, flipped,
             },
           });
+          // PR 6 (auto-trigger): when a Verification runner is wired,
+          // enqueue affected cases so the next time the user looks at
+          // the case it reflects the just-accepted knowledge. Done
+          // asynchronously without blocking the HTTP response — the
+          // candidate accept itself is the user-visible action.
+          if (deps.verificationRunner) {
+            const runner = deps.verificationRunner;
+            void enqueueAffectedRuns(deps.db, {
+              roleIds: [before.roleId],
+              triggeringEventKind: 'candidate_accept',
+              triggeringEventRefId: candidateId,
+              runner,
+            }).catch((err) => {
+              deps.logger?.warn('verification_auto_trigger_failed', {
+                data: { candidateId, message: (err as Error).message },
+              });
+            });
+          }
           return send(res, 200, {
             candidateId, status: 'accepted', flipped,
             chunksAdded: result.chunksAdded,

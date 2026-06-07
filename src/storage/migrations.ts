@@ -855,6 +855,46 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_cost_date ON benchmark_cost_audit(date DESC);
     `,
   },
+  {
+    version: 22,
+    description:
+      'Git-as-substrate KnowledgeRepo subscription (docs/design/2026-06-06-'
+      + 'conversation-knowledge-redesign.md §7 / PR 5.5a). knowledge_repo'
+      + ' stores one row per subscribed git repository — the local clone'
+      + ' path, last fetched commit, sync cadence, host classification'
+      + ' (internal vs public per §7.4 R-0), and lifecycle status. The'
+      + ' table is intentionally separate from role_subscriptions so the'
+      + ' URL-based legacy path (a single .helmrole bundle URL) can'
+      + ' continue to coexist while the git-based path takes over as the'
+      + ' main sharing primitive. PR 5.5b will land the frontmatter ↔'
+      + ' DB mapper that turns clones in this table into KnowledgePoint'
+      + ' rows; PR 5.5c/d add merge UI + PR-platform push.'
+      + ' classification is filled at subscribe time by the host'
+      + ' allow-list classifier — internal hosts (code.byted.org by'
+      + ' default) yield "internal"; everything else is "public" and'
+      + ' R-0 stops internal-marked points from being published there.',
+    up: `
+      CREATE TABLE IF NOT EXISTS knowledge_repo (
+        id                      TEXT PRIMARY KEY,
+        url                     TEXT NOT NULL UNIQUE,
+        branch                  TEXT NOT NULL DEFAULT 'main',
+        local_path              TEXT NOT NULL,
+        last_fetched_sha        TEXT,
+        last_fetched_at         INTEGER,
+        sync_interval_minutes   INTEGER NOT NULL DEFAULT 30,
+        auto_apply              INTEGER NOT NULL DEFAULT 0,
+        classification          TEXT NOT NULL,
+        status                  TEXT NOT NULL DEFAULT 'active',
+        last_error              TEXT,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_repo_status
+        ON knowledge_repo(status, last_fetched_at);
+      CREATE INDEX IF NOT EXISTS idx_repo_branch
+        ON knowledge_repo(url, branch);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -954,6 +954,36 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         return methodNotAllowed(res);
       }
 
+      // PR 5.5b: walk the cloned repo and import its .md files into
+      // knowledge_chunks / knowledge_point_alias / knowledge_point_rel.
+      //   POST /api/knowledge-repos/:id/import-now  body { profile? }
+      const repoImportMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/import-now$/);
+      if (repoImportMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: { profile?: unknown } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as { profile?: unknown }; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const VALID_PROFILES = ['helm-native', 'llm-wiki', 'generic'] as const;
+        const profile = typeof body.profile === 'string'
+          && (VALID_PROFILES as readonly string[]).includes(body.profile)
+          ? body.profile as typeof VALID_PROFILES[number]
+          : 'helm-native';
+        try {
+          const summary = deps.knowledgeRepoManager.importNow(repoImportMatch[1]!, profile);
+          return send(res, 200, summary);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 404, { error: 'import_failed', message: err.message });
+          }
+          return send(res, 500, { error: 'import_failed', message: (err as Error).message });
+        }
+      }
+
       const repoFetchMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/fetch-now$/);
       if (repoFetchMatch) {
         if (req.method !== 'POST') return methodNotAllowed(res);

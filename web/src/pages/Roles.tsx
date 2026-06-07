@@ -26,6 +26,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs.js'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
+import {
+  getProposedCountForRole,
+  useProposedCases,
+} from '../lib/proposal-notifications.js';
 
 /**
  * Phase 73 — palette for the chunk-kind badge. Reuses existing semantic
@@ -73,6 +77,22 @@ function VisibilityChip({ visibility }: { visibility: 'internal' | 'public' }) {
       ? 'Internal — cannot be published to a public repo.'
       : 'Public — eligible for publish to public repos.'}>
       {visibility}
+    </span>
+  );
+}
+
+/** R-9 — proposed verification cases targeting this role. Hidden at 0. */
+function ProposedCaseChip({ roleId }: { roleId: string }) {
+  useProposedCases();
+  const n = getProposedCountForRole(roleId);
+  if (n === 0) return null;
+  return (
+    <span
+      className="helm-status"
+      style={{ background: '#fef3c7', color: '#92400e' }}
+      title={`${n} proposed verification case${n === 1 ? '' : 's'} target this role — confirm or reject in Verification › Cases (Proposed).`}
+    >
+      {n} proposed
     </span>
   );
 }
@@ -767,6 +787,10 @@ function RoleCard({
               {role.pendingCandidateCount} new
             </span>
           )}
+          <ProposedCaseChip roleId={role.id} />
+          {/* R-9: proposed-case count per role. Reads from the
+              global notifications cache the App-level hook seeds so
+              every row doesn't refetch independently. */}
           {/* Phase 65: per-role "Update via chat" — opens the train modal
               in update mode, telling the agent to call update_role (not
               train_role) so existing chunks survive. Hidden on built-ins

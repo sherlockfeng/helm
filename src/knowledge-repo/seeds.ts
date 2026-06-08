@@ -30,7 +30,9 @@ export const KNOWLEDGE_REPO_SEEDS: readonly KnowledgeRepoSeed[] = [
       'Disaster-recovery / stability / deployment / monitoring knowledge for'
       + ' TikTok Web frontend infra. Includes 3 ready DR benchmark cases.',
     url: 'https://code.byted.org/tiktok/llm-wiki.git',
-    branch: 'main',
+    // Verified against the real repo: HEAD is `master`. Earlier 'main'
+    // was an assumption that broke `Subscribe llm-wiki` at clone time.
+    branch: 'master',
     profile: 'llm-wiki',
   },
 ];

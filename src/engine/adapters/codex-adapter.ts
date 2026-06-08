@@ -19,19 +19,41 @@
  * spawn.
  */
 
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import type { LlmClient } from '../../summarizer/campaign.js';
-import { CodexCliAgent } from '../../cli-agent/codex.js';
+import { CodexCliAgent, type CodexSpawner } from '../../cli-agent/codex.js';
 import type { EngineAdapter, ReviewInput, RunConversationInput, RunConversationResult } from '../types.js';
 
-const execFileAsync = promisify(execFile);
 const DEFAULT_HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Adapter-local spawner — same closed-stdin semantics as CodexCliAgent. */
+const defaultExecOnceSpawner: CodexSpawner = (bin, args, options) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(bin, [...args], {
+      cwd: options?.cwd ?? process.cwd(),
+      env: options?.env ?? process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = ''; let stderr = '';
+    const timer = options?.timeout && options.timeout > 0
+      ? setTimeout(() => child.kill('SIGTERM'), options.timeout)
+      : null;
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.stderr?.on('data', (d) => { stderr += String(d); });
+    child.on('error', (err) => { if (timer) clearTimeout(timer); reject(err); });
+    child.on('close', (code, signal) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) return resolve({ stdout, stderr });
+      const err = new Error(`codex exec exited with ${signal ? `signal ${signal}` : `code ${code}`}\n${stderr}`);
+      Object.assign(err, { code, signal, stdout, stderr });
+      reject(err);
+    });
+  });
 
 export interface CodexAdapterDeps {
   /** helm MCP SSE endpoint injected into the codex subprocess via `-c`. */
@@ -43,12 +65,12 @@ export interface CodexAdapterDeps {
   /** Trainer-specific model override (Engines › Codex › Trainer model). */
   trainerModel?: string;
   /** Override the spawner (testing). */
-  exec?: typeof execFileAsync;
+  exec?: CodexSpawner;
 }
 
 export function buildCodexAdapter(deps: CodexAdapterDeps = {}): EngineAdapter {
   const codexBin = deps.codexBin ?? 'codex';
-  const exec = deps.exec ?? execFileAsync;
+  const exec = deps.exec ?? defaultExecOnceSpawner;
   const helmMcpUrl = deps.helmMcpUrl ?? DEFAULT_HELM_MCP_URL;
 
   const summarize: LlmClient = {
@@ -115,7 +137,7 @@ interface CodexExecOnceInput {
   maxTokens?: number;
   model?: string;
   codexBin: string;
-  exec: typeof execFileAsync;
+  exec: CodexSpawner;
 }
 
 export async function codexExecOnce(input: CodexExecOnceInput): Promise<string> {
@@ -128,7 +150,9 @@ export async function codexExecOnce(input: CodexExecOnceInput): Promise<string> 
       '--ignore-user-config',
       '--skip-git-repo-check',
       '-s', 'read-only',
-      '-a', 'never',
+      // No -a/--ask-for-approval here — codex exec is non-interactive
+      // so the top-level interactive flag doesn't apply. Sandbox flag
+      // above provides the write/shell protection.
       '-o', lastMessageFile,
       '-c', `mcp_servers.helm.url="${helmMcpUrl}"`,
     ];
@@ -139,12 +163,14 @@ export async function codexExecOnce(input: CodexExecOnceInput): Promise<string> 
     const finalPrompt = input.systemPrompt
       ? `[System]\n${input.systemPrompt}\n\n---\n\n${input.prompt}`
       : input.prompt;
+    // Pass prompt as the trailing positional. The default spawner
+    // closes stdin (`stdio: ['ignore', ...]`) so codex doesn't sit
+    // in its "Reading additional input from stdin" wait state.
     args.push(finalPrompt);
 
     await input.exec(input.codexBin, args, {
       cwd: input.cwd ?? process.cwd(),
       timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
       env: process.env,
     });
     try { return readFileSync(lastMessageFile, 'utf8').trim(); }

@@ -27,6 +27,17 @@ jobs:
           node-version: '20'
           cache: pnpm
 
+      # Python 3.12 dropped `distutils`; @cursor/sdk's transitive
+      # sqlite3@5.1.7 native build still imports it. Pin Python 3.11
+      # on the runner so node-gyp's setuptools fallback isn't even
+      # needed. (sqlite3 itself is unused at runtime — better-sqlite3
+      # is helm's DB — but it ships as an optional dep we can't trim
+      # without forking @cursor/sdk.)
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

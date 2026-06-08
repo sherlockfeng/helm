@@ -22,14 +22,26 @@ module.exports = {
   copyright: 'Copyright © 2026',
 
   directories: {
+    // Electron-builder's intermediate work dir defaults to `dist/`,
+    // which would now collide with our source `out/` (it doesn't —
+    // but pin it explicitly here so a future rename to `dist/` won't
+    // silently start eating output).
     output: 'release',
     buildResources: 'build',
   },
 
   // Inclusion list — keep the bundle lean. We rely on tsup's bundling so
   // node_modules/ doesn't need to ship except for native modules.
+  //
+  // Backend compiles into `out/` (not `dist/`) because
+  // electron-builder hard-excludes top-level `dist/` as a default
+  // safety rule (it normally IS the builder's own output dir);
+  // user-level `'dist/**/*'` includes can't undo that exclusion.
+  // Renaming our source output sidesteps the rule entirely. The
+  // web bundle still lives at `web/dist/` because it's nested
+  // under `web/` so the root-level exclusion doesn't reach it.
   files: [
-    'dist/**/*',
+    'out/**/*',
     'web/dist/**/*',
     'bin/**/*',
     'package.json',

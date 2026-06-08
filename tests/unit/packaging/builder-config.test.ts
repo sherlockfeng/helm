@@ -148,7 +148,7 @@ describe('package.json packaging fields', () => {
     // tsup outputs CJS as `.cjs` for the electron-main config slice; the
     // package's `main` and `dev:electron` script were both stuck on `.js`
     // before Phase 33 — Electron and electron-builder followed the truth.
-    expect(pkg.main).toBe('dist/electron/main.cjs');
+    expect(pkg.main).toBe('out/electron/main.cjs');
   });
 
   it('declares package + package:mac scripts', () => {

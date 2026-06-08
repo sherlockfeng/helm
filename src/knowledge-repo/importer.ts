@@ -106,38 +106,34 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
   };
   const summary: ImportSummary = { rolesImported: 0, pointsUpserted: 0, conflictsDetected: 0, errors: {} };
 
-  const rolesRoot = join(input.localPath, 'roles');
-  if (!fs.existsSync(rolesRoot)) {
-    return summary;
-  }
-  const roleSlugs = fs.readdirSync(rolesRoot)
-    .filter((slug) => fs.statSync(join(rolesRoot, slug)).isDirectory());
+  // R-? (verification fix): the layout the importer walks depends on
+  // the profile. The original implementation only knew helm-native's
+  // roles/<slug>/points/ layout, which silently no-op'd on llm-wiki
+  // (whose real layout is dr-docs/, doc-lsp-docs/, ... at the repo
+  // root). Each profile now produces a list of (roleId, roleDir,
+  // pointFiles) triples for the import loop to upsert.
+  const roleBuckets = enumerateRolesForProfile(fs, input.localPath, input.profile);
+  if (roleBuckets.length === 0) return summary;
 
-  for (const slug of roleSlugs) {
-    const roleDir = join(rolesRoot, slug);
-    const roleMeta = readRoleMeta(fs, roleDir);
-    const roleId = roleMeta.id ?? slug;
+  for (const bucket of roleBuckets) {
     const now = new Date().toISOString();
     upsertRole(input.db, {
-      id: roleId,
-      name: roleMeta.name ?? slug,
-      systemPrompt: roleMeta.briefingText ?? '',
+      id: bucket.roleId,
+      name: bucket.roleName,
+      systemPrompt: bucket.briefingText ?? '',
       isBuiltin: false,
       createdAt: now,
     });
     summary.rolesImported += 1;
 
-    const pointsDir = join(roleDir, 'points');
-    if (!fs.existsSync(pointsDir)) continue;
-
-    for (const file of walkMarkdownFiles(fs, pointsDir)) {
-      const relPath = relative(pointsDir, file).split(sep).join('/');
+    for (const file of bucket.pointFiles) {
+      const relPath = relative(bucket.roleDir, file).split(sep).join('/');
       try {
         const raw = fs.readFileSync(file, 'utf8');
         const parsed = parsePointFile({
           text: raw, relativePath: relPath, profile: input.profile,
         });
-        const detected = upsertPoint(input.db, roleId, parsed, {
+        const detected = upsertPoint(input.db, bucket.roleId, parsed, {
           sourceRef: input.sourceRef,
           ...(input.repoId        ? { repoId:         input.repoId } : {}),
           ...(input.remoteRevision ? { remoteRevision: input.remoteRevision } : {}),
@@ -147,7 +143,7 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         // R-10: enrich the chunk so retrieval picks it up. Entity leg is
         // always populated (cheap, deterministic); embedding leg only when
         // an embedFn was injected (production wires this; some tests skip).
-        enrichChunk(input.db, parsed, roleId, relPath, input.embedFn);
+        enrichChunk(input.db, parsed, bucket.roleId, relPath, input.embedFn);
       } catch (err) {
         summary.errors[file] = (err as Error).message;
       }
@@ -155,6 +151,133 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
   }
 
   return summary;
+}
+
+interface RoleBucket {
+  roleId: string;
+  roleName: string;
+  briefingText?: string;
+  /** The dir paths under this bucket are walked recursively for .md files. */
+  roleDir: string;
+  pointFiles: string[];
+}
+
+type WalkerFs = NonNullable<ImporterInput['fs']> & {
+  readdirSync: typeof readdirSync;
+  readFileSync: typeof readFileSync;
+  existsSync: typeof existsSync;
+  statSync: typeof statSync;
+};
+
+/** Per-profile role enumeration. Each profile picks its own layout convention. */
+function enumerateRolesForProfile(
+  fs: WalkerFs,
+  localPath: string,
+  profile: KnowledgeRepoProfile,
+): RoleBucket[] {
+  if (profile === 'helm-native') return enumerateHelmNative(fs, localPath);
+  if (profile === 'llm-wiki')    return enumerateLlmWiki(fs, localPath);
+  return enumerateGeneric(fs, localPath);
+}
+
+/**
+ * helm-native layout: roles/<slug>/role.yaml + points/<id>.md.
+ * Unchanged from the original importer behaviour — helm-published
+ * repos follow this convention.
+ */
+function enumerateHelmNative(fs: WalkerFs, localPath: string): RoleBucket[] {
+  const rolesRoot = join(localPath, 'roles');
+  if (!fs.existsSync(rolesRoot)) return [];
+  const slugs = fs.readdirSync(rolesRoot)
+    .filter((slug) => fs.statSync(join(rolesRoot, slug)).isDirectory());
+  const out: RoleBucket[] = [];
+  for (const slug of slugs) {
+    const roleDir = join(rolesRoot, slug);
+    const meta = readRoleMeta(fs, roleDir);
+    const pointsDir = join(roleDir, 'points');
+    const pointFiles = fs.existsSync(pointsDir)
+      ? walkMarkdownFiles(fs, pointsDir) : [];
+    out.push({
+      roleId: meta.id ?? slug,
+      roleName: meta.name ?? slug,
+      ...(meta.briefingText ? { briefingText: meta.briefingText } : {}),
+      roleDir: pointsDir,
+      pointFiles,
+    });
+  }
+  return out;
+}
+
+/**
+ * llm-wiki layout: each top-level non-hidden directory at the repo
+ * root is a role bucket (e.g. dr-docs/, doc-lsp-docs/, benchmark/).
+ * .md files anywhere under those dirs are points. The repo doesn't
+ * carry role.yaml — we synthesize role names from the dir slug.
+ *
+ * Skip-list: anything starting with `.`, plus a curated set of dirs
+ * that aren't knowledge content (workflow/automation/CI metadata).
+ */
+function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
+  if (!fs.existsSync(localPath)) return [];
+  const SKIP_DIRS = new Set([
+    'node_modules', '.codebase', '.context', '.cursor',
+    '.doc-lsp', '.doc-lsp-references', '.git', '.github', '.skills',
+  ]);
+  const slugs = fs.readdirSync(localPath)
+    .filter((name) => !name.startsWith('.') && !SKIP_DIRS.has(name))
+    .filter((name) => {
+      try { return fs.statSync(join(localPath, name)).isDirectory(); }
+      catch { return false; }
+    });
+  const out: RoleBucket[] = [];
+  for (const slug of slugs) {
+    const roleDir = join(localPath, slug);
+    const pointFiles = walkMarkdownFiles(fs, roleDir);
+    if (pointFiles.length === 0) continue; // skip dirs with no .md
+    out.push({
+      roleId: slug,
+      roleName: slug,
+      roleDir,
+      pointFiles,
+    });
+  }
+  return out;
+}
+
+/**
+ * generic layout: one synthesized role holds every .md the repo
+ * exposes (recursive, skipping hidden + standard non-content dirs).
+ * Useful for repos that aren't knowledge-shaped at all but the user
+ * still wants raw .md ingestion.
+ */
+function enumerateGeneric(fs: WalkerFs, localPath: string): RoleBucket[] {
+  if (!fs.existsSync(localPath)) return [];
+  const SKIP_DIRS = new Set(['node_modules', '.git', '.github']);
+  // Walk top-level, then recurse through accepted dirs.
+  const pointFiles: string[] = [];
+  const stack: string[] = [localPath];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    let entries: string[];
+    try { entries = fs.readdirSync(cur); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.startsWith('.') || SKIP_DIRS.has(entry)) continue;
+      const full = join(cur, entry);
+      let stat: ReturnType<typeof fs.statSync>;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (stat.isDirectory()) stack.push(full);
+      else if (stat.isFile() && entry.toLowerCase().endsWith('.md')) {
+        pointFiles.push(full);
+      }
+    }
+  }
+  if (pointFiles.length === 0) return [];
+  return [{
+    roleId: 'imported',
+    roleName: 'Imported',
+    roleDir: localPath,
+    pointFiles,
+  }];
 }
 
 /**

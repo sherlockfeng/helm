@@ -113,12 +113,55 @@ describe('importRepoIntoLibrary', () => {
     expect(getRolesForPoint(db, 'dr-overview')).toEqual(['tiktok-web-dr']);
   });
 
-  it('synthesizes a role name from the slug when role.yaml is missing', () => {
+  it('helm-native: synthesizes a role name from the slug when role.yaml is missing', () => {
     const fs = makeFs({
       '/repo/roles/argos/points/x.md': '# x\nbody',
     });
-    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'generic', fs });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'helm-native', fs });
     expect(getRole(db, 'argos')?.name).toBe('argos');
+  });
+
+  it('llm-wiki layout: top-level non-hidden dirs become roles, recursive .md walk', () => {
+    const fs = makeFs({
+      '/repo/dr-docs/index.md': '---\n---\n# DR overview\n',
+      '/repo/dr-docs/cdn/cdn-dr.md': '---\nid: cdn-dr\n---\n# CDN\n',
+      '/repo/doc-lsp-docs/intro.md': '---\nid: lsp-intro\n---\n# LSP\n',
+      // Should be skipped: hidden dirs + the curated skip-list.
+      '/repo/.github/workflows/ci.yml': 'name: ci',
+      '/repo/node_modules/foo/bar.md': '# nope',
+      '/repo/.codebase/info': 'should-skip',
+      // Empty-dir bucket (no .md anywhere): should not produce a role.
+      '/repo/empty-dir/notes.txt': 'no markdown here',
+      // Top-level file at repo root — should be ignored too (not a dir).
+      '/repo/AGENTS.md': '# agents',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs,
+    });
+    expect(summary.rolesImported).toBe(2);
+    expect(getRole(db, 'dr-docs')?.name).toBe('dr-docs');
+    expect(getRole(db, 'doc-lsp-docs')?.name).toBe('doc-lsp-docs');
+    expect(getRole(db, '.github')).toBeUndefined();
+    expect(getRole(db, 'node_modules')).toBeUndefined();
+    expect(getRole(db, 'empty-dir')).toBeUndefined();
+    // Each .md became a chunk under the right role.
+    expect(summary.pointsUpserted).toBe(3);
+  });
+
+  it('generic layout: synthesizes one "imported" role with every .md flattened', () => {
+    const fs = makeFs({
+      '/repo/README.md': '# readme',
+      '/repo/docs/a.md': '---\nid: a\n---\n# A',
+      '/repo/docs/sub/b.md': '---\nid: b\n---\n# B',
+      '/repo/.git/HEAD': 'ref: …',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'generic', fs,
+    });
+    expect(summary.rolesImported).toBe(1);
+    expect(getRole(db, 'imported')?.name).toBe('Imported');
+    // README + a + b — .git is skipped.
+    expect(summary.pointsUpserted).toBe(3);
   });
 
   it('is idempotent: re-running rebuilds aliases + rels without duplicating', () => {

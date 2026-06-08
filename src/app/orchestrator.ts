@@ -97,6 +97,7 @@ import { runReview as runHarnessReview } from '../harness/review-runner.js';
 import { EngineRouter, EngineNotAvailableError } from '../engine/router.js';
 import { buildClaudeAdapter } from '../engine/adapters/claude-adapter.js';
 import { buildCursorAdapter } from '../engine/adapters/cursor-adapter.js';
+import { buildCodexAdapter } from '../engine/adapters/codex-adapter.js';
 import { detectEngines } from '../engine/detect.js';
 import { detectCursorAgentCli } from '../cli-agent/cursor.js';
 import type { EngineAdapter, EngineId } from '../engine/types.js';
@@ -108,6 +109,7 @@ import {
   wrapToolGuideForPromptInjection,
 } from './helm-tool-guide.js';
 import { detectClaudeCli } from '../cli-agent/claude.js';
+import { detectCodexCli } from '../cli-agent/codex.js';
 import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
@@ -1028,6 +1030,25 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       }
       map.claude = buildClaudeAdapter(claudeDeps);
     }
+    // Codex adapter — same shape as claude. Per-engine knobs from
+    // Settings flow in via liveConfig.codex.{binaryPath, model,
+    // trainerModel}. EngineRouter.trainer() routes the train-via-chat
+    // path here when engine.trainerDefault === 'codex'.
+    if (codexAvailable) {
+      const codexDeps: Parameters<typeof buildCodexAdapter>[0] = {};
+      if (helmMcpUrl) codexDeps.helmMcpUrl = helmMcpUrl;
+      const cfgBinPath = liveConfig.codex?.binaryPath;
+      if (cfgBinPath && cfgBinPath.trim().length > 0) {
+        codexDeps.codexBin = cfgBinPath.trim();
+      }
+      const cfgModel = liveConfig.codex?.model;
+      if (cfgModel && cfgModel !== 'auto') codexDeps.model = cfgModel;
+      const cfgTrainerModel = liveConfig.codex?.trainerModel;
+      if (cfgTrainerModel && cfgTrainerModel !== 'auto') {
+        codexDeps.trainerModel = cfgTrainerModel;
+      }
+      map.codex = buildCodexAdapter(codexDeps);
+    }
     // The cursor adapter's summarize/review work without cursor-agent (they
     // go through the SDK), but runConversation needs the CLI. We always
     // register the adapter when the Cursor SDK can be constructed; the
@@ -1297,13 +1318,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
             },
           };
         }
-        // codex
+        // codex — same pattern as claude-code; "install hooks" means
+        // "register helm's MCP server with codex" because codex
+        // surfaces hooks via the MCP notifications stream, not a
+        // separate config file.
+        if (action === 'status') {
+          return { status: 200, body: { installed: 'unknown' } };
+        }
+        if (action === 'install') {
+          const r = runSetupMcp('codex', { url });
+          return { status: 200, body: { installed: true, ...r } };
+        }
         return {
           status: 501,
           body: {
-            error: 'codex_install_not_implemented',
-            message: 'Codex adapter is a scaffold; install path lands when '
-              + 'the codex CLI conventions are finalized.',
+            error: 'uninstall_not_wired',
+            message: 'Run `codex mcp remove helm` to uninstall.',
           },
         };
       },
@@ -1390,6 +1420,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // because buildAdapters() reads them.
   let claudeAvailable = true;
   let cursorAgentAvailable = true;
+  let codexAvailable = true;
 
   // Phase 68: with `httpApi` now built, do the initial engine adapter
   // build — adapters need `httpApi.port()` to assemble the helmMcpUrl
@@ -1411,6 +1442,13 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     cursorAgentAvailable = info != null;
     log.info('cli_agent_probe', {
       data: { engine: 'cursor-agent', info: info ?? null },
+    });
+    refreshEngineRouter();
+  });
+  void detectCodexCli().then((info) => {
+    codexAvailable = info != null;
+    log.info('cli_agent_probe', {
+      data: { engine: 'codex', info: info ?? null },
     });
     refreshEngineRouter();
   });
@@ -1478,9 +1516,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           const r = runSetupMcp('claude', { url: mcpUrl });
           log.info('boot_mcp_autoregister', { data: { ...r, agent: 'claude' } });
         }
-        // Codex auto-register lands when the codex install path
-        // exists — flag is read here so a config save today persists
-        // and is honored once the wiring is complete.
+        if (liveConfig.codex?.mcpAutoRegister) {
+          const r = runSetupMcp('codex', { url: mcpUrl });
+          log.info('boot_mcp_autoregister', { data: { ...r, agent: 'codex' } });
+        }
       } catch (err) {
         log.warn('boot_mcp_autoregister_failed', {
           data: { message: (err as Error).message },

@@ -58,9 +58,12 @@ describe('electron-builder.config.cjs', () => {
     expect(cfg.productName).toBe('Helm');
   });
 
-  it('files list includes dist + web + bin + package.json', () => {
+  it('files list includes backend out + web dist + bin + package.json', () => {
     const cfg = require(configPath) as BuilderConfig;
-    expect(cfg.files).toContain('dist/**/*');
+    // Backend compiles to `out/` not `dist/` — see tsup.config + the
+    // comment in electron-builder.config.cjs for why (default
+    // exclusion conflict with electron-builder's own dist/).
+    expect(cfg.files).toContain('out/**/*');
     expect(cfg.files).toContain('web/dist/**/*');
     expect(cfg.files).toContain('bin/**/*');
     expect(cfg.files).toContain('package.json');
@@ -148,7 +151,7 @@ describe('package.json packaging fields', () => {
     // tsup outputs CJS as `.cjs` for the electron-main config slice; the
     // package's `main` and `dev:electron` script were both stuck on `.js`
     // before Phase 33 — Electron and electron-builder followed the truth.
-    expect(pkg.main).toBe('dist/electron/main.cjs');
+    expect(pkg.main).toBe('out/electron/main.cjs');
   });
 
   it('declares package + package:mac scripts', () => {

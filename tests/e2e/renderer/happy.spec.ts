@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
-const ENTRY = join(REPO_ROOT, 'dist', 'electron', 'main.cjs');
+const ENTRY = join(REPO_ROOT, 'out', 'electron', 'main.cjs');
 const SCREENSHOT_DIR = join(__dirname, '__screenshots__');
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 

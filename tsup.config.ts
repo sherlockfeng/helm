@@ -15,7 +15,11 @@ export default defineConfig([
       'electron/main': 'electron/main.ts',
       'electron/preload': 'electron/preload.ts',
     },
-    outDir: 'dist',
+    // Output to `out/` (not `dist/`) because electron-builder
+    // hardcodes `!dist{,/**/*}` in its default file-pattern
+    // exclusions — there's no clean way to re-include from there.
+    // Renaming the source output sidesteps the conflict entirely.
+    outDir: 'out',
     format: ['cjs'],
     target: 'node20',
     platform: 'node',
@@ -30,7 +34,11 @@ export default defineConfig([
       'host/cursor/hook-entry': 'src/host/cursor/hook-entry.ts',
       'mcp/stdio': 'src/mcp/run.ts',
     },
-    outDir: 'dist',
+    // Output to `out/` (not `dist/`) because electron-builder
+    // hardcodes `!dist{,/**/*}` in its default file-pattern
+    // exclusions — there's no clean way to re-include from there.
+    // Renaming the source output sidesteps the conflict entirely.
+    outDir: 'out',
     format: ['esm'],
     target: 'node20',
     platform: 'node',

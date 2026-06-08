@@ -32,6 +32,7 @@ export default defineConfig([
     entry: {
       'cli/index': 'src/cli/index.ts',
       'host/cursor/hook-entry': 'src/host/cursor/hook-entry.ts',
+      'host/claude-code/hook-entry': 'src/host/claude-code/hook-entry.ts',
       'mcp/stdio': 'src/mcp/run.ts',
     },
     // Output to `out/` (not `dist/`) because electron-builder

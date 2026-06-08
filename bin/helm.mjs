@@ -17,10 +17,11 @@ import { existsSync } from 'node:fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const distEntry = join(__dirname, '..', 'dist', 'cli', 'index.js');
+// tsup outputs to `out/` (not `dist/`) — see tsup.config.ts header for why.
+const outEntry = join(__dirname, '..', 'out', 'cli', 'index.js');
 
-if (existsSync(distEntry)) {
-  const mod = await import(distEntry);
+if (existsSync(outEntry)) {
+  const mod = await import(outEntry);
   if (typeof mod.runCli === 'function') {
     await mod.runCli();
   } else {

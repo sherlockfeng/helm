@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 export const HELM_MCP_NAME = 'helm';
 export const HELM_MCP_URL_DEFAULT = 'http://127.0.0.1:17317/mcp/sse';
 
-export type SetupTarget = 'claude' | 'cursor';
+export type SetupTarget = 'claude' | 'cursor' | 'codex';
 
 export interface SetupMcpResult {
   target: SetupTarget;
@@ -66,8 +66,60 @@ export function setupMcp(target: SetupTarget, options: SetupMcpOptions = {}): Se
 
   if (target === 'claude') return setupClaude(url, options, home);
   if (target === 'cursor') return setupCursor(url, home);
+  if (target === 'codex') return setupCodex(url, options);
   // Exhaustiveness — hit when called from JS without typing.
   throw new Error(`setup-mcp: unknown target "${String(target)}"`);
+}
+
+// ── Codex ────────────────────────────────────────────────────────────
+
+/**
+ * Codex ships a `codex mcp` CLI (list / add / remove). Same shape as
+ * `claude mcp` — we shell out instead of editing ~/.codex/config.toml
+ * by hand so codex itself validates the entry. Idempotent: probe
+ * `codex mcp list` first; skip when helm is already there.
+ */
+function setupCodex(url: string, options: SetupMcpOptions): SetupMcpResult {
+  const exec = options.exec ?? defaultExec;
+
+  try {
+    exec('codex', ['--version']);
+  } catch {
+    return {
+      target: 'codex',
+      changed: false,
+      message:
+        'codex CLI not on PATH. Install Codex from https://github.com/openai/codex (or '
+        + 'via the OpenAI desktop app), then re-run this. helm needs codex to register '
+        + "its MCP server because that's how the trainer subprocess discovers helm's tools.",
+      location: '(unavailable)',
+    };
+  }
+
+  let existing = '';
+  try { existing = exec('codex', ['mcp', 'list']); } catch { /* fall through */ }
+  // `codex mcp list` outputs entries one per line; match on the name
+  // at start-of-line to avoid false positives on URLs that contain "helm".
+  if (new RegExp(`(^|\\n)\\s*${HELM_MCP_NAME}\\b`).test(existing)) {
+    return {
+      target: 'codex',
+      changed: false,
+      message: 'helm is already registered in Codex MCP servers.',
+      location: 'codex mcp (user scope)',
+    };
+  }
+
+  // codex mcp add helm --url <URL>
+  exec('codex', ['mcp', 'add', HELM_MCP_NAME, '--url', url]);
+  return {
+    target: 'codex',
+    changed: true,
+    message:
+      `Registered helm with Codex (streamable HTTP, ${url}).\n`
+      + 'In any codex session, the helm MCP tools (train_role, read_lark_doc, etc.) '
+      + 'are now callable.',
+    location: 'codex mcp (user scope)',
+  };
 }
 
 // ── Claude Code ──────────────────────────────────────────────────────────

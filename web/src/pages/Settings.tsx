@@ -1113,33 +1113,50 @@ function TrainerEngineField({
   value: 'claude' | 'codex';
   onChange: (id: 'claude' | 'codex') => void;
 }): ReactElement {
-  // Trainer engine doesn't probe health (the model running the
-  // training has its own per-spawn checks); just show the two
-  // spawnable CLI agents as radios.
-  return (
-    <div>
+  // R-18 wire-up: reuse the same engine-health probe the Default
+  // engine field uses, but only render the spawnable rows. Surfaces
+  // "ready" / "not detected" inline so the user picks honestly.
+  const { data, loading, error } = useApi(() => helmApi.engineHealth());
+  const healths = data?.engines ?? [];
+  const find = (id: 'claude' | 'codex'): { ready?: boolean; detail?: string; hint?: string } =>
+    healths.find((h) => h.engine === id) ?? {};
+
+  function RadioRow({ id, label }: { id: 'claude' | 'codex'; label: string }) {
+    const h = find(id);
+    const detail = loading
+      ? 'detecting…'
+      : error ? 'health unknown'
+      : h.ready === true ? `ready (${h.detail ?? ''})`
+      : h.ready === false ? (h.detail ?? 'not detected')
+      : 'unknown';
+    return (
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
         <input
           type="radio"
           name="trainer-engine"
-          value="claude"
-          checked={value === 'claude'}
-          onChange={() => onChange('claude')}
+          value={id}
+          checked={value === id}
+          onChange={() => onChange(id)}
           style={{ marginTop: 3 }}
         />
-        <span><strong>Claude Code</strong></span>
+        <span style={{ flex: 1 }}>
+          <strong>{label}</strong>
+          <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
+            {h.ready === true ? '· ✓' : h.ready === false ? '· ⚠' : '·'} {detail}
+          </span>
+          {h.ready === false && h.hint && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+              <em>→ {h.hint}</em>
+            </div>
+          )}
+        </span>
       </label>
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <input
-          type="radio"
-          name="trainer-engine"
-          value="codex"
-          checked={value === 'codex'}
-          onChange={() => onChange('codex')}
-          style={{ marginTop: 3 }}
-        />
-        <span><strong>Codex</strong></span>
-      </label>
+    );
+  }
+  return (
+    <div>
+      <RadioRow id="claude" label="Claude Code" />
+      <RadioRow id="codex" label="Codex" />
     </div>
   );
 }

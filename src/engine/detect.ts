@@ -24,21 +24,25 @@
 
 import { detectClaudeCli } from '../cli-agent/claude.js';
 import { detectCursorAgentCli } from '../cli-agent/cursor.js';
+import { detectCodexCli } from '../cli-agent/codex.js';
 import type { EngineHealth, EngineId } from './types.js';
 
 export interface DetectEnginesOptions {
   /** Test seam: substitute fake probes. */
   detectClaude?: typeof detectClaudeCli;
   detectCursor?: typeof detectCursorAgentCli;
+  detectCodex?: typeof detectCodexCli;
 }
 
 export async function detectEngines(opts: DetectEnginesOptions = {}): Promise<EngineHealth[]> {
   const detectClaude = opts.detectClaude ?? detectClaudeCli;
   const detectCursor = opts.detectCursor ?? detectCursorAgentCli;
+  const detectCodex = opts.detectCodex ?? detectCodexCli;
 
-  const [claudeInfo, cursorInfo] = await Promise.all([
+  const [claudeInfo, cursorInfo, codexInfo] = await Promise.all([
     detectClaude().catch(() => null),
     detectCursor().catch(() => null),
+    detectCodex().catch(() => null),
   ]);
 
   const claudeHealth: EngineHealth = claudeInfo
@@ -57,7 +61,15 @@ export async function detectEngines(opts: DetectEnginesOptions = {}): Promise<En
         hint: 'Install cursor-agent (https://www.cursor.com/cli) and sign in to Cursor.app.',
       };
 
-  return [claudeHealth, cursorHealth];
+  const codexHealth: EngineHealth = codexInfo
+    ? { engine: 'codex', ready: true, detail: codexInfo.version }
+    : {
+        engine: 'codex', ready: false,
+        detail: 'codex CLI not on PATH',
+        hint: 'Install Codex from https://github.com/openai/codex (or via the OpenAI desktop app), then `codex login` once.',
+      };
+
+  return [claudeHealth, cursorHealth, codexHealth];
 }
 
 /**

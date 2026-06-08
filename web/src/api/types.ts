@@ -190,9 +190,12 @@ export interface HelmConfig {
   // and uses its own auth (`claude login`).
 }
 
-/** Phase 68: per-engine readiness shown alongside the Default engine selector. */
+/** Phase 68 + R-18: per-engine readiness shown alongside the Default
+ *  engine + Trainer engine selectors. `codex` joined the union when
+ *  buildCodexAdapter() landed; renderer surfaces it in the Trainer
+ *  engine field. */
 export interface EngineHealth {
-  engine: 'cursor' | 'claude';
+  engine: 'cursor' | 'claude' | 'codex';
   ready: boolean;
   detail: string;
   hint?: string;

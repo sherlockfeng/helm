@@ -1001,34 +1001,55 @@ function McpAutoRegisterField({
 }
 
 /**
- * R-18: install hooks button — symmetric across all three engines.
- * The actual install for each agent is gated behind a backend endpoint
- * that the orchestrator owns (writes the hook config into the agent's
- * settings file). Until the per-agent install endpoint lands, the
- * button shows the path the user can copy and an info message.
+ * R-18 wire-up: install hooks button — calls the real backend
+ * endpoint. Cursor has a complete installer (writes
+ * `~/.cursor/hooks.json`). Claude Code routes through `setupMcp`
+ * (its "hooks" are MCP notifications, not a separate file). Codex
+ * returns 501 until that adapter's install path lands; the button
+ * surfaces the message verbatim so the user knows it's a known gap.
  */
 function InstallHooksButton({ agent }: { agent: 'cursor' | 'claude-code' | 'codex' }): ReactElement {
   const [busy, setBusy] = useState(false);
+  const statusQuery = useApi(() => helmApi.getHostHooksStatus(agent), [agent]);
+  const installed = statusQuery.data?.installed;
+
   const onClick = async (): Promise<void> => {
     setBusy(true);
     try {
-      // The endpoint isn't wired yet for all three agents; surface the
-      // current install instructions instead so users don't hit a
-      // confusing no-op. Real wiring lands when the per-host adapters
-      // expose install().
-      const docs = {
-        'cursor': 'Cursor hooks live in ~/.cursor/hooks/. helm ships the prompt/response forwarder at /Applications/helm.app/Contents/Resources/hooks/. Copy or symlink into ~/.cursor/hooks/.',
-        'claude-code': 'Claude Code hooks live in ~/.claude/settings.json. Add the helm MCP server + hooks block; full snippet under helm docs/install/claude-code.md.',
-        'codex': 'Codex hooks: TBD — adapter scaffold exists but install path needs the codex CLI conventions. Watch the helm releases for an automated install button.',
-      };
-      toast.info(docs[agent], { duration: 8000 });
+      const result = await helmApi.installHostHooks(agent);
+      const path = typeof result['hooksPath'] === 'string'
+        ? ` (${result['hooksPath']})`
+        : typeof result['location'] === 'string'
+          ? ` (${result['location']})`
+          : '';
+      toast.success(`Installed${path}`, { duration: 6000 });
+      statusQuery.reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 501) {
+        const msg = typeof (err.body as Record<string, unknown>)?.['message'] === 'string'
+          ? String((err.body as Record<string, unknown>)['message'])
+          : 'Not yet implemented for this agent.';
+        toast.message(msg, { duration: 8000 });
+      } else {
+        toast.error(`Install failed: ${err instanceof ApiError ? err.message : String(err)}`);
+      }
     } finally { setBusy(false); }
   };
+
+  const statusLine = installed === true
+    ? <span className="muted" style={{ fontSize: 11, color: 'var(--success, #16a34a)' }}>· ✓ installed</span>
+    : installed === false
+      ? <span className="muted" style={{ fontSize: 11, color: 'var(--warning, #d97706)' }}>· not installed</span>
+      : null;
+
   return (
     <div className="helm-form-row">
-      <Button type="button" onClick={onClick} disabled={busy}>
-        Install hooks
-      </Button>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Button type="button" onClick={onClick} disabled={busy} aria-busy={busy}>
+          {busy ? 'Installing…' : installed === true ? 'Reinstall hooks' : 'Install hooks'}
+        </Button>
+        {statusLine}
+      </div>
       <p className="muted" style={{ fontSize: 11, marginTop: 4, marginBottom: 0 }}>
         Wires the agent's prompt/response events into helm's local HTTP
         API. Required for helm to see this agent's chats.

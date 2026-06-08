@@ -28,6 +28,15 @@ export interface EngineRouterDeps {
   adapters: Partial<Record<EngineId, EngineAdapter>>;
   /** Returns the current default — typically `() => liveConfig.engine.default`. */
   defaultGetter: () => EngineId;
+  /**
+   * R-18: returns the engine helm spawns when Roles › "train via chat"
+   * needs a CLI subprocess. Decoupled from `defaultGetter` so a user
+   * can pick (e.g.) cursor for day-to-day chat but claude for the
+   * trainer pipeline. `cursor` is intentionally not valid here —
+   * it's a GUI app, not spawnable as a subprocess. Defaults to
+   * `'claude'` when omitted so existing wiring stays backward-compat.
+   */
+  trainerGetter?: () => 'claude' | 'codex';
 }
 
 export class EngineNotAvailableError extends Error {
@@ -70,5 +79,20 @@ export class EngineRouter {
     return (Object.keys(this.deps.adapters) as EngineId[]).filter(
       (id) => this.deps.adapters[id] !== undefined,
     );
+  }
+
+  /**
+   * R-18: resolve the trainer adapter (the subprocess Roles › "train
+   * via chat" spawns). Reads `trainerGetter` which defaults to
+   * 'claude'. Throws when the selected trainer engine isn't wired —
+   * the UI converts this into "switch trainer in Settings or install
+   * the missing CLI". Cursor is rejected at compile time because
+   * `trainerGetter` only returns 'claude' | 'codex'.
+   */
+  trainer(): EngineAdapter {
+    const id = (this.deps.trainerGetter ?? (() => 'claude' as const))();
+    const adapter = this.deps.adapters[id];
+    if (!adapter) throw new EngineNotAvailableError(id);
+    return adapter;
   }
 }

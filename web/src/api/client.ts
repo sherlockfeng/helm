@@ -674,6 +674,20 @@ export const helmApi = {
     request<{ repo: KnowledgeRepo; seedId: string }>(
       'POST', `/api/knowledge-repos/seeds/${encodeURIComponent(seedId)}/subscribe`,
     ),
+
+  // ── R-18 wire-up: per-agent hooks install / status ──
+  installHostHooks: (agent: 'cursor' | 'claude-code' | 'codex') =>
+    request<Record<string, unknown>>(
+      'POST', `/api/host/${agent}/hooks/install`, {},
+    ),
+  uninstallHostHooks: (agent: 'cursor' | 'claude-code' | 'codex') =>
+    request<Record<string, unknown>>(
+      'POST', `/api/host/${agent}/hooks/uninstall`, {},
+    ),
+  getHostHooksStatus: (agent: 'cursor' | 'claude-code' | 'codex') =>
+    request<{ installed: boolean | 'unknown'; hooksPath?: string }>(
+      'GET', `/api/host/${agent}/hooks/status`,
+    ),
 };
 
 export interface HarnessTaskView {

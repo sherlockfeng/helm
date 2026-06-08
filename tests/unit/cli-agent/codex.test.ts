@@ -80,10 +80,10 @@ describe('CodexCliAgent.sendConversation', () => {
     expect(args[0]).toBe('exec');
     expect(args).toContain('--ignore-user-config');
     expect(args).toContain('--skip-git-repo-check');
-    // Sandbox + approval — adapter ships read-only / never to keep
-    // codex from escalating or writing during helm subprocess use.
+    // Sandbox flag is the protection — `codex exec` is non-interactive
+    // so the top-level -a/--ask-for-approval flag doesn't apply here.
     expect(args[args.indexOf('-s') + 1]).toBe('read-only');
-    expect(args[args.indexOf('-a') + 1]).toBe('never');
+    expect(args).not.toContain('-a');
     // --output-last-message file is passed AND the file exists post-spawn.
     const oIdx = args.indexOf('-o');
     expect(oIdx).toBeGreaterThanOrEqual(0);
@@ -93,8 +93,14 @@ describe('CodexCliAgent.sendConversation', () => {
     expect(args[cIdx + 1]).toBe('mcp_servers.helm.url="http://127.0.0.1:9999/mcp/sse"');
     // -C cwd matches the spawn cwd.
     expect(args[args.indexOf('-C') + 1]).toBe(cwd);
-    // Prompt is the last arg (codex exec treats trailing positional as prompt).
+    // Prompt is the last arg (codex exec treats trailing positional
+    // as prompt). NOTE: no `-` here — we pass the prompt as a
+    // positional rather than via stdin because real codex sits in
+    // its "Reading additional input from stdin" wait state when
+    // stdin is open. The production spawner uses stdio: ['ignore',
+    // ...] to keep stdin closed.
     expect(args[args.length - 1]).toBe('hi');
+    expect(args).not.toContain('-');
 
     agent.dispose();
   });

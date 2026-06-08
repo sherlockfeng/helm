@@ -35,7 +35,7 @@
  * "Install hooks" button or boot-time auto-register).
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,8 +45,64 @@ import type { ChatMessage } from './claude.js';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Spawn wrapper that drives `codex` with closed stdin. We can't use
+ * execFile here because passing `input:` keeps stdin open until the
+ * write completes, and codex's `exec` subcommand detects the open
+ * pipe + waits for additional input even when a positional prompt
+ * is given. `stdio: ['ignore', 'pipe', 'pipe']` tells Node to give
+ * codex a closed stdin from the start, which avoids the race
+ * entirely. Promise resolves on exit 0; rejects on non-zero with
+ * the captured streams attached.
+ */
+async function spawnCodex(
+  bin: string,
+  args: readonly string[],
+  opts: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, [...args], {
+      cwd: opts.cwd ?? process.cwd(),
+      env: opts.env ?? process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = ''; let stderr = '';
+    const timer = opts.timeoutMs && opts.timeoutMs > 0
+      ? setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs)
+      : null;
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.stderr?.on('data', (d) => { stderr += String(d); });
+    child.on('error', (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code, signal) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) return resolve({ stdout, stderr });
+      const err = new Error(
+        `codex exec exited with ${signal ? `signal ${signal}` : `code ${code}`}\n${stderr}`,
+      );
+      Object.assign(err, { code, signal, stdout, stderr });
+      reject(err);
+    });
+  });
+}
+
 const DEFAULT_HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Spawner contract — same shape as `promisify(execFile)` so test
+ * stubs that captured the old signature keep working. Production
+ * binds this to spawnCodex (which uses node:child_process spawn
+ * with stdio: ['ignore', 'pipe', 'pipe']); tests inject a fake
+ * that captures argv + returns a synthetic { stdout, stderr }.
+ */
+export type CodexSpawner = (
+  bin: string,
+  args: readonly string[],
+  options?: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr: string }>;
 
 export interface CodexAgentOptions {
   /** helm's MCP HTTP/SSE URL injected via `-c mcp_servers.helm.url`. */
@@ -58,10 +114,18 @@ export interface CodexAgentOptions {
   /** Override the model (Settings › Engines › Codex › Default model). */
   model?: string;
   /** Override the spawner (testing). */
-  exec?: typeof execFileAsync;
+  exec?: CodexSpawner;
   /** Per-turn timeout. */
   timeoutMs?: number;
 }
+
+/** Default spawner — closes stdin so codex doesn't wait for input. */
+const defaultSpawner: CodexSpawner = (bin, args, options) =>
+  spawnCodex(bin, args, {
+    ...(options?.cwd ? { cwd: options.cwd } : {}),
+    ...(options?.timeout ? { timeoutMs: options.timeout } : {}),
+    ...(options?.env ? { env: options.env } : {}),
+  });
 
 export interface CodexAgentTurnResult {
   /** Assistant text — pulled from --output-last-message tmpfile. */
@@ -82,7 +146,7 @@ export class CodexCliAgent {
   private readonly cwd: string;
   private readonly codexBin: string;
   private readonly model: string | undefined;
-  private readonly exec: typeof execFileAsync;
+  private readonly exec: CodexSpawner;
   private readonly timeoutMs: number;
   private readonly helmMcpUrl: string;
   private readonly tmpDir: string;
@@ -91,7 +155,7 @@ export class CodexCliAgent {
     this.cwd = options.cwd ?? process.cwd();
     this.codexBin = options.codexBin ?? 'codex';
     if (options.model) this.model = options.model;
-    this.exec = options.exec ?? execFileAsync;
+    this.exec = options.exec ?? defaultSpawner;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.helmMcpUrl = options.helmMcpUrl ?? DEFAULT_HELM_MCP_URL;
     // Holds the --output-last-message file across turns. Cleared on
@@ -121,7 +185,10 @@ export class CodexCliAgent {
       '--ignore-user-config',
       '--skip-git-repo-check',
       '-s', 'read-only',
-      '-a', 'never',
+      // `-a`/`--ask-for-approval` is only on the interactive top-level
+      // codex command — `codex exec` is non-interactive by nature so
+      // there's nothing to escalate. The sandbox flag above is what
+      // actually constrains writes / shell-outs.
       '-o', lastMessageFile,
       // Inject helm's MCP server via -c override so we don't touch the
       // user's ~/.codex/config.toml on every spawn.
@@ -129,12 +196,15 @@ export class CodexCliAgent {
       '-C', this.cwd,
     ];
     if (this.model) args.push('-m', this.model);
+    // Pass prompt as the trailing positional. Stdin is explicitly
+    // closed via spawnCodex's `stdio: ['ignore', ...]` so codex
+    // doesn't sit in its "Reading additional input from stdin"
+    // state waiting for an EOF that never came.
     args.push(serializeCodexPrompt(messages, options.systemPrompt));
 
     const result = await this.exec(this.codexBin, args, {
       cwd: this.cwd,
       timeout: this.timeoutMs,
-      maxBuffer: 16 * 1024 * 1024,
       env: process.env,
     }).catch((err: NodeJS.ErrnoException & { stdout?: unknown; stderr?: unknown }) => {
       // codex exec exits non-zero when the model refuses / sandbox
@@ -235,6 +305,10 @@ export function serializeCodexPrompt(
 export async function detectCodexCli(
   options: { codexBin?: string; exec?: typeof execFileAsync } = {},
 ): Promise<{ version: string } | null> {
+  // `--version` exits quickly with output on stdout — the original
+  // execFile contract is fine here (no stdin reading, no `exec`
+  // subcommand quirks). We keep this path separate from the agent's
+  // spawn helper so probe latency stays minimal.
   const bin = options.codexBin ?? 'codex';
   const exec = options.exec ?? execFileAsync;
   try {

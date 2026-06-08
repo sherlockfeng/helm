@@ -825,6 +825,67 @@ describe('/api/bindings', () => {
       const r = await fetchJson('/api/setup-mcp');
       expect(r.status).toBe(405);
     });
+  });
+
+  describe('R-18 wire-up: /api/host/:agent/hooks/*', () => {
+    function withInstaller(installer: NonNullable<Parameters<typeof createHttpApi>[0]['hostInstaller']>) {
+      return async (): Promise<void> => {
+        await api.stop();
+        api = createHttpApi({ db, registry, hostInstaller: installer });
+        await api.start();
+        baseUrl = `http://127.0.0.1:${api.port()}`;
+      };
+    }
+
+    it('happy: POST cursor/hooks/install dispatches with action="install"', async () => {
+      const received: Array<{ agent: string; action: string }> = [];
+      await withInstaller(async ({ agent, action }) => {
+        received.push({ agent, action });
+        return { status: 200, body: { installed: true, hooksPath: '~/.cursor/hooks.json' } };
+      })();
+      const r = await fetchJson('/api/host/cursor/hooks/install', { method: 'POST' });
+      expect(r.status).toBe(200);
+      expect(received).toEqual([{ agent: 'cursor', action: 'install' }]);
+      expect((r.body as { installed: boolean }).installed).toBe(true);
+    });
+
+    it('GET status dispatches with action="status"', async () => {
+      const received: Array<{ agent: string; action: string }> = [];
+      await withInstaller(async ({ agent, action }) => {
+        received.push({ agent, action });
+        return { status: 200, body: { installed: 'unknown' } };
+      })();
+      const r = await fetchJson('/api/host/claude-code/hooks/status');
+      expect(r.status).toBe(200);
+      expect(received).toEqual([{ agent: 'claude-code', action: 'status' }]);
+    });
+
+    it('forwards a 501 from the installer (codex placeholder path)', async () => {
+      await withInstaller(async () => ({
+        status: 501,
+        body: { error: 'codex_install_not_implemented', message: 'pending' },
+      }))();
+      const r = await fetchJson('/api/host/codex/hooks/install', { method: 'POST' });
+      expect(r.status).toBe(501);
+      expect((r.body as { error: string }).error).toBe('codex_install_not_implemented');
+    });
+
+    it('attack: invalid agent → 404 (no route match)', async () => {
+      await withInstaller(async () => ({ status: 200, body: {} }))();
+      const r = await fetchJson('/api/host/notarealagent/hooks/install', { method: 'POST' });
+      expect(r.status).toBe(404);
+    });
+
+    it('attack: GET on install endpoint → 405', async () => {
+      await withInstaller(async () => ({ status: 200, body: {} }))();
+      const r = await fetchJson('/api/host/cursor/hooks/install');
+      expect(r.status).toBe(405);
+    });
+
+    it('501 when hostInstaller dep is absent', async () => {
+      const r = await fetchJson('/api/host/cursor/hooks/install', { method: 'POST' });
+      expect(r.status).toBe(501);
+    });
 
     it('attack: malformed JSON → 400', async () => {
       await api.stop();

@@ -72,6 +72,11 @@ import { summarizeCampaign } from '../summarizer/campaign.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
 import { setupMcp as runSetupMcp } from '../cli/setup-mcp.js';
+import {
+  installCursorHooks as installCursorHooksFn,
+  uninstallCursorHooks as uninstallCursorHooksFn,
+  readHooksConfig as readCursorHooksConfig,
+} from '../host/cursor/installer.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
   closeStaleHostSessions,
@@ -1013,6 +1018,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     if (claudeAvailable) {
       const claudeDeps: Parameters<typeof buildClaudeAdapter>[0] = {};
       if (helmMcpUrl) claudeDeps.helmMcpUrl = helmMcpUrl;
+      // R-18 wire-up: when the user pinned a non-default claude binary
+      // (Engines › Claude Code › Binary path), pass it through so the
+      // adapter's spawn calls the right executable. Empty string falls
+      // back to $PATH lookup of `claude`.
+      const cfgBinPath = liveConfig.claudeCode?.binaryPath;
+      if (cfgBinPath && cfgBinPath.trim().length > 0) {
+        claudeDeps.claudeBin = cfgBinPath.trim();
+      }
       map.claude = buildClaudeAdapter(claudeDeps);
     }
     // The cursor adapter's summarize/review work without cursor-agent (they
@@ -1058,6 +1071,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       },
     }),
     defaultGetter: () => liveConfig.engine.default,
+    // R-18: train-via-chat reads engine.trainerDefault so the user
+    // can have a different engine for trainer-spawn vs. summarizer/
+    // reviewer. Defaults to 'claude' when unset.
+    trainerGetter: () => liveConfig.engine.trainerDefault ?? 'claude',
   });
   // NOTE: we DON'T call `refreshEngineRouter()` here because
   // `buildAdapters()` reads `httpApi.port()` to assemble helmMcpUrl, and
@@ -1155,6 +1172,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   }
   const effectiveVerificationRunner = deps.verificationRunner ?? bootstrappedRunner;
 
+  // R-18 wire-up helpers — cursor hooks-installed probe + path getter
+  // used by the hostInstaller dep. Pulled out of the deps object so
+  // they're plain functions, not embedded inside the object literal.
+  const isCursorHooksInstalled = (): boolean => {
+    try {
+      const cfg = readCursorHooksConfig(PATHS.cursorHooks);
+      for (const entries of Object.values(cfg.hooks)) {
+        if (entries.some((e) => typeof e.command === 'string' && e.command.includes('helm-hook'))) {
+          return true;
+        }
+      }
+      return false;
+    } catch { return false; }
+  };
+  const cursorHooksPathFn = (): string => PATHS.cursorHooks;
+
   // HTTP API — for the renderer to drive UI without the bridge.
   const httpApi = createHttpApi(
     {
@@ -1217,6 +1250,63 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           : 'http://127.0.0.1:17317/mcp/sse';
         return runSetupMcp(target, { url });
       },
+      // R-18 wire-up: per-agent hook installer the Settings buttons
+      // route through. Cursor has a real installer; claude-code's
+      // "hooks" are MCP notifications so install routes through
+      // setupMcp(); codex returns 501 until that adapter lands.
+      hostInstaller: async ({ agent, action }) => {
+        const port = httpApi.port();
+        const url = port
+          ? `http://127.0.0.1:${port}/mcp/sse`
+          : 'http://127.0.0.1:17317/mcp/sse';
+        if (agent === 'cursor') {
+          if (action === 'install') {
+            const result = installCursorHooksFn();
+            return { status: 200, body: { installed: true, ...result } };
+          }
+          if (action === 'uninstall') {
+            const result = uninstallCursorHooksFn();
+            return { status: 200, body: { installed: false, ...result } };
+          }
+          // status
+          return {
+            status: 200,
+            body: {
+              installed: isCursorHooksInstalled(),
+              hooksPath: cursorHooksPathFn(),
+            },
+          };
+        }
+        if (agent === 'claude-code') {
+          if (action === 'status') {
+            // No reliable status probe yet — surface "unknown" so the
+            // renderer shows a generic "click install to verify" CTA.
+            return { status: 200, body: { installed: 'unknown' } };
+          }
+          if (action === 'install') {
+            const r = runSetupMcp('claude', { url });
+            return { status: 200, body: { installed: true, ...r } };
+          }
+          // uninstall — claude CLI has its own `claude mcp remove`
+          // path; not worth duplicating here until users ask.
+          return {
+            status: 501,
+            body: {
+              error: 'uninstall_not_wired',
+              message: 'Run `claude mcp remove helm --scope user` to uninstall.',
+            },
+          };
+        }
+        // codex
+        return {
+          status: 501,
+          body: {
+            error: 'codex_install_not_implemented',
+            message: 'Codex adapter is a scaffold; install path lands when '
+              + 'the codex CLI conventions are finalized.',
+          },
+        };
+      },
       workflowEngine,
       // Phase 24: Cursor SDK summarize. Local mode reuses the user's Cursor
       // app auth — no helm-side key required. The factory is always wired;
@@ -1230,16 +1320,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         ...input,
         embedFn: makePseudoEmbedFn(),
       }),
-      // Phase 60b / 68: role-trainer conversation runner. Goes through the
-      // EngineRouter so the user's default engine (claude or cursor) drives
-      // the chat. Returns null when no adapter supports runConversation —
-      // the endpoint then 501s with an actionable message.
+      // Phase 60b / 68 / R-18: role-trainer conversation runner.
+      // Routes through `engineRouter.trainer()` which reads
+      // engine.trainerDefault — independent of the global default
+      // engine. Returns null when the chosen trainer adapter isn't
+      // wired (codex right now) so the endpoint 501s with the
+      // EngineNotAvailableError message.
       runConversation: async (input) => {
         let adapter;
         try {
-          adapter = engineRouter.current();
+          adapter = engineRouter.trainer();
         } catch (err) {
-          // EngineNotAvailableError → null so endpoint 501s.
           if (err instanceof EngineNotAvailableError) return null;
           throw err;
         }
@@ -1369,6 +1460,33 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // could be moved to here for an immediate catch-up if missed
       // pushes during downtime become a real concern.
       mirrorRunner.start();
+
+      // R-18 wire-up: auto-register helm's MCP server in the agent's
+      // config when the user opted in via Settings › Engines. Runs
+      // best-effort on boot; failures don't block (the agent will
+      // just not see helm's tools until the user installs manually).
+      try {
+        const httpPort = httpApi.port();
+        const mcpUrl = httpPort
+          ? `http://127.0.0.1:${httpPort}/mcp/sse`
+          : 'http://127.0.0.1:17317/mcp/sse';
+        if (liveConfig.cursor.mcpAutoRegister) {
+          const r = runSetupMcp('cursor', { url: mcpUrl });
+          log.info('boot_mcp_autoregister', { data: { ...r, agent: 'cursor' } });
+        }
+        if (liveConfig.claudeCode?.mcpAutoRegister) {
+          const r = runSetupMcp('claude', { url: mcpUrl });
+          log.info('boot_mcp_autoregister', { data: { ...r, agent: 'claude' } });
+        }
+        // Codex auto-register lands when the codex install path
+        // exists — flag is read here so a config save today persists
+        // and is honored once the wiring is complete.
+      } catch (err) {
+        log.warn('boot_mcp_autoregister_failed', {
+          data: { message: (err as Error).message },
+        });
+      }
+
       started = true;
       log.info('boot_complete');
     },

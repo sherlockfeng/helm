@@ -25,7 +25,15 @@
 
 import type { LlmClient } from '../summarizer/campaign.js';
 
-export type EngineId = 'cursor' | 'claude';
+/**
+ * R-18: 'codex' is part of the union but no adapter is wired yet —
+ * `EngineRouter.trainer()` returns it from the config getter and the
+ * router throws `EngineNotAvailableError('codex')` until a real
+ * buildCodexAdapter() lands. That keeps the surface honest: users
+ * can pick codex as their trainer in Settings, and we tell them
+ * exactly what's missing instead of silently falling back to claude.
+ */
+export type EngineId = 'cursor' | 'claude' | 'codex';
 
 /** Single-turn review payload — produced by `assembleReviewerPayload()`. */
 export interface ReviewInput {

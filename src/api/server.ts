@@ -220,6 +220,17 @@ export interface HttpApiDeps {
     location: string;
   };
   /**
+   * R-18 wire-up: per-agent hook installer. Returns the HTTP status
+   * the endpoint should send back + the body payload. Codex agents
+   * legitimately return `{ status: 501, body: { error, message } }`
+   * until that adapter's install path lands; the API layer just
+   * forwards.
+   */
+  hostInstaller?: (input: {
+    agent: 'cursor' | 'claude-code' | 'codex';
+    action: 'install' | 'uninstall' | 'status';
+  }) => Promise<{ status: number; body: Record<string, unknown> }>;
+  /**
    * Workflow engine for cycle/task mutations. When undefined, the
    * /api/cycles/:id/complete + /api/cycles/:id/bug-tasks endpoints
    * return 501. The orchestrator wires this so a config docFirst.enforce
@@ -1849,6 +1860,46 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           return send(res, 200, { target, ...result });
         } catch (err) {
           return send(res, 500, { error: 'setup_failed', message: (err as Error).message });
+        }
+      }
+
+      // R-18 wire-up: per-engine hook install / status endpoints.
+      // Replaces the toast-only stub in Settings › Engines. Cursor has
+      // a real installer (`installCursorHooks` → `~/.cursor/hooks.json`);
+      // claude-code / codex install paths route through the existing
+      // setupMcp flow because their "hooks" are MCP notifications, not
+      // a separate file.
+      //
+      //   POST   /api/host/:agent/hooks/install    body { force? }
+      //   POST   /api/host/:agent/hooks/uninstall
+      //   GET    /api/host/:agent/hooks/status
+      //
+      // `:agent` must be one of cursor | claude-code | codex.
+      const hooksMatch = url.pathname.match(
+        /^\/api\/host\/(cursor|claude-code|codex)\/hooks\/(install|uninstall|status)$/,
+      );
+      if (hooksMatch) {
+        const agent = hooksMatch[1] as 'cursor' | 'claude-code' | 'codex';
+        const action = hooksMatch[2] as 'install' | 'uninstall' | 'status';
+        if (action === 'status') {
+          if (req.method !== 'GET') return methodNotAllowed(res);
+        } else {
+          if (req.method !== 'POST') return methodNotAllowed(res);
+        }
+        if (!deps.hostInstaller) {
+          return send(res, 501, {
+            error: 'not_implemented',
+            message: 'host installer not wired into this helm build',
+          });
+        }
+        try {
+          const result = await deps.hostInstaller({ agent, action });
+          deps.logger?.info('host_install_action', { data: { agent, action, ...result } });
+          return send(res, result.status, result.body);
+        } catch (err) {
+          return send(res, 500, {
+            error: 'host_install_failed', message: (err as Error).message,
+          });
         }
       }
 

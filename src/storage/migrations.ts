@@ -943,6 +943,20 @@ export const MIGRATIONS: Migration[] = [
         ON knowledge_merge_conflict(repo_id);
     `,
   },
+  {
+    version: 24,
+    description:
+      'Conversation insights — host_sessions.summary + summary_generated_at'
+      + ' (the TL;DR LLM block at the top of the detail pane);'
+      + ' knowledge_candidates.gist (one-line classified summary). Both'
+      + ' columns are nullable so back-fill is opt-in and existing rows'
+      + ' simply render without the new fields.',
+    up: `
+      ALTER TABLE host_sessions ADD COLUMN summary TEXT;
+      ALTER TABLE host_sessions ADD COLUMN summary_generated_at TEXT;
+      ALTER TABLE knowledge_candidates ADD COLUMN gist TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

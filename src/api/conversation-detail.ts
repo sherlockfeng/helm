@@ -95,6 +95,10 @@ export interface ConversationDetail {
     scoreEntity?: number;
     scoreCosine?: number;
     createdAt: string;
+    /** PR3: one-line LLM headline; renderer prefers this over chunkText. */
+    gist?: string;
+    /** PR3: classified kind from KnowledgeChunkKind taxonomy. */
+    kind?: 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
   }>;
 }
 
@@ -145,7 +149,7 @@ export function getConversationDetail(
   // Read with a small typed query to avoid pulling a repo-wide helper
   // that doesn't filter by session.
   const candidates = (db.prepare(`
-    SELECT id, chunk_text, score_entity, score_cosine, created_at
+    SELECT id, chunk_text, score_entity, score_cosine, created_at, gist, kind
       FROM knowledge_candidates
      WHERE host_session_id = ? AND status = 'pending'
      ORDER BY created_at DESC
@@ -158,6 +162,10 @@ export function getConversationDetail(
     };
     if (r['score_entity'] != null) out.scoreEntity = Number(r['score_entity']);
     if (r['score_cosine'] != null) out.scoreCosine = Number(r['score_cosine']);
+    if (r['gist'] != null) out.gist = String(r['gist']);
+    if (r['kind'] != null) {
+      out.kind = String(r['kind']) as ConversationDetail['candidates'][number]['kind'];
+    }
     return out;
   });
 

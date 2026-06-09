@@ -25,6 +25,10 @@ function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
+    ...(row['summary'] != null ? { summary: String(row['summary']) } : {}),
+    ...(row['summary_generated_at'] != null
+      ? { summaryGeneratedAt: String(row['summary_generated_at']) }
+      : {}),
   };
 }
 
@@ -244,6 +248,48 @@ export function setHostSessionDisplayName(
   const value = trimmed.length === 0 ? null : trimmed.slice(0, 120);
   db.prepare(`UPDATE host_sessions SET display_name = ? WHERE id = ?`).run(value, id);
   return value ?? undefined;
+}
+
+/**
+ * PR3 (conv detail): persist the LLM-generated TL;DR for a chat.
+ * `summary_generated_at` is set to NOW on every write so a callsite
+ * can throttle regeneration by reading the timestamp.
+ *
+ * Passing null clears both columns (e.g. when the user wants to force
+ * a regeneration on the next Stop).
+ */
+export function setHostSessionSummary(
+  db: Database.Database,
+  id: string,
+  summary: string | null,
+  generatedAt: string = new Date().toISOString(),
+): void {
+  if (summary == null || summary.trim() === '') {
+    db.prepare(
+      `UPDATE host_sessions SET summary = NULL, summary_generated_at = NULL WHERE id = ?`,
+    ).run(id);
+    return;
+  }
+  // Soft cap: TL;DR is meant to be 2 short lines. 800 chars is plenty.
+  const trimmed = summary.trim().slice(0, 800);
+  db.prepare(
+    `UPDATE host_sessions SET summary = ?, summary_generated_at = ? WHERE id = ?`,
+  ).run(trimmed, generatedAt, id);
+}
+
+/**
+ * Read the current TL;DR + freshness for one session. Returns null when
+ * either column is null (treat absent as "never generated").
+ */
+export function getHostSessionSummary(
+  db: Database.Database,
+  id: string,
+): { summary: string; generatedAt: string } | null {
+  const row = db.prepare(
+    `SELECT summary, summary_generated_at FROM host_sessions WHERE id = ?`,
+  ).get(id) as { summary: string | null; summary_generated_at: string | null } | undefined;
+  if (!row || !row.summary || !row.summary_generated_at) return null;
+  return { summary: row.summary, generatedAt: row.summary_generated_at };
 }
 
 /**

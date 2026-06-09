@@ -314,6 +314,9 @@ export interface ConversationDetailSession {
   displayName?: string;
   roleIds?: string[];
   agentKind?: string;
+  /** PR3: LLM-generated TL;DR shown at the top of the detail pane. */
+  summary?: string;
+  summaryGeneratedAt?: string;
 }
 
 export interface ConversationDetailEvent {
@@ -347,12 +350,18 @@ export interface ConversationDetailKnowledgeInPlay {
   points: ConversationDetailRetrievalPoint[];
 }
 
+export type CandidateKind = 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
+
 export interface ConversationDetailCandidate {
   id: string;
   chunkText: string;
   scoreEntity?: number;
   scoreCosine?: number;
   createdAt: string;
+  /** PR3: one-line LLM headline; renderer prefers this over chunkText. */
+  gist?: string;
+  /** PR3: classified kind, drives the emoji + chip color. */
+  kind?: CandidateKind;
 }
 
 /**

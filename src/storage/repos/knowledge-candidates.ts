@@ -33,7 +33,29 @@ function rowToCandidate(row: Record<string, unknown>): KnowledgeCandidate {
   };
   if (row['host_session_id'] != null) c.hostSessionId = String(row['host_session_id']);
   if (row['decided_at'] != null) c.decidedAt = String(row['decided_at']);
+  if (row['gist'] != null) c.gist = String(row['gist']);
   return c;
+}
+
+/**
+ * PR3 (conv detail): set the LLM-generated one-line gist for a candidate +
+ * optionally update its `kind` classification (decision / solution /
+ * convention / gotcha / example / other). No-op when the row is missing.
+ */
+export function setCandidateGist(
+  db: Database.Database,
+  id: string,
+  gist: string | null,
+  kind?: KnowledgeChunkKind,
+): void {
+  const cleaned = gist == null ? null : gist.replace(/[\r\n]+/g, ' ').trim().slice(0, 400);
+  if (kind) {
+    db.prepare(
+      `UPDATE knowledge_candidates SET gist = ?, kind = ? WHERE id = ?`,
+    ).run(cleaned, kind, id);
+  } else {
+    db.prepare(`UPDATE knowledge_candidates SET gist = ? WHERE id = ?`).run(cleaned, id);
+  }
 }
 
 /**

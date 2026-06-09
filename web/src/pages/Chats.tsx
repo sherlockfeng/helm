@@ -338,6 +338,28 @@ function ConversationDetailPane({
         <span className="helm-conv-meta">{formatRelative(chat.lastSeenAt)}</span>
       </div>
 
+      {/* TL;DR — LLM-generated "what is this chat / where did it end up".
+          Rendered only when the summary is actually available; we don't
+          show a loading shimmer because the value comes from a Stop
+          hook handler that may not fire until the next turn ends. */}
+      {data?.session.summary && (
+        <div className="helm-conv-section helm-conv-tldr-section">
+          <div className="helm-conv-section-header">
+            <span className="helm-conv-section-label">TL;DR</span>
+            {data.session.summaryGeneratedAt && (
+              <span className="helm-conv-section-meta">
+                {formatRelative(data.session.summaryGeneratedAt)}
+              </span>
+            )}
+          </div>
+          <div className="helm-conv-tldr-body">
+            {data.session.summary.split('\n').map((line, i) => (
+              <div key={i} className="helm-conv-tldr-line">{line}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Prompt preview block */}
       {chat.firstPrompt && (
         <div className="helm-conv-section helm-conv-prompt-section">
@@ -564,14 +586,46 @@ function CandidateRow({
     } finally { setBusy(null); }
   }
 
+  // Show the LLM-classified gist as the headline when present; fall back
+  // to the raw chunkText (the original behavior) when classification
+  // hasn't run yet or failed. The full text is always available behind
+  // an expand toggle so the user can see what's actually being promoted.
+  const [expanded, setExpanded] = useState(false);
+  const headline = candidate.gist?.trim() || candidate.chunkText;
+  const showFold = Boolean(candidate.gist?.trim()) && candidate.chunkText.trim() !== headline.trim();
+  const kind = candidate.kind ?? 'other';
+
   return (
-    <li className="helm-conv-candidate-row">
+    <li className={`helm-conv-candidate-row helm-conv-kind-${kind}`}>
       <div className="helm-conv-candidate-accent" />
       <div className="helm-conv-candidate-body">
-        <div className="helm-conv-candidate-excerpt">{candidate.chunkText}</div>
+        <div className="helm-conv-candidate-head">
+          <span
+            className={`helm-conv-kind-chip helm-conv-kind-chip-${kind}`}
+            title={`kind: ${kind}`}
+          >
+            {KIND_EMOJI[kind]} {kind}
+          </span>
+          <span className="helm-conv-candidate-headline">{headline}</span>
+        </div>
+        {expanded && showFold && (
+          <div className="helm-conv-candidate-excerpt-full">{candidate.chunkText}</div>
+        )}
         <div className="helm-conv-candidate-foot">
           <span className="muted">
             from this chat · {formatRelative(candidate.createdAt)}
+            {showFold && (
+              <>
+                {' '}·{' '}
+                <button
+                  type="button"
+                  className="helm-conv-link-button"
+                  onClick={() => setExpanded((v) => !v)}
+                >
+                  {expanded ? 'hide original' : 'show original'}
+                </button>
+              </>
+            )}
           </span>
           <div className="helm-conv-candidate-actions">
             <button
@@ -579,7 +633,7 @@ function CandidateRow({
               className="helm-conv-link-button"
               disabled={busy !== null}
               onClick={() => { void promote(); }}
-              title="Promote to knowledge (P)"
+              title="Promote to knowledge"
             >
               ↑ Promote
             </button>
@@ -588,7 +642,7 @@ function CandidateRow({
               className="helm-conv-link-button helm-conv-link-danger"
               disabled={busy !== null}
               onClick={() => { void dismiss(); }}
-              title="Dismiss (D)"
+              title="Dismiss"
             >
               ✕ Dismiss
             </button>
@@ -598,6 +652,15 @@ function CandidateRow({
     </li>
   );
 }
+
+const KIND_EMOJI: Record<NonNullable<ConversationDetailCandidate['kind']>, string> = {
+  spec: '📘',
+  example: '💡',
+  warning: '⚠️',
+  runbook: '🛠',
+  glossary: '📖',
+  other: '📝',
+};
 
 // ── Timeline section ──────────────────────────────────────────────────────
 

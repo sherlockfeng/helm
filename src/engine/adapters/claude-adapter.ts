@@ -157,7 +157,14 @@ export async function claudePrintOnce(input: ClaudePrintOnceInput): Promise<stri
       cwd: input.cwd ?? process.cwd(),
       timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
-      env: process.env,
+      // HELM_INTERNAL_LLM=1 marks this as an internal LLM round-trip
+      // (TL;DR generation, candidate gist, harness reviewer, etc.) so
+      // the claude code hook entry skips writing to the bridge.
+      // Without it, every helm-spawned `claude -p` would show up in
+      // Conversations as a new chat whose first prompt is helm's own
+      // template — and trigger a Stop hook that fires *another* TL;DR
+      // generation, recursing until poll budget exhausts.
+      env: { ...process.env, HELM_INTERNAL_LLM: '1' },
     });
     return result.stdout.toString().trim();
   } finally {

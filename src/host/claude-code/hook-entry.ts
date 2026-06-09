@@ -59,6 +59,19 @@ export async function runHook(options: RunHookOptions = {}): Promise<void> {
   const socketPath = options.socketPath ?? env['HELM_BRIDGE_SOCKET'] ?? PATHS.bridgeSocket;
   const timeoutMs = bridgeTimeout(env);
 
+  // Helm spawns `claude -p` for internal LLM round-trips (TL;DR
+  // summary, candidate gist classification, harness reviewer). Those
+  // subprocesses are claude code sessions too, so their UserPromptSubmit
+  // hook would normally fire and create a new chat in Conversations,
+  // whose Stop hook would in turn trigger ANOTHER TL;DR generation.
+  // Drain stdin to keep claude happy, return the empty allow response,
+  // and skip the bridge round-trip entirely.
+  if (env['HELM_INTERNAL_LLM']) {
+    await readStdin(stdin);
+    writeJson({}, stdout);
+    return;
+  }
+
   const args = parseArgs(argv);
   const raw = await readStdin(stdin);
   const payload = parseJsonObject(raw);

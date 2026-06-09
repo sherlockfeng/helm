@@ -781,15 +781,16 @@ code, pre {
 }
 
 .helm-rail {
+  /* Flat — no card chrome. Rows are hairline-separated, selected row
+     wears a 2px accent bar on the left. macOS Mail / Linear inbox
+     convention. */
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 6px;
-  /* Allow the rail to scroll independently when many chats are open. */
-  max-height: calc(100vh - 180px);
+  gap: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-height: calc(100vh - 140px);
   overflow-y: auto;
 }
 
@@ -798,34 +799,37 @@ code, pre {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  border-left: 3px solid transparent;
-  transition: background-color 0.1s, border-color 0.1s;
+  gap: 2px;
+  /* Target row height ~52–56px per spec; padding 10/12 hits ~54. */
+  padding: 10px 12px;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--border);
+  transition: background-color 0.1s, border-left-color 0.1s;
 }
 .helm-rail-row:hover { background: var(--hover); }
 .helm-rail-row.selected {
-  background: var(--selected);
-  color: var(--selected-text);
-  border-left-color: var(--primary, #3b82f6);
+  background: var(--selected, rgba(59,130,246,0.08));
+  color: var(--text);
+  border-left-color: var(--accent, #3b82f6);
 }
-.helm-rail-row.tone-warn:not(.selected) { border-left-color: var(--accent, #f59e0b); }
-.helm-rail-row.tone-info:not(.selected) { border-left-color: #3b82f6; }
 
 .helm-rail-row-label {
   font-size: 13px;
   font-weight: 500;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.3;
 }
 
 .helm-rail-row-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.2;
 }
 
 .helm-rail-badge {
@@ -846,14 +850,15 @@ code, pre {
 /* P1-4: sidebar footer — visible separation + pulsing dot when broken */
 .helm-sidebar-footer {
   margin-top: auto;
-  padding: 12px;
+  padding: 10px 12px;
   border-top: 1px solid var(--border);
   -webkit-app-region: no-drag;
 }
 
 .helm-main {
   overflow-y: auto;
-  padding: 28px 32px;
+  /* macOS-native tighter — 28/32 felt SaaS-y, dropped to 18/24. */
+  padding: 18px 24px;
 }
 
 /* Page-content width clamp. Excludes `[role="dialog"]` so any future
@@ -1015,23 +1020,23 @@ code, pre {
 }
 
 /* ── Status pill ─────────────────────────────────────────────────────── */
+/* Linear/Raycast convention — small dot + text, no halo, no padding.
+   The pill chrome was the heaviest thing in the bottom-left corner. */
 .helm-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
-/* P2-3 / a11y A3: soft halo restores boundary contrast against card bg */
 .helm-status .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--text-secondary);
-  box-shadow: 0 0 0 2px rgba(110, 110, 115, 0.18);
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-tertiary);
 }
-.helm-status.ok .dot { background: var(--success); box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.22); }
-.helm-status.warn .dot { background: var(--warn); box-shadow: 0 0 0 2px rgba(255, 149, 0, 0.22); }
-.helm-status.err .dot { background: var(--danger); box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.22); }
+.helm-status.ok .dot   { background: var(--success); }
+.helm-status.warn .dot { background: var(--warn); }
+.helm-status.err .dot  { background: var(--danger); }
 
 /* P1-4: pulse when backend offline — but only when motion is allowed (a11y A9) */
 @media (prefers-reduced-motion: no-preference) {
@@ -1568,9 +1573,12 @@ code, pre {
    dividers between Header / Prompt / Meta / Knowledge IN / Knowledge OUT.
    See web/src/pages/Chats.tsx for the JSX. */
 .helm-conv-detail {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  /* No card chrome — the page background shows through, sections are
+     defined by hairline dividers between blocks. This was the loudest
+     "admin panel" tell in the first pass. */
+  background: transparent;
+  border: none;
+  border-radius: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1581,7 +1589,7 @@ code, pre {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px 4px;
+  padding: 2px 0 2px;
 }
 .helm-conv-title {
   margin: 0;
@@ -1594,6 +1602,7 @@ code, pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
+  line-height: 1.3;
 }
 .helm-conv-title-input {
   font-size: 15px;
@@ -1611,14 +1620,15 @@ code, pre {
 /* Source chip — colored per agent so the developer ID's source in 50ms */
 .helm-conv-source-chip {
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 3px;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   color: #fff;
-  line-height: 14px;
+  line-height: 16px;
   display: inline-block;
+  flex-shrink: 0;
 }
 .helm-conv-source-cursor      { background: #6f4cff; }
 .helm-conv-source-claude-code { background: #d97706; }
@@ -1630,13 +1640,13 @@ code, pre {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 11px;
   color: var(--text-tertiary);
-  padding: 0 16px;
+  padding: 2px 0 0;
 }
 .helm-conv-meta-strip {
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 6px 16px 10px;
+  padding: 6px 0 10px;
 }
 .helm-conv-meta-strip .helm-conv-meta { padding: 0; }
 .helm-conv-meta-sep {
@@ -1646,7 +1656,7 @@ code, pre {
 
 /* Sections share hairline dividers — no per-section borders/cards */
 .helm-conv-section {
-  padding: 12px 16px;
+  padding: 12px 0;
   border-top: 1px solid var(--border);
 }
 .helm-conv-section-header {
@@ -1657,11 +1667,11 @@ code, pre {
   gap: 8px;
 }
 .helm-conv-section-label {
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 .helm-conv-section-meta {
   font-size: 11px;
@@ -1669,9 +1679,12 @@ code, pre {
 }
 
 /* Prompt preview — 3-line clamp until expanded */
-.helm-conv-prompt-section { padding-top: 4px; padding-bottom: 12px; }
+/* Prompt block is the largest non-heading text on the page —
+   the developer reads the prompt first. Quoted-block treatment with
+   a 2px left accent gives it a clear anchor. */
+.helm-conv-prompt-section { padding-top: 10px; padding-bottom: 14px; }
 .helm-conv-prompt {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
   color: var(--text);
   display: -webkit-box;
@@ -1680,6 +1693,8 @@ code, pre {
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-word;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
 }
 .helm-conv-prompt.expanded {
   display: block;
@@ -1712,7 +1727,21 @@ code, pre {
   line-height: 1;
 }
 .helm-conv-role-chip-x:hover { opacity: 1; }
-.helm-conv-add-role { font-size: 11px; }
+/* "+ role" should read as a text affordance, not a button. Strip the
+   default Combobox trigger fill/border so it sits inline with the
+   section header like a ghost link. */
+.helm-conv-add-role {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  font-size: 11px !important;
+  color: var(--accent, #3b82f6) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+}
+.helm-conv-add-role:hover { text-decoration: underline; }
 
 /* Retrieved chunks list — hairline rows, no card chrome */
 .helm-conv-chunks {
@@ -1811,7 +1840,7 @@ code, pre {
 
 /* Ambient footer — one muted line, no chrome */
 .helm-conv-footer {
-  padding: 10px 16px 12px;
+  padding: 10px 0 12px;
   border-top: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-tertiary);
@@ -1830,13 +1859,15 @@ code, pre {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--text-tertiary);
+  background: var(--accent, #3b82f6);
   display: inline-block;
   animation: helm-conv-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
 }
 @keyframes helm-conv-pulse {
-  0%, 100% { opacity: 0.3; }
-  50%      { opacity: 1; }
+  0%   { opacity: 1; box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
+  60%  { opacity: 0.5; box-shadow: 0 0 0 6px rgba(59,130,246,0); }
+  100% { opacity: 1; box-shadow: 0 0 0 0 rgba(59,130,246,0); }
 }
 
 /* Ghost text-button for promote/dismiss/show-more — no fill, no border */

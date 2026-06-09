@@ -28,7 +28,6 @@ import { toast } from 'sonner';
 import { Combobox } from '../components/Combobox.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
-import { PageHeader } from '../components/PageHeader.js';
 import type {
   ActiveChat,
   ConversationDetailCandidate,
@@ -109,7 +108,9 @@ export function ChatsPage() {
 
   return (
     <>
-      <PageHeader title="Active Chats" />
+      {/* No PageHeader — the sidebar nav item "Conversations" already labels
+          this surface, and the giant h1 was burning vertical space without
+          earning it. The detail pane's own header IS the page's hierarchy. */}
 
       {loading && <CardSkeletonList n={3} />}
 
@@ -159,6 +160,10 @@ function ChatRailRow({
   onClick: () => void;
 }): ReactElement {
   const queued = chat.queuedMessageCount ?? 0;
+  // Source isn't shown here — it's a single chat → single source, and
+  // the dominant value of the row is the label + recency. The colored
+  // chip lives in the detail header where the developer needs to ID it
+  // mid-task; here it would just be repetitive noise per row.
   return (
     <button
       type="button"
@@ -169,10 +174,10 @@ function ChatRailRow({
     >
       <div className="helm-rail-row-label">{chatLabel(chat)}</div>
       <div className="helm-rail-row-meta">
-        <span className={`helm-conv-source-chip helm-conv-source-${sourceKey(chat)}`}>
-          {sourceLabel(sourceKey(chat))}
-        </span>
-        <span className="muted">{formatRelative(chat.lastSeenAt)}</span>
+        <span>{formatRelative(chat.lastSeenAt)}</span>
+        {chat.roleIds.length > 0 && (
+          <span>· {chat.roleIds.length} role{chat.roleIds.length === 1 ? '' : 's'}</span>
+        )}
         {queued > 0 && <span className="helm-rail-badge warn">{queued}</span>}
       </div>
     </button>
@@ -271,7 +276,7 @@ function ConversationDetailPane({
 
   return (
     <div className="helm-conv-detail">
-      {/* Header: source chip + title + session id + overflow menu */}
+      {/* Header: source chip + title + overflow */}
       <div className="helm-conv-header">
         <span className={`helm-conv-source-chip helm-conv-source-${key}`}>
           {sourceLabel(key)}
@@ -290,7 +295,16 @@ function ConversationDetailPane({
           onDelete={() => setDeleteConfirm(true)}
         />
       </div>
-      <div className="helm-conv-meta">session {shortId(chat.id, 18)}</div>
+
+      {/* Single metadata line — session id + cwd + recency, all mono+tertiary.
+          Eliminates the previous double-row (session above, cwd below) noise. */}
+      <div className="helm-conv-meta-strip">
+        <span className="helm-conv-meta">session {shortId(chat.id, 18)}</span>
+        {chat.cwd && <><span className="helm-conv-meta-sep">·</span>
+          <span className="helm-conv-meta">{chat.cwd}</span></>}
+        <span className="helm-conv-meta-sep">·</span>
+        <span className="helm-conv-meta">{formatRelative(chat.lastSeenAt)}</span>
+      </div>
 
       {/* Prompt preview block */}
       {chat.firstPrompt && (
@@ -298,15 +312,6 @@ function ConversationDetailPane({
           <PromptPreview text={chat.firstPrompt} />
         </div>
       )}
-
-      {/* Metadata strip */}
-      <div className="helm-conv-section helm-conv-meta-strip">
-        {chat.cwd && <span className="helm-conv-meta">{chat.cwd}</span>}
-        {chat.cwd && <span className="helm-conv-meta-sep">·</span>}
-        <span className="helm-conv-meta">{key}</span>
-        <span className="helm-conv-meta-sep">·</span>
-        <span className="helm-conv-meta">{formatRelative(chat.lastSeenAt)}</span>
-      </div>
 
       {/* Knowledge IN */}
       <KnowledgeInSection

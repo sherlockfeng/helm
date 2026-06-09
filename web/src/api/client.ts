@@ -64,6 +64,17 @@ export const helmApi = {
 
   activeChats: () => request<{ chats: ActiveChat[] }>('GET', '/api/active-chats'),
 
+  /**
+   * Per-conversation aggregate: session header + timeline + knowledge-in-play
+   * (retrievals with hydrated chunk metadata) + pending knowledge candidates.
+   * Backed by src/api/conversation-detail.ts.
+   */
+  conversationDetail: (hostSessionId: string) =>
+    request<import('./types.js').ConversationDetail>(
+      'GET',
+      `/api/conversations/${encodeURIComponent(hostSessionId)}/detail`,
+    ),
+
   // Phase 25 / 42: legacy single-role setter — replaces the chat's entire
   // role list with this one role (or empty when null). Kept for clients that
   // haven't switched to addChatRole / removeChatRole.

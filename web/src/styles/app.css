@@ -1562,3 +1562,334 @@ code, pre {
   color: #fff;
   font-weight: 600;
 }
+
+/* ─── Conversations · single-surface detail pane ───────────────────────
+   New IA (replacing the bordered-cards layout): one surface, hairline
+   dividers between Header / Prompt / Meta / Knowledge IN / Knowledge OUT.
+   See web/src/pages/Chats.tsx for the JSX. */
+.helm-conv-detail {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header row: source chip + title + overflow menu, on one baseline */
+.helm-conv-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 4px;
+}
+.helm-conv-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+.helm-conv-title-input {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Source chip — colored per agent so the developer ID's source in 50ms */
+.helm-conv-source-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  color: #fff;
+  line-height: 14px;
+  display: inline-block;
+}
+.helm-conv-source-cursor      { background: #6f4cff; }
+.helm-conv-source-claude-code { background: #d97706; }
+.helm-conv-source-codex       { background: #111827; }
+.helm-conv-source-unknown     { background: var(--text-tertiary); }
+
+/* Monospace metadata — path / session-id / source slug */
+.helm-conv-meta {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 0 16px;
+}
+.helm-conv-meta-strip {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 16px 10px;
+}
+.helm-conv-meta-strip .helm-conv-meta { padding: 0; }
+.helm-conv-meta-sep {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+/* Sections share hairline dividers — no per-section borders/cards */
+.helm-conv-section {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.helm-conv-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+.helm-conv-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.helm-conv-section-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* Prompt preview — 3-line clamp until expanded */
+.helm-conv-prompt-section { padding-top: 4px; padding-bottom: 12px; }
+.helm-conv-prompt {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.helm-conv-prompt.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* Role chips inside Knowledge IN */
+.helm-conv-role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.helm-conv-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+}
+.helm-conv-role-chip-x {
+  all: unset;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.6;
+  line-height: 1;
+}
+.helm-conv-role-chip-x:hover { opacity: 1; }
+.helm-conv-add-role { font-size: 11px; }
+
+/* Retrieved chunks list — hairline rows, no card chrome */
+.helm-conv-chunks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.helm-conv-chunk-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+  align-items: baseline;
+  font-size: 12px;
+}
+.helm-conv-chunk-row:first-child { border-top: none; }
+.helm-conv-chunk-arrow { color: var(--text-tertiary); }
+.helm-conv-chunk-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.helm-conv-chunk-source {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+.helm-conv-chunk-score {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+
+/* Knowledge OUT — candidate excerpts with hover triage actions */
+.helm-conv-candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.helm-conv-candidate-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.helm-conv-candidate-accent {
+  width: 2px;
+  background: var(--accent, #3b82f6);
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.helm-conv-candidate-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.helm-conv-candidate-excerpt {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.helm-conv-candidate-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.helm-conv-candidate-actions {
+  display: flex;
+  gap: 10px;
+  /* Show actions on row hover or when one is focused — keeps the
+     resting state quiet, surfaces verbs when the user reaches for them. */
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.helm-conv-candidate-row:hover .helm-conv-candidate-actions,
+.helm-conv-candidate-row:focus-within .helm-conv-candidate-actions {
+  opacity: 1;
+}
+
+/* Ambient footer — one muted line, no chrome */
+.helm-conv-footer {
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* Empty states inside sections */
+.helm-conv-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.helm-conv-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  display: inline-block;
+  animation: helm-conv-pulse 1.6s ease-in-out infinite;
+}
+@keyframes helm-conv-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+/* Ghost text-button for promote/dismiss/show-more — no fill, no border */
+.helm-conv-link-button {
+  all: unset;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--accent, #3b82f6);
+  padding: 2px 0;
+}
+.helm-conv-link-button:hover { text-decoration: underline; }
+.helm-conv-link-button:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+.helm-conv-link-danger { color: var(--danger, #ef4444); }
+
+/* Overflow menu (⋯) in the detail header */
+.helm-conv-overflow { position: relative; }
+.helm-conv-overflow-trigger {
+  all: unset;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 16px;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  line-height: 1;
+}
+.helm-conv-overflow-trigger:hover { background: var(--hover); color: var(--text); }
+.helm-conv-overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 180px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  padding: 4px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+.helm-conv-overflow-menu button {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.helm-conv-overflow-menu button:hover { background: var(--hover); }
+.helm-conv-overflow-danger { color: var(--danger, #ef4444) !important; }
+.helm-conv-overflow-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}

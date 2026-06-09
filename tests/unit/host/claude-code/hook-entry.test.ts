@@ -147,4 +147,29 @@ describe('runHook (claude code)', () => {
     expect(out.trim()).toBe('{}');
     expect(captured).toEqual([]);
   });
+
+  it('HELM_INTERNAL_LLM=1 → short-circuits before any bridge call', async () => {
+    // Bridge IS up, event name IS valid — but the env flag tells the hook
+    // "this is helm spawning claude for its own LLM use, do not log".
+    // Prevents the TL;DR-generation recursion bug (claude -p spawned by
+    // helm fires a UserPromptSubmit hook that helm captures as a new
+    // chat, whose Stop then spawns another TL;DR generation, ad inf.).
+    await startCapturingBridge();
+    const stdin = Readable.from([JSON.stringify({
+      session_id: 'helm-internal', hook_event_name: 'UserPromptSubmit', prompt: 'tl;dr template body',
+    })]);
+    const chunks: Buffer[] = [];
+    const stdout = new Writable({
+      write(chunk, _enc, cb) { chunks.push(Buffer.from(chunk)); cb(); },
+    });
+    await runHook({
+      argv: ['--event', 'UserPromptSubmit'],
+      stdin,
+      stdout,
+      socketPath,
+      env: { HELM_INTERNAL_LLM: '1' },
+    });
+    expect(Buffer.concat(chunks).toString('utf8').trim()).toBe('{}');
+    expect(captured).toEqual([]);
+  });
 });

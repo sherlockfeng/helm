@@ -171,7 +171,10 @@ export async function codexExecOnce(input: CodexExecOnceInput): Promise<string> 
     await input.exec(input.codexBin, args, {
       cwd: input.cwd ?? process.cwd(),
       timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      env: process.env,
+      // HELM_INTERNAL_LLM=1: see claude-adapter.ts for the rationale.
+      // Same env propagates to any hook claude/codex might spawn so the
+      // hook entry knows to skip the bridge round-trip.
+      env: { ...process.env, HELM_INTERNAL_LLM: '1' },
     });
     try { return readFileSync(lastMessageFile, 'utf8').trim(); }
     catch { return ''; }

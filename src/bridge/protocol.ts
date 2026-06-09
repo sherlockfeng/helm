@@ -50,6 +50,9 @@ export interface BridgeErrorResponse {
 export interface HostSessionStartRequest extends BridgeRequest {
   type: 'host_session_start';
   host_session_id: string;
+  /** Agent identity — 'cursor' | 'claude-code' | 'codex'. Older Cursor
+   *  hooks omit this; the server defaults to 'cursor' for back-compat. */
+  host?: string;
   cwd?: string;
   composer_mode?: string;
 }
@@ -60,6 +63,8 @@ export interface HostSessionStartResponse extends BridgeResponse {
 export interface HostPromptSubmitRequest extends BridgeRequest {
   type: 'host_prompt_submit';
   host_session_id: string;
+  /** Agent identity — see HostSessionStartRequest.host for the contract. */
+  host?: string;
   prompt: string;
   cwd?: string;
 }

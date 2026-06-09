@@ -27,6 +27,10 @@ export function eventToBridgeRequest(event: HostEvent): AnyBridgeRequest | null 
       return {
         type: 'host_session_start',
         host_session_id: event.hostSessionId,
+        // Pass the agent identity so the server stops defaulting every
+        // chat to 'cursor' — without this, claude-code + codex sessions
+        // appeared under the wrong source chip in Active Chats.
+        host: event.host,
         cwd: event.cwd,
         composer_mode: event.composerMode,
       };
@@ -34,6 +38,7 @@ export function eventToBridgeRequest(event: HostEvent): AnyBridgeRequest | null 
       return {
         type: 'host_prompt_submit',
         host_session_id: event.hostSessionId,
+        host: event.host,
         prompt: event.prompt,
         cwd: event.cwd,
       };

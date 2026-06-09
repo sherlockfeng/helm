@@ -128,6 +128,7 @@ export function ChatsPage() {
               <ChatRailRow
                 key={chat.id}
                 chat={chat}
+                roles={roles}
                 selected={selectedId === chat.id}
                 onClick={() => setSelectedId(chat.id)}
               />
@@ -153,17 +154,23 @@ export function ChatsPage() {
 // ── Rail row ─────────────────────────────────────────────────────────────
 
 function ChatRailRow({
-  chat, selected, onClick,
+  chat, roles, selected, onClick,
 }: {
   chat: ActiveChat;
+  roles: { id: string; name: string }[];
   selected: boolean;
   onClick: () => void;
 }): ReactElement {
   const queued = chat.queuedMessageCount ?? 0;
-  // Source isn't shown here — it's a single chat → single source, and
-  // the dominant value of the row is the label + recency. The colored
-  // chip lives in the detail header where the developer needs to ID it
-  // mid-task; here it would just be repetitive noise per row.
+  const turns = chat.turnCount ?? 0;
+  const pending = chat.pendingCandidateCount ?? 0;
+  const key = sourceKey(chat);
+  // First bound role's display name — multi-role chats are rare; if it
+  // matters we can show "+N" later. For now first-wins keeps the row tight.
+  const firstRole = chat.roleIds.length > 0
+    ? (roles.find((r) => r.id === chat.roleIds[0])?.name ?? chat.roleIds[0]!)
+    : null;
+  const totalRoles = chat.roleIds.length;
   return (
     <button
       type="button"
@@ -172,13 +179,36 @@ function ChatRailRow({
       aria-current={selected ? 'page' : undefined}
       title={chat.cwd ?? chat.id}
     >
-      <div className="helm-rail-row-label">{chatLabel(chat)}</div>
+      <div className="helm-rail-row-title">
+        <span className={`helm-conv-source-chip helm-conv-source-${key}`}>
+          {sourceLabel(key)}
+        </span>
+        <span className="helm-rail-row-label">{chatLabel(chat)}</span>
+      </div>
       <div className="helm-rail-row-meta">
-        <span>{formatRelative(chat.lastSeenAt)}</span>
-        {chat.roleIds.length > 0 && (
-          <span>· {chat.roleIds.length} role{chat.roleIds.length === 1 ? '' : 's'}</span>
+        <span className="helm-rail-row-role">
+          {firstRole
+            ? <>{firstRole}{totalRoles > 1 ? ` +${totalRoles - 1}` : ''}</>
+            : <span className="muted">no role</span>}
+        </span>
+        {turns > 0 && (
+          <>
+            <span className="helm-rail-row-sep">·</span>
+            <span>{turns} turn{turns === 1 ? '' : 's'}</span>
+          </>
         )}
-        {queued > 0 && <span className="helm-rail-badge warn">{queued}</span>}
+        <span className="helm-rail-row-sep">·</span>
+        <span>{formatRelative(chat.lastSeenAt)}</span>
+        {pending > 0 && (
+          <span className="helm-rail-row-badge helm-rail-row-badge-cand" title={`${pending} pending knowledge candidate${pending === 1 ? '' : 's'}`}>
+            ⚠ {pending}
+          </span>
+        )}
+        {queued > 0 && (
+          <span className="helm-rail-row-badge helm-rail-row-badge-queued" title={`${queued} queued message${queued === 1 ? '' : 's'}`}>
+            📨 {queued}
+          </span>
+        )}
       </div>
     </button>
   );

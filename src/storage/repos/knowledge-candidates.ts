@@ -265,3 +265,23 @@ export function pendingCountsByRole(
   for (const r of rows) out.set(String(r.role_id), Number(r.n));
   return out;
 }
+
+/**
+ * Per-session count of `pending` candidates, returned as a plain map so
+ * the API layer can hydrate every Active Chats row's "X candidates"
+ * badge in one round-trip. Only sessions with ≥1 pending candidate are
+ * returned; missing keys = 0.
+ */
+export function pendingCountsByHostSession(
+  db: Database.Database,
+): Record<string, number> {
+  const rows = db.prepare(`
+    SELECT host_session_id, COUNT(*) AS n
+      FROM knowledge_candidates
+     WHERE status = 'pending' AND host_session_id IS NOT NULL
+     GROUP BY host_session_id
+  `).all() as Array<{ host_session_id: string; n: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.host_session_id] = Number(r.n);
+  return out;
+}

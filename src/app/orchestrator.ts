@@ -91,6 +91,7 @@ import {
   setLastInjectedRoleIds,
   upsertHostSession,
 } from '../storage/repos/host-sessions.js';
+import { appendHostEvent } from '../storage/repos/host-event-log.js';
 import {
   dequeueMessages,
   enqueueMessage,
@@ -668,6 +669,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     const trimmed = (req.prompt ?? '').trim();
     if (trimmed) {
       setHostSessionFirstPrompt(deps.db, req.host_session_id, trimmed);
+      // Append to host_event_log so the per-conversation timeline can be
+      // reconstructed turn-by-turn (see src/api/conversation-detail.ts).
+      // turnCount surfaced on /api/active-chats is COUNT(*) where kind='prompt'.
+      appendHostEvent(deps.db, {
+        hostSessionId: req.host_session_id,
+        kind: 'prompt',
+        payload: { text: trimmed, ...(req.cwd ? { cwd: req.cwd } : {}) },
+        createdAt: new Date().toISOString(),
+      });
       log.session(req.host_session_id).info('prompt_submit', {
         event: 'prompt_submit',
         data: { promptLen: trimmed.length, cwd: req.cwd },
@@ -840,6 +850,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     autoUpsertSession(deps.db, events, log, req.host_session_id);
     const text = (req.response_text ?? '').trim();
     if (!text) return { ok: true, suppressed: true };
+
+    // Mirror to host_event_log so the timeline section can reconstruct
+    // each turn's response without re-querying the host transcript.
+    appendHostEvent(deps.db, {
+      hostSessionId: req.host_session_id,
+      kind: 'response',
+      payload: { text },
+      createdAt: new Date().toISOString(),
+    });
 
     // Phase 78: fire-and-forget capture pass. Independent of the Lark
     // mirror — we run capture whenever the chat is bound to ≥1 role,

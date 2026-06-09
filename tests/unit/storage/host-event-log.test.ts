@@ -1,6 +1,13 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendHostEvent, countHostEvents, deleteHostEvents, listHostEvents, pruneHostEvents } from '../../../src/storage/repos/host-event-log.js';
+import {
+  appendHostEvent,
+  countHostEvents,
+  deleteHostEvents,
+  listHostEvents,
+  promptCountsByHostSession,
+  pruneHostEvents,
+} from '../../../src/storage/repos/host-event-log.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
 import { runMigrations } from '../../../src/storage/migrations.js';
 
@@ -88,5 +95,26 @@ describe('host event log', () => {
   it('attack: pruneHostEvents when count <= maxEvents is a no-op', () => {
     appendHostEvent(db, { hostSessionId: 's1', kind: 'prompt', payload: {}, createdAt: new Date().toISOString() });
     expect(pruneHostEvents(db, 's1', 10)).toBe(0);
+  });
+
+  it('promptCountsByHostSession returns prompt count per session (responses excluded)', () => {
+    seedSession(db, 's2');
+    const now = new Date().toISOString();
+    appendHostEvent(db, { hostSessionId: 's1', kind: 'prompt',   payload: {}, createdAt: now });
+    appendHostEvent(db, { hostSessionId: 's1', kind: 'response', payload: {}, createdAt: now });
+    appendHostEvent(db, { hostSessionId: 's1', kind: 'prompt',   payload: {}, createdAt: now });
+    appendHostEvent(db, { hostSessionId: 's2', kind: 'prompt',   payload: {}, createdAt: now });
+    appendHostEvent(db, { hostSessionId: 's2', kind: 'tool_use', payload: {}, createdAt: now });
+    const counts = promptCountsByHostSession(db);
+    expect(counts['s1']).toBe(2);
+    expect(counts['s2']).toBe(1);
+  });
+
+  it('promptCountsByHostSession omits sessions with zero prompts', () => {
+    seedSession(db, 's2');
+    appendHostEvent(db, { hostSessionId: 's1', kind: 'response', payload: {}, createdAt: new Date().toISOString() });
+    const counts = promptCountsByHostSession(db);
+    expect(counts['s1']).toBeUndefined();
+    expect(counts['s2']).toBeUndefined();
   });
 });

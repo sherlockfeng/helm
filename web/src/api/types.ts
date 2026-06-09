@@ -34,6 +34,17 @@ export interface ActiveChat {
    * to nudge Cursor; without it, queued messages look invisible.
    */
   queuedMessageCount?: number;
+  /**
+   * Number of user prompts captured for this chat (= turn count). Drives
+   * the rail row's "12 turns" sub-line. Absent when zero.
+   */
+  turnCount?: number;
+  /**
+   * Number of pending knowledge candidates surfaced from this chat.
+   * Drives the rail row's "⚠ N" badge — chats with stuff worth promoting
+   * stand out at a glance. Absent when zero.
+   */
+  pendingCandidateCount?: number;
 }
 
 export interface PendingApproval {

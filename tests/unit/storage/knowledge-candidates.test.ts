@@ -21,6 +21,7 @@ import {
   getCandidateById,
   insertCandidateIfNew,
   listCandidatesForRole,
+  pendingCountsByHostSession,
   pendingCountsByRole,
   setCandidateStatus,
   updateCandidateText,
@@ -234,5 +235,40 @@ describe('FK behavior', () => {
     const row = getCandidateById(db, 'a');
     expect(row).toBeDefined();
     expect(row!.hostSessionId).toBeUndefined();
+  });
+});
+
+describe('pendingCountsByHostSession', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => {
+    db = openDb();
+    seedRole(db, 'r1');
+    for (const id of ['chat-A', 'chat-B', 'chat-C']) {
+      upsertHostSession(db, {
+        id, host: 'cursor', status: 'active',
+        firstSeenAt: '2026-05-14', lastSeenAt: '2026-05-14',
+      });
+    }
+  });
+  afterEach(() => { db.close(); });
+
+  it('counts pending only — accepted/rejected excluded; skips sessions with none', () => {
+    // chat-A: 2 pending + 1 accepted
+    insertCandidateIfNew(db, makeCandidate({ id: 'a1', hostSessionId: 'chat-A', chunkText: 'a1' }));
+    insertCandidateIfNew(db, makeCandidate({ id: 'a2', hostSessionId: 'chat-A', chunkText: 'a2' }));
+    insertCandidateIfNew(db, makeCandidate({ id: 'a3', hostSessionId: 'chat-A', chunkText: 'a3' }));
+    setCandidateStatus(db, 'a3', 'accepted', '2026-05-14');
+    // chat-B: 1 pending
+    insertCandidateIfNew(db, makeCandidate({ id: 'b1', hostSessionId: 'chat-B', chunkText: 'b1' }));
+    // chat-C: 1 rejected (no pending) → omitted from map
+    insertCandidateIfNew(db, makeCandidate({ id: 'c1', hostSessionId: 'chat-C', chunkText: 'c1' }));
+    setCandidateStatus(db, 'c1', 'rejected', '2026-05-14');
+    // null-session candidate (e.g. chat row was deleted post-capture) — should not blow up
+    insertCandidateIfNew(db, makeCandidate({ id: 'orphan', chunkText: 'orphan' }));
+
+    const counts = pendingCountsByHostSession(db);
+    expect(counts['chat-A']).toBe(2);
+    expect(counts['chat-B']).toBe(1);
+    expect(counts['chat-C']).toBeUndefined();
   });
 });

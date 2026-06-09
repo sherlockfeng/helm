@@ -60,6 +60,26 @@ export function deleteHostEvents(db: Database.Database, hostSessionId: string): 
   return result.changes;
 }
 
+/**
+ * One-shot aggregate: per-session count of kind='prompt' rows, used by
+ * the Active Chats list to render a "12 turns" badge on each rail row
+ * without N+1 round-trips. Only sessions with ≥1 prompt are returned;
+ * the renderer treats missing keys as 0.
+ */
+export function promptCountsByHostSession(
+  db: Database.Database,
+): Record<string, number> {
+  const rows = db.prepare(`
+    SELECT host_session_id, COUNT(*) AS cnt
+      FROM host_event_log
+     WHERE kind = 'prompt'
+     GROUP BY host_session_id
+  `).all() as Array<{ host_session_id: string; cnt: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.host_session_id] = r.cnt;
+  return out;
+}
+
 export function pruneHostEvents(
   db: Database.Database,
   hostSessionId: string,

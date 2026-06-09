@@ -799,12 +799,13 @@ code, pre {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  /* Target row height ~52–56px per spec; padding 10/12 hits ~54. */
+  gap: 4px;
+  /* Two lines (title + meta). Padding 10/12 + 2 lines + 4px gap ≈ 68px. */
   padding: 10px 12px;
   border-left: 2px solid transparent;
   border-bottom: 1px solid var(--border);
   transition: background-color 0.1s, border-left-color 0.1s;
+  min-width: 0;
 }
 .helm-rail-row:hover { background: var(--hover); }
 .helm-rail-row.selected {
@@ -813,6 +814,13 @@ code, pre {
   border-left-color: var(--accent, #3b82f6);
 }
 
+/* First line: source chip + chat label on one baseline */
+.helm-rail-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .helm-rail-row-label {
   font-size: 13px;
   font-weight: 500;
@@ -821,16 +829,40 @@ code, pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.3;
+  flex: 1;
+  min-width: 0;
 }
 
+/* Second line: role · turns · time + right-aligned badges */
 .helm-rail-row-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   font-size: 11px;
   color: var(--text-tertiary);
   line-height: 1.2;
+  min-width: 0;
 }
+.helm-rail-row-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 130px;
+}
+.helm-rail-row-sep { opacity: 0.5; }
+.helm-rail-row-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+/* Stack multiple badges flush together; only the first claims margin-left:auto. */
+.helm-rail-row-badge + .helm-rail-row-badge { margin-left: 4px; }
+.helm-rail-row-badge-cand   { background: rgba(245, 158, 11, 0.18); color: #b45309; }
+.helm-rail-row-badge-queued { background: rgba(59, 130, 246, 0.18); color: #1d4ed8; }
 
 .helm-rail-badge {
   font-size: 10px;

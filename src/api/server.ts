@@ -80,6 +80,8 @@ import {
   listPendingBinds,
   pendingMessageCountsByHostSession,
 } from '../storage/repos/channel-bindings.js';
+import { promptCountsByHostSession } from '../storage/repos/host-event-log.js';
+import { pendingCountsByHostSession as candidateCountsByHostSession } from '../storage/repos/knowledge-candidates.js';
 import {
   deleteSource,
   getChunkById as getChunkByIdRepo,
@@ -528,14 +530,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/active-chats') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const sessions = listActiveSessions(deps.db);
-        // Phase 70: hydrate each chat with its current pending-message
-        // depth so the UI can show a "queued" badge. One aggregate query
-        // covers all rows; chats with no queue get omitted from the map
-        // and fall back to undefined (the renderer treats undefined as 0).
+        // Three aggregate queries (queued messages, prompt count = turns,
+        // pending candidates) hydrate every Active Chats row in one
+        // round-trip. The rail uses these to render compact 2-line cards
+        // ("Goofy 专家 · 12 turns · 5m · 2 candidates") without needing a
+        // detail fetch per row.
         const queueDepth = pendingMessageCountsByHostSession(deps.db);
+        const turnsBySession = promptCountsByHostSession(deps.db);
+        const candidatesBySession = candidateCountsByHostSession(deps.db);
         const enriched = sessions.map((s) => ({
           ...s,
           ...(queueDepth[s.id] ? { queuedMessageCount: queueDepth[s.id] } : {}),
+          ...(turnsBySession[s.id] ? { turnCount: turnsBySession[s.id] } : {}),
+          ...(candidatesBySession[s.id]
+            ? { pendingCandidateCount: candidatesBySession[s.id] }
+            : {}),
         }));
         return send(res, 200, { chats: enriched });
       }

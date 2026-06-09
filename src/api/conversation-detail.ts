@@ -24,10 +24,7 @@
 import type Database from 'better-sqlite3';
 import { getHostSession } from '../storage/repos/host-sessions.js';
 import { listHostEvents } from '../storage/repos/host-event-log.js';
-import {
-  getPointsForRetrieval,
-  getRetrievalsForSession,
-} from '../storage/repos/retrieval-log.js';
+import { getRetrievalsForSession } from '../storage/repos/retrieval-log.js';
 import type {
   HostEventLogEntry,
   HostSession,
@@ -35,12 +32,30 @@ import type {
   RetrievalLogPoint,
 } from '../storage/types.js';
 
+/**
+ * One retrieved point hydrated with the chunk-side metadata the renderer
+ * needs to render `→ title · source · 0.82` rows without N+1 round-trips
+ * to /api/knowledge/points/:id. Falls back to placeholders when the chunk
+ * was deleted after retrieval (rare — chunks are FK-protected, but the
+ * join is left-outer just in case).
+ */
+export interface KnowledgeInPlayPoint extends RetrievalLogPoint {
+  /** chunk.title — short label, or undefined if the chunk no longer exists. */
+  title?: string;
+  /** chunk.source_file — the path/URL the chunk came from. */
+  sourceFile?: string;
+  /** chunk.role_id — which role this chunk belongs to. Drives chip color. */
+  roleId?: string;
+  /** Role display name, joined for renderer convenience. */
+  roleName?: string;
+}
+
 export interface ConversationDetail {
   session: HostSession;
   timeline: HostEventLogEntry[];
   knowledgeInPlay: ReadonlyArray<{
     log: RetrievalLog;
-    points: RetrievalLogPoint[];
+    points: KnowledgeInPlayPoint[];
   }>;
   /**
    * Candidates surfaced from this conversation, still awaiting review.
@@ -93,7 +108,7 @@ export function getConversationDetail(
   const retrievals = getRetrievalsForSession(db, hostSessionId, retrievalLimit);
   const knowledgeInPlay = retrievals.map((log) => ({
     log,
-    points: getPointsForRetrieval(db, log.id),
+    points: hydratePointsForRetrieval(db, log.id),
   }));
 
   // Candidates: tied to this session via the `host_session_id` FK on
@@ -119,4 +134,50 @@ export function getConversationDetail(
   });
 
   return { session, timeline, knowledgeInPlay, candidates };
+}
+
+/**
+ * Hydrate retrieval points with chunk + role metadata in one query. Used
+ * instead of `getPointsForRetrieval` (raw points only) so the renderer
+ * gets `title · source · roleName` without an N+1 fetch per point. The
+ * join is LEFT OUTER on chunks because a chunk may have been deleted
+ * after this retrieval landed.
+ */
+function hydratePointsForRetrieval(
+  db: Database.Database,
+  logId: string,
+): KnowledgeInPlayPoint[] {
+  const rows = db.prepare(`
+    SELECT
+      rlp.log_id, rlp.point_id, rlp.rank, rlp.fusion_score,
+      rlp.leg_contrib, rlp.injected,
+      kc.title       AS chunk_title,
+      kc.source_file AS chunk_source_file,
+      kc.role_id     AS chunk_role_id,
+      r.name         AS role_name
+    FROM retrieval_log_points rlp
+    LEFT JOIN knowledge_chunks kc ON kc.id = rlp.point_id
+    LEFT JOIN roles            r  ON r.id  = kc.role_id
+    WHERE rlp.log_id = ?
+    ORDER BY rlp.rank ASC
+  `).all(logId) as Record<string, unknown>[];
+
+  return rows.map((r) => {
+    const base: KnowledgeInPlayPoint = {
+      logId: String(r['log_id']),
+      pointId: String(r['point_id']),
+      rank: Number(r['rank']),
+      fusionScore: Number(r['fusion_score']),
+      injected: Number(r['injected']) === 1,
+    };
+    if (r['leg_contrib']) {
+      try { base.legContrib = JSON.parse(String(r['leg_contrib'])); }
+      catch { /* malformed historic blob — drop the field */ }
+    }
+    if (r['chunk_title']) base.title = String(r['chunk_title']);
+    if (r['chunk_source_file']) base.sourceFile = String(r['chunk_source_file']);
+    if (r['chunk_role_id']) base.roleId = String(r['chunk_role_id']);
+    if (r['role_name']) base.roleName = String(r['role_name']);
+    return base;
+  });
 }

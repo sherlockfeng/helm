@@ -110,6 +110,49 @@ describe('getConversationDetail', () => {
     expect(detail.knowledgeInPlay[1]!.points[0]!.fusionScore).toBe(0.9);
   });
 
+  it('hydrates retrieved points with chunk title + source_file + role name', () => {
+    seedSession(db, 's-1');
+    seedRoleAndChunk(db, 'r-1', 'p-1');
+    // Backfill the chunk title + source_file that seedRoleAndChunk omits —
+    // matches what the importer would write at chunk-create time.
+    db.prepare(`
+      UPDATE knowledge_chunks
+         SET title = ?, source_file = ?
+       WHERE id = ?
+    `).run('middleware-conventions.md', 'docs/middleware/conventions.md', 'p-1');
+    recordRetrieval(db, {
+      id: 'log-1', hostSessionId: 's-1', turn: 1, queryText: 'q', ts: 100,
+    }, [
+      { pointId: 'p-1', rank: 0, fusionScore: 0.82, injected: true },
+    ]);
+
+    const detail = getConversationDetail(db, 's-1')!;
+    const pt = detail.knowledgeInPlay[0]!.points[0]!;
+    expect(pt.title).toBe('middleware-conventions.md');
+    expect(pt.sourceFile).toBe('docs/middleware/conventions.md');
+    expect(pt.roleId).toBe('r-1');
+    expect(pt.roleName).toBe('Role-r-1');
+  });
+
+  it('hydration tolerates a deleted chunk — point survives with no title/source', () => {
+    seedSession(db, 's-1');
+    seedRoleAndChunk(db, 'r-1', 'p-orphan');
+    recordRetrieval(db, {
+      id: 'log-1', hostSessionId: 's-1', turn: 1, queryText: 'q', ts: 100,
+    }, [
+      { pointId: 'p-orphan', rank: 0, fusionScore: 0.5, injected: false },
+    ]);
+    db.prepare('DELETE FROM knowledge_chunks WHERE id = ?').run('p-orphan');
+
+    const detail = getConversationDetail(db, 's-1')!;
+    const pt = detail.knowledgeInPlay[0]!.points[0]!;
+    expect(pt.pointId).toBe('p-orphan');
+    expect(pt.fusionScore).toBe(0.5);
+    expect(pt.injected).toBe(false);
+    expect(pt.title).toBeUndefined();
+    expect(pt.roleName).toBeUndefined();
+  });
+
   it('returns pending candidates tied to this session only', () => {
     seedSession(db, 's-1');
     seedSession(db, 's-2');

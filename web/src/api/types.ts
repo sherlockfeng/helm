@@ -290,6 +290,67 @@ export interface KnowledgeCandidate {
   provenance: CandidateProvenance;
 }
 
+// ── Conversation detail (one chat's full aggregate) ───────────────────────
+
+export interface ConversationDetailSession {
+  id: string;
+  host: string;
+  cwd?: string;
+  status: 'active' | 'closed';
+  firstSeenAt: string;
+  lastSeenAt: string;
+  firstPrompt?: string;
+  displayName?: string;
+  roleIds?: string[];
+  agentKind?: string;
+}
+
+export interface ConversationDetailEvent {
+  id: number;
+  hostSessionId: string;
+  kind: string;
+  payload: string;
+  createdAt: string;
+}
+
+export interface ConversationDetailRetrievalPoint {
+  logId: string;
+  pointId: string;
+  rank: number;
+  fusionScore: number;
+  injected: boolean;
+  title?: string;
+  sourceFile?: string;
+  roleId?: string;
+  roleName?: string;
+}
+
+export interface ConversationDetailKnowledgeInPlay {
+  log: {
+    id: string;
+    hostSessionId: string;
+    turn: number;
+    queryText?: string;
+    ts: number;
+  };
+  points: ConversationDetailRetrievalPoint[];
+}
+
+export interface ConversationDetailCandidate {
+  id: string;
+  chunkText: string;
+  scoreEntity?: number;
+  scoreCosine?: number;
+  createdAt: string;
+}
+
+export interface ConversationDetail {
+  session: ConversationDetailSession;
+  timeline: ConversationDetailEvent[];
+  knowledgeInPlay: ConversationDetailKnowledgeInPlay[];
+  candidates: ConversationDetailCandidate[];
+}
+
 /** Phase 79 — one row in the Settings → Storage plugins list. */
 export type StoragePluginInfo =
   | { ok: true; id: string; scheme: string; version: string; apiVersion: number; loadedFrom: string }

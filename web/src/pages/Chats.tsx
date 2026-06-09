@@ -1,15 +1,22 @@
 /**
- * Active Chats — every host_session that's still open.
+ * Active Chats — Conversations rail + Knowledge IN/OUT detail pane.
  *
- * Phase 25: each chat row had a single-role picker dropdown.
- * Phase 36: Close + Delete buttons (soft / cascade).
- * Phase 42: dropdown → multi-select chips. Each bound role shows as a chip
- * with an inline ✕ to remove. An "+ Add role" picker beneath lets the user
- * stack more (e.g. Goofy + 容灾大盘 + Developer). The next session_start
- * concatenates every role's prompt + chunks into the injected context.
- * Phase 55: chat title is editable inline. The user-set displayName wins
- * over firstPrompt. Pencil icon flips the title to a textbox; Enter saves,
- * Escape cancels, blur saves. Empty value clears the override.
+ * Repositioned (this PR) from "session control panel" to "knowledge flow
+ * view per chat". The detail pane answers two questions for each chat:
+ *
+ *   - Knowledge IN  — what roles auto-inject context here, and which
+ *                     chunks were retrieved for the latest turn.
+ *   - Knowledge OUT — what passages from this conversation the system
+ *                     flagged as worth promoting to permanent knowledge,
+ *                     with promote / dismiss right on the row.
+ *
+ * Mirror-to-Lark, the Lark stat tile, the metric strip, the Close button,
+ * the inspector sidebar, and the bordered sub-cards from the previous
+ * design are all gone. Delete moves into the header overflow menu.
+ *
+ * Backed by /api/conversations/:id/detail (src/api/conversation-detail.ts).
+ * The rail still uses /api/active-chats so it stays cheap; the heavier
+ * detail aggregate is fetched only for the currently-selected row.
  */
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
@@ -17,15 +24,16 @@ import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
-import { Button } from '../components/Button.js';
 import { toast } from 'sonner';
-import { Card } from '../components/Card.js';
 import { Combobox } from '../components/Combobox.js';
-import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
+import { ConfirmDialog } from '../components/Dialog.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { StatTile } from '../components/StatTile.js';
-import type { ActiveChat, ChannelBinding } from '../api/types.js';
+import type {
+  ActiveChat,
+  ConversationDetailCandidate,
+  ConversationDetailKnowledgeInPlay,
+} from '../api/types.js';
 
 function formatRelative(iso: string): string {
   const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -46,13 +54,6 @@ function truncate(s: string, max = 80): string {
   return `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
-/**
- * Phase 55: pick the best human-readable label for a chat.
- *   1. user-set displayName (wins outright)
- *   2. first user prompt captured by Phase 32
- *   3. cwd (when no prompt yet — fresh chat)
- *   4. id prefix (last resort)
- */
 function chatLabel(chat: ActiveChat): string {
   if (chat.displayName && chat.displayName.trim()) return chat.displayName;
   if (chat.firstPrompt && chat.firstPrompt.trim()) return truncate(chat.firstPrompt);
@@ -60,44 +61,39 @@ function chatLabel(chat: ActiveChat): string {
   return `${chat.id.slice(0, 12)}…`;
 }
 
+/**
+ * Map agent_kind / host string to a stable class fragment. Drives the
+ * source chip color (cursor / claude-code / codex / unknown).
+ */
+function sourceKey(chat: { host?: string; agentKind?: string }): string {
+  const raw = (chat.agentKind || chat.host || '').toLowerCase();
+  if (raw.includes('claude')) return 'claude-code';
+  if (raw.includes('codex')) return 'codex';
+  if (raw.includes('cursor')) return 'cursor';
+  return 'unknown';
+}
+
+function sourceLabel(key: string): string {
+  if (key === 'claude-code') return 'CLAUDE';
+  if (key === 'cursor') return 'CURSOR';
+  if (key === 'codex') return 'CODEX';
+  return key.toUpperCase();
+}
+
 export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
   const { data: rolesData } = useApi(() => helmApi.roles());
-  // Phase 62: pull bindings so we can show Lark status per chat. Refreshes
-  // on the same SSE events the Bindings page listens for.
-  const { data: bindingsData, reload: reloadBindings } = useApi(() => helmApi.bindings());
-  // Phase 79 follow-up — AKM-inspired rail+detail layout. Tracks which
-  // chat is currently focused in the detail pane; defaults to the first
-  // one on load and follows newly-arrived chats only when nothing is
-  // selected (otherwise an SSE-triggered reload would steal focus).
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // helm-design PR 9: load errors → toast (deduped per query).
+
   useEffect(() => {
     if (error) toast.error(`Active chats: ${error.message}`, { id: 'chats-load' });
   }, [error]);
 
-  useEventStream(() => { reload(); reloadBindings(); }, {
-    types: [
-      'session.started', 'session.closed',
-      'binding.created', 'binding.removed',
-      // Phase 70: when a message is enqueued (Lark → channel_message_queue)
-      // or drained (Cursor host_stop) we want the per-chat badge to flip
-      // immediately, not on the next 30s reconcile.
-      'channel.message_enqueued', 'channel.message_consumed',
-    ],
+  useEventStream(() => { reload(); }, {
+    types: ['session.started', 'session.closed'],
   });
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
-  // Phase 62: which chat (if any) currently has the Mirror-to-Lark modal open.
-  const [bindModalFor, setBindModalFor] = useState<string | null>(null);
-  // helm-design PR 3: themed ConfirmDialog replaces window.confirm for
-  // Close/Delete. cascade=true means Delete (destructive, cascades);
-  // cascade=false means Close (soft, history kept).
-  const [closeConfirm, setCloseConfirm] = useState<{ id: string; cascade: boolean } | null>(null);
 
-  // Phase 79 follow-up: seed selection on first load + when the selected
-  // chat disappears (close / delete). Don't auto-jump on every reload —
-  // SSE bursts shouldn't yank focus from what the user is reading.
+  // Seed selection on first load + when the selected chat disappears.
   useEffect(() => {
     const chats = data?.chats ?? [];
     if (chats.length === 0) {
@@ -107,441 +103,541 @@ export function ChatsPage() {
     const stillExists = selectedId !== null && chats.some((c) => c.id === selectedId);
     if (!stillExists) setSelectedId(chats[0]!.id);
   }, [data, selectedId]);
-  // Phase 55: which row's title is currently being edited. Only one at a
-  // time so escape-from-edit doesn't accidentally cancel another row.
-  const [editingId, setEditingId] = useState<string | null>(null);
 
-  async function saveLabel(hostSessionId: string, raw: string): Promise<void> {
-    setSavingId(hostSessionId);
-    setRowError(null);
-    try {
-      // Empty / whitespace-only → null clears the override; backend trims and
-      // caps so we don't have to.
-      const cleaned = raw.trim();
-      await helmApi.setChatLabel(hostSessionId, cleaned.length === 0 ? null : cleaned);
-      reload();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      setRowError({ id: hostSessionId, message: msg });
-    } finally {
-      setSavingId(null);
-      setEditingId(null);
-    }
-  }
-
-  async function addRole(hostSessionId: string, roleId: string): Promise<void> {
-    setSavingId(hostSessionId);
-    setRowError(null);
-    try {
-      await helmApi.addChatRole(hostSessionId, roleId);
-      reload();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      setRowError({ id: hostSessionId, message: msg });
-    } finally {
-      setSavingId(null);
-    }
-  }
-
-  async function removeRole(hostSessionId: string, roleId: string): Promise<void> {
-    setSavingId(hostSessionId);
-    setRowError(null);
-    try {
-      await helmApi.removeChatRole(hostSessionId, roleId);
-      reload();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      setRowError({ id: hostSessionId, message: msg });
-    } finally {
-      setSavingId(null);
-    }
-  }
-
-  async function closeChat(hostSessionId: string, cascade: boolean): Promise<void> {
-    setSavingId(hostSessionId);
-    setRowError(null);
-    try {
-      await helmApi.closeChat(hostSessionId, { cascade });
-      reload();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      setRowError({ id: hostSessionId, message: msg });
-    } finally {
-      setSavingId(null);
-      setCloseConfirm(null);
-    }
-  }
-
-  const roles = rolesData?.roles ?? [];
-
-  // Phase 79 follow-up: stats summary — # chats, total queued msgs,
-  // # chats with a Lark binding. Stays cheap (one pass over local data).
   const chats = data?.chats ?? [];
-  const bindings = bindingsData?.bindings ?? [];
-  const totalQueued = chats.reduce((acc, c) => acc + (c.queuedMessageCount ?? 0), 0);
-  const larkBoundChatIds = new Set(
-    bindings.filter((b) => b.channel === 'lark').map((b) => b.hostSessionId),
-  );
+  const roles = rolesData?.roles ?? [];
 
   return (
     <>
-      {/* Phase 79 follow-up: stat strip at top — chats / queued / Lark
-          mirrored, AKM Sessions-page style. Cheap, derived from data
-          already in memory. helm-design PR 6 ports the bespoke header
-          to <PageHeader/> + <StatTile/>. */}
-      <PageHeader
-        title="Active Chats"
-        subtitle="Cursor sessions Helm is observing. Bind a role to inject its prompt + knowledge."
-        stats={<>
-          <StatTile label="Chats" value={chats.length} tone={chats.length > 0 ? 'live' : 'muted'} />
-          <StatTile label="Queued msgs" value={totalQueued} tone={totalQueued > 0 ? 'warn' : 'muted'} />
-          <StatTile label="Lark mirrored" value={larkBoundChatIds.size} tone={larkBoundChatIds.size > 0 ? 'info' : 'muted'} />
-        </>}
-      />
-
+      <PageHeader title="Active Chats" />
 
       {loading && <CardSkeletonList n={3} />}
 
-      {data && data.chats.length === 0 && (
+      {data && chats.length === 0 && (
         <EmptyState
-          title="No active Cursor chats."
-          hint="Start one and Helm will pick it up automatically."
+          title="No active chats."
+          hint="Start one in Cursor / Claude Code / Codex and Helm will pick it up."
         />
       )}
 
-      {/* 2-col rail+detail layout — rail lists every chat with tone
-          colors driven by status (queued > 0 → warn, has Lark → info).
-          Detail pane renders the full existing chat card for the
-          selected row. Single-chat install still works fine — the rail
-          shows one item and the pane is the same as before. */}
-      {data && data.chats.length > 0 && (
-      <div className="helm-rail-layout helm-rail-layout--with-inspector">
-        <aside className="helm-rail" aria-label="Chats list">
-          {data.chats.map((chat) => (
-            <ChatRailRow
-              key={chat.id}
-              chat={chat}
-              hasLark={larkBoundChatIds.has(chat.id)}
-              selected={selectedId === chat.id}
-              onClick={() => setSelectedId(chat.id)}
-            />
-          ))}
-        </aside>
-
-        <section className="helm-rail-content">
-      {data && data.chats.filter((chat) => chat.id === selectedId).map((chat) => (
-        <Card key={chat.id}>
-          <div className="row">
-            <div>
-              <div className="label">{chat.host}</div>
-              {/* Phase 55: editable title. displayName > firstPrompt > cwd > id.
-                  Click the pencil to edit; Enter saves, Escape cancels, blur saves
-                  (saves empty → clears the override). */}
-              <ChatTitle
+      {data && chats.length > 0 && (
+        <div className="helm-rail-layout">
+          <aside className="helm-rail" aria-label="Chats list">
+            {chats.map((chat) => (
+              <ChatRailRow
+                key={chat.id}
                 chat={chat}
-                editing={editingId === chat.id}
-                saving={savingId === chat.id}
-                onStartEdit={() => setEditingId(chat.id)}
-                onCancelEdit={() => setEditingId(null)}
-                onSave={(raw) => saveLabel(chat.id, raw)}
+                selected={selectedId === chat.id}
+                onClick={() => setSelectedId(chat.id)}
               />
-              <div className="label" style={{ marginTop: 6 }}>
-                {chat.cwd ? <>{chat.cwd} • </> : null}
-                session <code title={chat.id}>{shortId(chat.id)}</code>
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-              <span className="helm-status ok">
-                <span className="dot" />
-                last seen {formatRelative(chat.lastSeenAt)}
-              </span>
-              {/* Phase 70: messages from Lark / other channels are pushed
-                  into channel_message_queue. Cursor only drains via the
-                  `host_stop` hook (turn end / new prompt), so a "queued"
-                  badge tells the user "your message is here but Cursor
-                  needs a nudge before the agent sees it". Hidden when 0. */}
-              {chat.queuedMessageCount ? (
-                <span
-                  className="badge"
-                  title={
-                    `${chat.queuedMessageCount} channel message${chat.queuedMessageCount === 1 ? '' : 's'} `
-                    + 'waiting for Cursor. Send any prompt in this chat (or wait for '
-                    + 'the current turn to end) to drain them.'
-                  }
-                  style={{
-                    background: 'var(--accent, #ff9500)',
-                    color: '#fff',
-                    fontSize: 11,
-                    padding: '2px 6px',
-                    borderRadius: 8,
-                  }}
-                >
-                  📨 {chat.queuedMessageCount} queued
-                </span>
-              ) : null}
-            </div>
-          </div>
+            ))}
+          </aside>
 
-          {/* Phase 42: every bound role renders as a chip with inline ✕.
-              "+ Add role" dropdown lists only roles NOT yet attached. */}
-          <div style={{ marginTop: 12 }}>
-            <div className="muted" style={{ marginBottom: 6 }}>Roles</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-              {chat.roleIds.length === 0 && (
-                <span className="muted" style={{ fontSize: 12 }}>(none — no auto-inject)</span>
-              )}
-              {chat.roleIds.map((rid) => {
-                const role = roles.find((r) => r.id === rid);
-                const display = role
-                  ? `${role.name}${role.isBuiltin ? ' (built-in)' : ''}`
-                  : `${rid} (unknown)`;
-                return (
-                  <span
-                    key={rid}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6,
-                      padding: '2px 8px', borderRadius: 12,
-                      background: 'var(--surface-2, #eef)',
-                      fontSize: 12, fontWeight: 500,
-                    }}
-                  >
-                    {display}
-                    <button
-                      type="button"
-                      aria-label={`Remove role ${role?.name ?? rid} from chat ${chat.id}`}
-                      disabled={savingId === chat.id}
-                      onClick={() => { void removeRole(chat.id, rid); }}
-                      style={{
-                        all: 'unset', cursor: 'pointer', fontSize: 14,
-                        opacity: savingId === chat.id ? 0.4 : 0.7, lineHeight: 1,
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                );
-              })}
-              {(() => {
-                const addable = roles.filter((r) => !chat.roleIds.includes(r.id));
-                if (addable.length === 0) return null;
-                // helm-design PR 8: searchable <Combobox> (cmdk + Radix
-                // Popover) replaces the bare <select>. Power users may
-                // have ~50 roles; typing narrows the list.
-                return (
-                  <Combobox
-                    value=""
-                    placeholder="+ Add role…"
-                    disabled={savingId === chat.id}
-                    triggerClassName="helm-chat-add-role"
-                    items={addable.map((r) => ({
-                      value: r.id,
-                      label: r.name,
-                      description: r.isBuiltin ? 'built-in' : undefined,
-                    }))}
-                    onValueChange={(v) => { if (v) void addRole(chat.id, v); }}
-                  />
-                );
-              })()}
-              {savingId === chat.id && <span className="muted" style={{ fontSize: 11 }}>saving…</span>}
-            </div>
-          </div>
-          {rowError && rowError.id === chat.id && (
-            <p className="muted" style={{ color: 'var(--danger)', fontSize: 12, marginTop: 6 }}>
-              {rowError.message}
-            </p>
-          )}
-
-          {/* Phase 62: Lark binding status + initiate button. Bindings live in
-              channel_bindings; we filter client-side rather than adding the
-              join to /api/active-chats's response shape. */}
-          <ChatLarkSection
-            chat={chat}
-            bindings={(bindingsData?.bindings ?? [])
-              .filter((b) => b.hostSessionId === chat.id && b.channel === 'lark')}
-            onMirror={() => setBindModalFor(chat.id)}
-          />
-
-          {/* Phase 36: chat lifecycle controls. Close is soft (history kept);
-              Delete cascades to channel_bindings + queued messages. helm-design
-              PR 3 routes confirmation through ConfirmDialog instead of
-              window.confirm. */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button
-              type="button"
-              disabled={savingId === chat.id}
-              onClick={() => setCloseConfirm({ id: chat.id, cascade: false })}
-              aria-label={`Close chat ${chat.id}`}
-            >
-              Close
-            </button>
-            <Button
-              type="button"
-              variant="danger-outline"
-              disabled={savingId === chat.id}
-              onClick={() => setCloseConfirm({ id: chat.id, cascade: true })}
-              aria-label={`Delete chat ${chat.id} and all bindings`}
-            >
-              Delete
-            </Button>
-          </div>
-        </Card>
-      ))}
-
-        </section>
-
-        {/* helm-design PR 9: inspector column. Surfaces the selected
-            chat's metadata as a sticky side panel so the user doesn't
-            lose track of "what's bound to this chat" while scrolling
-            the detail card. Below 1100 px the column folds back into
-            the main flow (handled in app.css). */}
-        <aside className="helm-inspector" aria-label="Chat inspector">
-          {(() => {
-            const sel = data.chats.find((c) => c.id === selectedId);
-            if (!sel) return null;
-            const selBindings = bindings.filter((b) => b.hostSessionId === sel.id);
-            const selRoles = sel.roleIds
-              .map((rid) => roles.find((r) => r.id === rid))
-              .filter((r): r is NonNullable<typeof r> => Boolean(r));
-            return (
-              <>
-                <div className="helm-inspector-section">
-                  <h4>Knowledge sources</h4>
-                  {selRoles.length === 0 ? (
-                    <p className="helm-inspector-empty">
-                      No roles bound. Add one in the detail pane to start
-                      injecting prompts + chunks at session start.
-                    </p>
-                  ) : (
-                    <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {selRoles.map((r) => (
-                        <li key={r.id} style={{ fontSize: 12 }}>
-                          <strong>{r.name}</strong>
-                          <div className="muted" style={{ fontSize: 11 }}>
-                            {r.isBuiltin ? 'built-in · ' : ''}
-                            {r.chunkCount} chunk{r.chunkCount === 1 ? '' : 's'}
-                            {r.pendingCandidateCount > 0 && (
-                              <> · <span style={{ color: 'var(--warn, #f59e0b)' }}>
-                                {r.pendingCandidateCount} pending
-                              </span></>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="helm-inspector-section">
-                  <h4>Activity</h4>
-                  <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
-                    <li>Last seen <strong>{formatRelative(sel.lastSeenAt)}</strong></li>
-                    <li>
-                      Queued msgs:{' '}
-                      <strong style={{ color: sel.queuedMessageCount ? 'var(--warn, #f59e0b)' : 'inherit' }}>
-                        {sel.queuedMessageCount ?? 0}
-                      </strong>
-                    </li>
-                    <li>Bindings: <strong>{selBindings.length}</strong></li>
-                  </ul>
-                </div>
-              </>
-            );
-          })()}
-        </aside>
-      </div>
+          <section className="helm-rail-content">
+            {selectedId && (
+              <ConversationDetailPane
+                key={selectedId}
+                chat={chats.find((c) => c.id === selectedId)!}
+                roles={roles}
+                onMutated={() => reload()}
+              />
+            )}
+          </section>
+        </div>
       )}
-
-      {bindModalFor && (
-        <MirrorToLarkModal
-          hostSessionId={bindModalFor}
-          chatLabel={(() => {
-            const c = data?.chats.find((x) => x.id === bindModalFor);
-            return c ? chatLabel(c) : bindModalFor;
-          })()}
-          onClose={() => setBindModalFor(null)}
-          onBound={() => {
-            setBindModalFor(null);
-            reload();
-            reloadBindings();
-          }}
-        />
-      )}
-
-      <ConfirmDialog
-        open={closeConfirm !== null}
-        onOpenChange={(o) => { if (!o) setCloseConfirm(null); }}
-        title={closeConfirm?.cascade ? 'Permanently delete this chat?' : 'Close this chat?'}
-        description={closeConfirm?.cascade
-          ? 'The session row, its bindings, and any queued Lark messages will be removed.'
-          : "It'll disappear from this list but the row + bindings stay for history."}
-        confirmLabel={closeConfirm?.cascade ? 'Delete' : 'Close'}
-        tone={closeConfirm?.cascade ? 'danger' : 'primary'}
-        onConfirm={() => {
-          if (closeConfirm) void closeChat(closeConfirm.id, closeConfirm.cascade);
-        }}
-        busy={savingId !== null && savingId === closeConfirm?.id}
-      />
     </>
   );
 }
 
-/**
- * Phase 79 follow-up: one row in the chat rail. Tone driven by status:
- *   - warn  (orange): queued messages waiting for Cursor drain
- *   - info  (blue):   has at least one Lark binding mirroring this chat
- *   - default: idle
- * Active row gets a left border + raised background to anchor the eye.
- */
+// ── Rail row ─────────────────────────────────────────────────────────────
+
 function ChatRailRow({
-  chat,
-  hasLark,
-  selected,
-  onClick,
+  chat, selected, onClick,
 }: {
   chat: ActiveChat;
-  hasLark: boolean;
   selected: boolean;
   onClick: () => void;
 }): ReactElement {
   const queued = chat.queuedMessageCount ?? 0;
-  const tone: 'warn' | 'info' | 'default' = queued > 0 ? 'warn' : hasLark ? 'info' : 'default';
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`helm-rail-row tone-${tone}${selected ? ' selected' : ''}`}
+      className={`helm-rail-row${selected ? ' selected' : ''}`}
       aria-current={selected ? 'page' : undefined}
       title={chat.cwd ?? chat.id}
     >
       <div className="helm-rail-row-label">{chatLabel(chat)}</div>
       <div className="helm-rail-row-meta">
+        <span className={`helm-conv-source-chip helm-conv-source-${sourceKey(chat)}`}>
+          {sourceLabel(sourceKey(chat))}
+        </span>
         <span className="muted">{formatRelative(chat.lastSeenAt)}</span>
-        {queued > 0 && <span className="helm-rail-badge warn">📨 {queued}</span>}
-        {hasLark && queued === 0 && <span className="helm-rail-badge info">L</span>}
-        {chat.roleIds.length > 0 && (
-          <span className="muted" style={{ fontSize: 10 }}>{chat.roleIds.length}r</span>
-        )}
+        {queued > 0 && <span className="helm-rail-badge warn">{queued}</span>}
       </div>
     </button>
   );
 }
 
-// helm-design PR 6: the local Stat() helper moved to the shared
-// <StatTile/> primitive in components/StatTile.tsx so every page
-// can drop a stat strip into its PageHeader without copy-pasting.
+// ── Detail pane (single surface, hairline sections) ─────────────────────
 
-/**
- * Phase 55: editable chat title. Click-to-edit pencil icon when not editing;
- * Enter / blur saves; Escape cancels. The textbox seeds with the current
- * displayName (NOT the firstPrompt fallback) so the user is editing the
- * actual override, not retyping their prompt.
- */
-function ChatTitle({
+function ConversationDetailPane({
   chat,
-  editing,
-  saving,
-  onStartEdit,
-  onCancelEdit,
-  onSave,
+  roles,
+  onMutated,
+}: {
+  chat: ActiveChat;
+  roles: { id: string; name: string; isBuiltin?: boolean }[];
+  onMutated: () => void;
+}): ReactElement {
+  const { data, loading, reload } = useApi(
+    () => helmApi.conversationDetail(chat.id),
+    [chat.id],
+  );
+
+  // Refresh detail on session lifecycle changes. (Knowledge candidate +
+  // retrieval-log events aren't on the SSE bus yet — promote/dismiss
+  // reloads via onDecided, and the rest is fetched on selection change.)
+  useEventStream(() => { reload(); }, {
+    types: ['session.started', 'session.closed'],
+  });
+
+  const [savingRole, setSavingRole] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [savingTitle, setSavingTitle] = useState(false);
+
+  async function addRole(roleId: string): Promise<void> {
+    setSavingRole(true);
+    try {
+      await helmApi.addChatRole(chat.id, roleId);
+      onMutated();
+      reload();
+    } catch (err) {
+      toast.error(`Add role: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    } finally { setSavingRole(false); }
+  }
+
+  async function removeRole(roleId: string): Promise<void> {
+    setSavingRole(true);
+    try {
+      await helmApi.removeChatRole(chat.id, roleId);
+      onMutated();
+      reload();
+    } catch (err) {
+      toast.error(`Remove role: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    } finally { setSavingRole(false); }
+  }
+
+  async function saveLabel(raw: string): Promise<void> {
+    setSavingTitle(true);
+    try {
+      const cleaned = raw.trim();
+      await helmApi.setChatLabel(chat.id, cleaned.length === 0 ? null : cleaned);
+      onMutated();
+    } catch (err) {
+      toast.error(`Rename: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    } finally {
+      setSavingTitle(false);
+      setEditingTitle(false);
+    }
+  }
+
+  async function deleteChat(): Promise<void> {
+    try {
+      await helmApi.closeChat(chat.id, { cascade: true });
+      onMutated();
+      setDeleteConfirm(false);
+    } catch (err) {
+      toast.error(`Delete: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    }
+  }
+
+  async function copySessionId(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(chat.id);
+      toast.success('Session ID copied');
+    } catch {
+      toast.error('Copy failed');
+    }
+  }
+
+  const key = sourceKey(chat);
+  const candidates = data?.candidates ?? [];
+  // The latest retrieval (highest turn / most recent ts) is the one whose
+  // chunks the developer most likely wants to see; deeper history is
+  // pageable in a follow-up. getRetrievalsForSession orders ts DESC.
+  const latestRetrieval: ConversationDetailKnowledgeInPlay | undefined = data?.knowledgeInPlay[0];
+
+  return (
+    <div className="helm-conv-detail">
+      {/* Header: source chip + title + session id + overflow menu */}
+      <div className="helm-conv-header">
+        <span className={`helm-conv-source-chip helm-conv-source-${key}`}>
+          {sourceLabel(key)}
+        </span>
+        <ChatTitle
+          chat={chat}
+          editing={editingTitle}
+          saving={savingTitle}
+          onStartEdit={() => setEditingTitle(true)}
+          onCancelEdit={() => setEditingTitle(false)}
+          onSave={(raw) => saveLabel(raw)}
+        />
+        <OverflowMenu
+          onRename={() => setEditingTitle(true)}
+          onCopyId={() => { void copySessionId(); }}
+          onDelete={() => setDeleteConfirm(true)}
+        />
+      </div>
+      <div className="helm-conv-meta">session {shortId(chat.id, 18)}</div>
+
+      {/* Prompt preview block */}
+      {chat.firstPrompt && (
+        <div className="helm-conv-section helm-conv-prompt-section">
+          <PromptPreview text={chat.firstPrompt} />
+        </div>
+      )}
+
+      {/* Metadata strip */}
+      <div className="helm-conv-section helm-conv-meta-strip">
+        {chat.cwd && <span className="helm-conv-meta">{chat.cwd}</span>}
+        {chat.cwd && <span className="helm-conv-meta-sep">·</span>}
+        <span className="helm-conv-meta">{key}</span>
+        <span className="helm-conv-meta-sep">·</span>
+        <span className="helm-conv-meta">{formatRelative(chat.lastSeenAt)}</span>
+      </div>
+
+      {/* Knowledge IN */}
+      <KnowledgeInSection
+        chat={chat}
+        roles={roles}
+        latest={latestRetrieval}
+        savingRole={savingRole}
+        onAddRole={(rid) => { void addRole(rid); }}
+        onRemoveRole={(rid) => { void removeRole(rid); }}
+      />
+
+      {/* Knowledge OUT */}
+      <KnowledgeOutSection
+        candidates={candidates}
+        loading={loading && !data}
+        onDecided={() => reload()}
+      />
+
+      {/* Ambient footer */}
+      <div className="helm-conv-footer">
+        Last seen {formatRelative(chat.lastSeenAt)}
+        {(chat.queuedMessageCount ?? 0) > 0 && (
+          <> · <span style={{ color: 'var(--accent)' }}>{chat.queuedMessageCount} queued</span></>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={deleteConfirm}
+        onOpenChange={(o) => { if (!o) setDeleteConfirm(false); }}
+        title="Permanently delete this chat?"
+        description="The session row, its bindings, and any queued messages will be removed. Knowledge captured from it stays."
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={() => { void deleteChat(); }}
+      />
+    </div>
+  );
+}
+
+// ── Sections ──────────────────────────────────────────────────────────────
+
+function KnowledgeInSection({
+  chat,
+  roles,
+  latest,
+  savingRole,
+  onAddRole,
+  onRemoveRole,
+}: {
+  chat: ActiveChat;
+  roles: { id: string; name: string; isBuiltin?: boolean }[];
+  latest: ConversationDetailKnowledgeInPlay | undefined;
+  savingRole: boolean;
+  onAddRole: (roleId: string) => void;
+  onRemoveRole: (roleId: string) => void;
+}): ReactElement {
+  const boundRoles = chat.roleIds.map((rid) => ({
+    id: rid,
+    role: roles.find((r) => r.id === rid),
+  }));
+  const addable = roles.filter((r) => !chat.roleIds.includes(r.id));
+  // Show up to 3 retrieved chunks; the rest fold under "show N more".
+  const allPoints = latest?.points ?? [];
+  const [expanded, setExpanded] = useState(false);
+  const visiblePoints = expanded ? allPoints : allPoints.slice(0, 3);
+  const overflow = allPoints.length - visiblePoints.length;
+
+  return (
+    <div className="helm-conv-section">
+      <div className="helm-conv-section-header">
+        <span className="helm-conv-section-label">Knowledge in</span>
+        {addable.length > 0 && (
+          <Combobox
+            value=""
+            placeholder="+ role"
+            disabled={savingRole}
+            triggerClassName="helm-conv-add-role"
+            items={addable.map((r) => ({
+              value: r.id,
+              label: r.name,
+              description: r.isBuiltin ? 'built-in' : undefined,
+            }))}
+            onValueChange={(v) => { if (v) onAddRole(v); }}
+          />
+        )}
+      </div>
+
+      {boundRoles.length === 0 && allPoints.length === 0 ? (
+        <p className="helm-conv-empty">No role bound — agent runs on base prompt only.</p>
+      ) : (
+        <>
+          {boundRoles.length > 0 && (
+            <div className="helm-conv-role-chips">
+              {boundRoles.map(({ id, role }) => (
+                <span key={id} className="helm-conv-role-chip">
+                  {role ? role.name : `${id} (unknown)`}
+                  <button
+                    type="button"
+                    aria-label={`Remove role ${role?.name ?? id}`}
+                    disabled={savingRole}
+                    onClick={() => onRemoveRole(id)}
+                    className="helm-conv-role-chip-x"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {visiblePoints.length > 0 && (
+            <ul className="helm-conv-chunks">
+              {visiblePoints.map((p) => (
+                <li key={p.pointId} className="helm-conv-chunk-row">
+                  <span className="helm-conv-chunk-arrow">→</span>
+                  <span className="helm-conv-chunk-title" title={p.title ?? p.pointId}>
+                    {p.title ?? p.sourceFile ?? shortId(p.pointId, 24)}
+                  </span>
+                  <span className="helm-conv-chunk-source">
+                    {p.roleName ?? p.sourceFile ?? ''}
+                  </span>
+                  <span className="helm-conv-chunk-score" title="Fusion score">
+                    {p.fusionScore.toFixed(2)}
+                  </span>
+                </li>
+              ))}
+              {overflow > 0 && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(true)}
+                    className="helm-conv-link-button"
+                  >
+                    show {overflow} more
+                  </button>
+                </li>
+              )}
+            </ul>
+          )}
+
+          {boundRoles.length > 0 && allPoints.length === 0 && (
+            <p className="helm-conv-empty">Roles bound — no retrievals captured yet for this turn.</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function KnowledgeOutSection({
+  candidates,
+  loading,
+  onDecided,
+}: {
+  candidates: ConversationDetailCandidate[];
+  loading: boolean;
+  onDecided: () => void;
+}): ReactElement {
+  return (
+    <div className="helm-conv-section">
+      <div className="helm-conv-section-header">
+        <span className="helm-conv-section-label">Knowledge out</span>
+        <span className="helm-conv-section-meta">
+          {candidates.length === 0
+            ? (loading ? 'loading…' : '0 candidates')
+            : `${candidates.length} ${candidates.length === 1 ? 'candidate' : 'candidates'}`}
+        </span>
+      </div>
+
+      {candidates.length === 0 && !loading && (
+        <p className="helm-conv-empty">
+          <span className="helm-conv-pulse-dot" aria-hidden /> Watching for promotable passages…
+        </p>
+      )}
+
+      {candidates.length > 0 && (
+        <ul className="helm-conv-candidates">
+          {candidates.map((c) => (
+            <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function CandidateRow({
+  candidate,
+  onDecided,
+}: {
+  candidate: ConversationDetailCandidate;
+  onDecided: () => void;
+}): ReactElement {
+  const [busy, setBusy] = useState<'promote' | 'dismiss' | null>(null);
+
+  async function promote(): Promise<void> {
+    setBusy('promote');
+    try {
+      await helmApi.acceptCandidate(candidate.id);
+      toast.success('Promoted to knowledge.');
+      onDecided();
+    } catch (err) {
+      toast.error(`Promote: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    } finally { setBusy(null); }
+  }
+
+  async function dismiss(): Promise<void> {
+    setBusy('dismiss');
+    try {
+      await helmApi.rejectCandidate(candidate.id);
+      toast.success('Dismissed.');
+      onDecided();
+    } catch (err) {
+      toast.error(`Dismiss: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    } finally { setBusy(null); }
+  }
+
+  return (
+    <li className="helm-conv-candidate-row">
+      <div className="helm-conv-candidate-accent" />
+      <div className="helm-conv-candidate-body">
+        <div className="helm-conv-candidate-excerpt">{candidate.chunkText}</div>
+        <div className="helm-conv-candidate-foot">
+          <span className="muted">
+            from this chat · {formatRelative(candidate.createdAt)}
+          </span>
+          <div className="helm-conv-candidate-actions">
+            <button
+              type="button"
+              className="helm-conv-link-button"
+              disabled={busy !== null}
+              onClick={() => { void promote(); }}
+              title="Promote to knowledge (P)"
+            >
+              ↑ Promote
+            </button>
+            <button
+              type="button"
+              className="helm-conv-link-button helm-conv-link-danger"
+              disabled={busy !== null}
+              onClick={() => { void dismiss(); }}
+              title="Dismiss (D)"
+            >
+              ✕ Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+// ── Small UI pieces ───────────────────────────────────────────────────────
+
+function PromptPreview({ text }: { text: string }): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = text.length > 240;
+  return (
+    <div>
+      <div className={`helm-conv-prompt${expanded || !isLong ? ' expanded' : ''}`}>{text}</div>
+      {isLong && (
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? 'show less' : 'show more'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OverflowMenu({
+  onRename,
+  onCopyId,
+  onDelete,
+}: {
+  onRename: () => void;
+  onCopyId: () => void;
+  onDelete: () => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent): void {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="helm-conv-overflow">
+      <button
+        type="button"
+        className="helm-conv-overflow-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="More actions"
+        onClick={() => setOpen((v) => !v)}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div role="menu" className="helm-conv-overflow-menu">
+          <button type="button" role="menuitem" onClick={() => { onRename(); setOpen(false); }}>
+            Rename…
+          </button>
+          <button type="button" role="menuitem" onClick={() => { onCopyId(); setOpen(false); }}>
+            Copy session id
+          </button>
+          <div className="helm-conv-overflow-divider" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="helm-conv-overflow-danger"
+            onClick={() => { onDelete(); setOpen(false); }}
+          >
+            Delete chat
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatTitle({
+  chat, editing, saving, onStartEdit, onCancelEdit, onSave,
 }: {
   chat: ActiveChat;
   editing: boolean;
@@ -555,12 +651,9 @@ function ChatTitle({
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState(chat.displayName ?? '');
 
-  // When the row enters edit mode, seed the draft with the current override
-  // and select-all so the user can immediately type a replacement.
   useEffect(() => {
     if (editing) {
       setDraft(chat.displayName ?? '');
-      // Defer focus to next frame so the input is in the DOM.
       requestAnimationFrame(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -584,277 +677,18 @@ function ChatTitle({
         placeholder={chat.firstPrompt ? truncate(chat.firstPrompt, 40) : 'Chat title'}
         aria-label={`Rename chat ${chat.id}`}
         maxLength={120}
-        style={{
-          fontWeight: 600, fontSize: 14, padding: '2px 6px',
-          border: '1px solid var(--border)', borderRadius: 4,
-          width: 'min(440px, 100%)', fontFamily: 'inherit',
-        }}
+        className="helm-conv-title-input"
       />
     );
   }
 
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span
-        style={{ fontWeight: 600, fontSize: 14, color: chat.displayName ? undefined : 'var(--text-secondary)' }}
-        title={tooltip}
-      >
-        {label || '(awaiting first message)'}
-      </span>
-      <button
-        type="button"
-        onClick={onStartEdit}
-        aria-label={`Rename chat ${chat.id}`}
-        title="Rename"
-        style={{
-          all: 'unset', cursor: 'pointer', fontSize: 12,
-          opacity: 0.5, padding: '0 4px',
-        }}
-      >
-        ✎
-      </button>
-    </div>
-  );
-}
-
-/**
- * Phase 62: per-chat Lark binding section. Three states:
- *   - bound:   show a chip "Lark · oc_...#om_... (label)" with an Unbind button
- *   - unbound: show "Lark: not bound" + a "Mirror to Lark" button
- *   - multiple: rare but possible — render each chip
- *
- * Hidden when no Lark bindings exist AND helm doesn't have Lark wired,
- * because there's nothing actionable. We detect that lazily — when the
- * Initiate endpoint 501s, the modal surfaces the friendly error.
- */
-function ChatLarkSection({
-  chat,
-  bindings,
-  onMirror,
-}: {
-  chat: ActiveChat;
-  bindings: ChannelBinding[];
-  onMirror: () => void;
-}) {
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div className="muted" style={{ marginBottom: 6, fontSize: 12 }}>Lark</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-        {bindings.length === 0 && (
-          <span className="muted" style={{ fontSize: 12 }}>not bound</span>
-        )}
-        {bindings.map((b) => {
-          const labelChip = b.label ? `${b.label} · ` : '';
-          const threadFrag = b.externalThread ? `…/${b.externalThread.slice(-6)}` : '';
-          return (
-            <span
-              key={b.id}
-              title={`bindingId: ${b.id}\nexternalChat: ${b.externalChat ?? '(none)'}\nexternalThread: ${b.externalThread ?? '(none)'}`}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '2px 8px', borderRadius: 12,
-                background: 'rgba(52,199,89,0.12)',
-                color: 'var(--text)',
-                fontSize: 12, fontWeight: 500,
-              }}
-            >
-              ✓ {labelChip}{b.externalChat?.slice(0, 12) ?? ''}{threadFrag}
-            </span>
-          );
-        })}
-        <button
-          type="button"
-          onClick={onMirror}
-          style={{ fontSize: 12 }}
-          aria-label={`Mirror chat ${chat.id} to a Lark thread`}
-        >
-          + Mirror to Lark
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Phase 62: modal that mints a pending bind code + waits for Lark-side
- * consumption. Flow:
- *   1. open → call /api/bindings/initiate → display code + instruction
- *   2. user copies the line, pastes into a Lark thread
- *   3. lark-wiring listener consumes → emits binding.created
- *   4. SSE listener here matches by hostSessionId → calls onBound (modal closes)
- *
- * Implementation note: we DON'T close on every binding.created — only when
- * the new binding's hostSessionId matches ours. Otherwise opening this
- * modal during a sibling's bind would hide it prematurely.
- */
-function MirrorToLarkModal({
-  hostSessionId,
-  chatLabel,
-  onClose,
-  onBound,
-}: {
-  hostSessionId: string;
-  chatLabel: string;
-  onClose: () => void;
-  onBound: () => void;
-}) {
-  const [code, setCode] = useState<string | null>(null);
-  const [instruction, setInstruction] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [labelDraft, setLabelDraft] = useState('');
-  const [step, setStep] = useState<'compose' | 'waiting'>('compose');
-
-  async function initiate(): Promise<void> {
-    setErr(null);
-    try {
-      const r = await helmApi.initiateLarkBind({
-        ...(labelDraft.trim() ? { label: labelDraft.trim() } : {}),
-        // Phase 64: pin the code to this chat so Lark's consume handler
-        // stitches the binding directly — no renderer round-trip needed.
-        hostSessionId,
-      });
-      setCode(r.code);
-      setInstruction(r.instruction);
-      setExpiresAt(r.expiresAt);
-      setStep('waiting');
-    } catch (e) {
-      const msg = e instanceof ApiError
-        ? (e.status === 501
-          ? 'Lark is not configured in this Helm. Open Settings → Lark to enable it.'
-          : `${e.status}: ${e.message}`)
-        : (e as Error).message;
-      setErr(msg);
-    }
-  }
-
-  // Listen for the consumed bind. The renderer's general SSE feed
-  // already fires binding.created across the app; we filter here.
-  useEventStream((e) => {
-    if (e.type !== 'binding.created') return;
-    if (e.binding.channel !== 'lark') return;
-    if (e.binding.hostSessionId !== hostSessionId) return;
-    onBound();
-  }, { types: ['binding.created'] });
-
-  // Cancel the unused code on dismiss so it doesn't sit until TTL.
-  function cancel(): void {
-    if (code) {
-      void helmApi.cancelPendingBind(code).catch(() => {/* best-effort */});
-    }
-    onClose();
-  }
-
-  function copyToClipboard(value: string): void {
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  const expiryHint = expiresAt
-    ? `Expires ${new Date(expiresAt).toLocaleTimeString()}.`
-    : '';
-
-  return (
-    <Dialog open={true} onOpenChange={(o) => { if (!o) cancel(); }}>
-      <DialogContent
-        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 560)}
-        aria-label="Mirror chat to Lark"
-      >
-        <div className="row" style={{ marginBottom: 12 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Mirror to Lark</div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              Pair Cursor chat <strong>{chatLabel}</strong> with a Lark thread
-            </div>
-          </div>
-          <button onClick={cancel} aria-label="Close">✕</button>
-        </div>
-
-        {step === 'compose' && (
-          <>
-            <p className="muted" style={{ fontSize: 12 }}>
-              Helm will mint a one-time code. Paste it into the Lark thread you want to
-              mirror as <code>@bot bind &lt;code&gt;</code>. Once Lark side consumes it,
-              the binding lands here automatically.
-            </p>
-            <label style={{ display: 'block', marginTop: 12 }}>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-                Optional label (shows in Bindings + on the bind-ack message)
-              </div>
-              <input
-                type="text"
-                value={labelDraft}
-                onChange={(e) => setLabelDraft(e.target.value.slice(0, 60))}
-                placeholder="tce-deploy-thread"
-                style={{
-                  width: '100%', padding: '6px 10px', fontSize: 13,
-                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-                }}
-              />
-            </label>
-            {err && (
-              <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: 8 }}>{err}</p>
-            )}
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <Button variant="primary" onClick={() => void initiate()}>
-                Generate code
-              </Button>
-              <button onClick={cancel}>Cancel</button>
-            </div>
-          </>
-        )}
-
-        {step === 'waiting' && code && instruction && (
-          <>
-            <p style={{ fontSize: 13, marginTop: 0 }}>
-              Paste this in the target Lark thread:
-            </p>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 8 }}>
-              <code
-                style={{
-                  flex: 1, padding: '8px 12px',
-                  background: 'var(--bg-pre)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  fontSize: 13, whiteSpace: 'pre',
-                }}
-              >
-                @bot bind {code}
-              </code>
-              <button
-                type="button"
-                onClick={() => copyToClipboard(`@bot bind ${code}`)}
-                style={{ minWidth: 80 }}
-              >
-                {copied ? '✓ Copied' : 'Copy'}
-              </button>
-            </div>
-            <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{instruction}</p>
-            {expiryHint && (
-              <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>{expiryHint}</p>
-            )}
-
-            <div
-              style={{
-                marginTop: 16, padding: 10,
-                background: 'rgba(0,122,255,0.08)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: 12, lineHeight: 1.5,
-              }}
-            >
-              ⏳ Waiting for Lark to consume the code… The modal will close
-              automatically once the bind lands. You can leave this open.
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button onClick={cancel}>Cancel</button>
-            </div>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+    <h2
+      className="helm-conv-title"
+      title={tooltip}
+      onDoubleClick={onStartEdit}
+    >
+      {label || '(awaiting first message)'}
+    </h2>
   );
 }

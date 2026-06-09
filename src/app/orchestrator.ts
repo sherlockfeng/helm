@@ -572,7 +572,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     const now = new Date().toISOString();
     upsertHostSession(deps.db, {
       id: req.host_session_id,
-      host: 'cursor',
+      host: req.host ?? 'cursor',
       cwd: req.cwd,
       composerMode: req.composer_mode,
       status: 'active',
@@ -664,7 +664,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     // hooks were installed) — the user can now just send any message and the
     // chat appears in Active Chats. Idempotent: existing rows update
     // last_seen_at via the upsert ON CONFLICT path.
-    autoUpsertSession(deps.db, events, log, req.host_session_id, req.cwd);
+    autoUpsertSession(deps.db, events, log, req.host_session_id, req.cwd, req.host);
     const trimmed = (req.prompt ?? '').trim();
     if (trimmed) {
       setHostSessionFirstPrompt(deps.db, req.host_session_id, trimmed);
@@ -1721,12 +1721,16 @@ function autoUpsertSession(
   log: Logger,
   hostSessionId: string,
   cwd?: string,
+  host?: string,
 ): void {
   const existing = getHostSession(db, hostSessionId);
   const now = new Date().toISOString();
   upsertHostSession(db, {
     id: hostSessionId,
-    host: 'cursor',
+    // Preserve a previously-recorded host when this is a re-touch — only
+    // an explicit hint from the bridge req should override. Falls back to
+    // 'cursor' for legacy hooks that don't pass a host field.
+    host: existing?.host ?? host ?? 'cursor',
     cwd: cwd ?? existing?.cwd,
     composerMode: existing?.composerMode,
     status: 'active',

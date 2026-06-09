@@ -34,18 +34,26 @@ const toolPre: HostToolUsePreEvent = {
 };
 
 describe('eventToBridgeRequest', () => {
-  it('maps session_start → host_session_start with cwd + composer_mode', () => {
+  it('maps session_start → host_session_start with cwd + composer_mode + host', () => {
     expect(eventToBridgeRequest(sessionStart)).toEqual({
       type: 'host_session_start',
       host_session_id: 's1',
+      host: 'cursor',
       cwd: '/proj',
       composer_mode: 'agent',
     });
   });
 
+  it('passes the agent identity through (claude-code → host:"claude-code")', () => {
+    const claudeStart = { ...sessionStart, host: 'claude-code' as const };
+    const claudePrompt = { ...promptSubmit, host: 'claude-code' as const };
+    expect(eventToBridgeRequest(claudeStart)).toMatchObject({ host: 'claude-code' });
+    expect(eventToBridgeRequest(claudePrompt)).toMatchObject({ host: 'claude-code' });
+  });
+
   it('maps prompt_submit', () => {
     expect(eventToBridgeRequest(promptSubmit)).toMatchObject({
-      type: 'host_prompt_submit', host_session_id: 's1', prompt: 'hi',
+      type: 'host_prompt_submit', host_session_id: 's1', prompt: 'hi', host: 'cursor',
     });
   });
 

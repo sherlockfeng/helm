@@ -77,6 +77,11 @@ import {
   uninstallCursorHooks as uninstallCursorHooksFn,
   readHooksConfig as readCursorHooksConfig,
 } from '../host/cursor/installer.js';
+import {
+  installClaudeCodeHooks as installClaudeHooksFn,
+  uninstallClaudeCodeHooks as uninstallClaudeHooksFn,
+  isClaudeCodeHooksInstalled,
+} from '../host/claude-code/installer.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
   closeStaleHostSessions,
@@ -1300,23 +1305,28 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         }
         if (agent === 'claude-code') {
           if (action === 'status') {
-            // No reliable status probe yet — surface "unknown" so the
-            // renderer shows a generic "click install to verify" CTA.
-            return { status: 200, body: { installed: 'unknown' } };
+            return {
+              status: 200,
+              body: {
+                installed: isClaudeCodeHooksInstalled(),
+                hooksPath: PATHS.claudeSettings,
+              },
+            };
           }
           if (action === 'install') {
-            const r = runSetupMcp('claude', { url });
-            return { status: 200, body: { installed: true, ...r } };
+            // Two channels: hooks for prompt/response capture, MCP for
+            // tool-call routing. Hooks first so a setup-mcp failure
+            // (e.g. CLI not installed) doesn't block the observation path.
+            const hooks = installClaudeHooksFn();
+            const mcp = runSetupMcp('claude', { url });
+            return { status: 200, body: { installed: true, hooks, mcp } };
           }
-          // uninstall — claude CLI has its own `claude mcp remove`
-          // path; not worth duplicating here until users ask.
-          return {
-            status: 501,
-            body: {
-              error: 'uninstall_not_wired',
-              message: 'Run `claude mcp remove helm --scope user` to uninstall.',
-            },
-          };
+          // uninstall — remove our hook entries from settings.json. MCP
+          // entry stays; users run `claude mcp remove helm` if they want
+          // to fully clean up (we don't try to edit ~/.claude.json's MCP
+          // table from here).
+          const hooks = uninstallClaudeHooksFn();
+          return { status: 200, body: { installed: false, hooks } };
         }
         // codex — same pattern as claude-code; "install hooks" means
         // "register helm's MCP server with codex" because codex

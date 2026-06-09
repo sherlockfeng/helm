@@ -22,6 +22,7 @@ export const PATHS = {
   archiveDir: join(HELM_HOME, 'logs', 'archive'),
   screenshotsDir: join(HELM_HOME, 'screenshots'),
   cursorHooks: join(homedir(), '.cursor', 'hooks.json'),
+  claudeSettings: join(homedir(), '.claude', 'settings.json'),
 };
 
 export const HOOK_MARKER = 'helm-hook' as const;

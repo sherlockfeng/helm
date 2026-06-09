@@ -2,38 +2,46 @@
  * Unit tests for the ClaudeCode + Codex host adapters (PR 7-codex).
  */
 
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ClaudeCodeHostAdapter } from '../../../src/host/claude-code/adapter.js';
 import { CodexHostAdapter } from '../../../src/host/codex/adapter.js';
 
 describe('ClaudeCodeHostAdapter', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'helm-claude-adapter-')); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
   it('reports hostId="claude-code"', () => {
     expect(new ClaudeCodeHostAdapter().hostId).toBe('claude-code');
   });
 
-  it('install returns the configured config path + the MCP notifications event', async () => {
-    const r = await new ClaudeCodeHostAdapter({ configPath: '/tmp/c.json' })
-      .install();
-    expect(r.hooksPath).toBe('/tmp/c.json');
-    expect(r.events).toContain('mcp:notifications/*');
+  it('install delegates to installClaudeCodeHooks — writes UserPromptSubmit + Stop entries', async () => {
+    const settingsPath = join(tmpDir, 'settings.json');
+    const r = await new ClaudeCodeHostAdapter({ configPath: settingsPath }).install();
+    expect(r.hooksPath).toBe(settingsPath);
+    expect(r.events).toContain('UserPromptSubmit');
+    expect(r.events).toContain('Stop');
   });
 
-  it('normalize maps session_start with composer_mode', () => {
+  it('normalize maps a UserPromptSubmit payload to prompt_submit', () => {
     const a = new ClaudeCodeHostAdapter();
     const ev = a.normalize(
-      { session_id: 's-1', cwd: '/repo', composer_mode: 'plan' },
-      'session_start',
+      { session_id: 's-1', cwd: '/repo', hook_event_name: 'UserPromptSubmit', prompt: 'hi' },
+      'UserPromptSubmit',
     );
-    expect(ev.kind).toBe('session_start');
+    expect(ev.kind).toBe('prompt_submit');
     expect(ev.hostSessionId).toBe('s-1');
     expect(ev.host).toBe('claude-code');
-    if (ev.kind === 'session_start') expect(ev.composerMode).toBe('plan');
+    if (ev.kind === 'prompt_submit') expect(ev.prompt).toBe('hi');
   });
 
   it('formatResponse emits { context } on session_start with additionalContext', () => {
     const a = new ClaudeCodeHostAdapter();
     const r = a.formatResponse(
-      a.normalize({ session_id: 's' }, 'session_start'),
+      a.normalize({ session_id: 's' }, 'SessionStart'),
       { kind: 'session_start', additionalContext: 'helm context' },
     );
     expect(r).toEqual({ context: 'helm context' });
@@ -41,7 +49,7 @@ describe('ClaudeCodeHostAdapter', () => {
 
   it('formatResponse mismatched kinds returns empty object', () => {
     const a = new ClaudeCodeHostAdapter();
-    const ev = a.normalize({ session_id: 's' }, 'session_start');
+    const ev = a.normalize({ session_id: 's' }, 'SessionStart');
     const r = a.formatResponse(
       ev, { kind: 'prompt_submit', continue: true } as never,
     );

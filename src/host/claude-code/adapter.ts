@@ -23,6 +23,8 @@ import type {
   HostInstallOptions,
   HostInstallResult,
 } from '../types.js';
+import { installClaudeCodeHooks, uninstallClaudeCodeHooks } from './installer.js';
+import { normalizeClaudePayload } from './normalize.js';
 
 export interface ClaudeCodeHostAdapterOptions {
   /** Override the Claude Code config file path (default ~/.claude.json). */
@@ -42,48 +44,22 @@ export class ClaudeCodeHostAdapter implements HostAdapter {
   }
 
   async install(options: HostInstallOptions = {}): Promise<HostInstallResult> {
-    // Per design: writing the MCP server entry into ~/.claude.json is
-    // the only install step. We delegate to the existing helm setup
-    // flow (already exposed via /api/setup-mcp) when this adapter is
-    // wired live; the install method here returns a placeholder so
-    // the renderer can describe what the user would get.
-    const hooksPath = this.configPath ?? options.hooksPath
-      ?? `${process.env['HOME'] ?? ''}/.claude.json`;
-    return Promise.resolve({ hooksPath, events: ['mcp:notifications/*'] });
+    const opts: HostInstallOptions = { ...options };
+    if (this.configPath && !opts.hooksPath) opts.hooksPath = this.configPath;
+    return Promise.resolve(installClaudeCodeHooks(opts));
   }
 
   async uninstall(options: HostInstallOptions = {}): Promise<HostInstallResult> {
-    const hooksPath = this.configPath ?? options.hooksPath
-      ?? `${process.env['HOME'] ?? ''}/.claude.json`;
-    return Promise.resolve({ hooksPath, events: [] });
+    const opts: HostInstallOptions = { ...options };
+    if (this.configPath && !opts.hooksPath) opts.hooksPath = this.configPath;
+    return Promise.resolve(uninstallClaudeCodeHooks(opts));
   }
 
   normalize(rawEvent: unknown, hookEventName?: string): HostEvent {
-    // Claude Code events come over the MCP JSON-RPC channel rather than
-    // a flat hook payload. We expect callers to pass the parsed
-    // notification body. The fields we read are intentionally minimal —
-    // the orchestrator only needs hostSessionId + kind + body to record
-    // an entry on host_event_log.
-    const raw = (rawEvent ?? {}) as Record<string, unknown>;
-    const hostSessionId = String(raw['session_id'] ?? raw['hostSessionId'] ?? 'unknown');
-    const cwd = typeof raw['cwd'] === 'string' ? raw['cwd'] : undefined;
-    const base = { host: this.hostId, hostSessionId, raw, ...(cwd ? { cwd } : {}) } as const;
-    switch (hookEventName ?? raw['kind'] ?? 'session_start') {
-      case 'session_start':
-        return { ...base, kind: 'session_start',
-          ...(typeof raw['composer_mode'] === 'string'
-            ? { composerMode: raw['composer_mode'] }
-            : {}),
-        };
-      case 'prompt_submit':
-        return { ...base, kind: 'prompt_submit', prompt: String(raw['prompt'] ?? '') };
-      case 'agent_response':
-        return { ...base, kind: 'agent_response', text: String(raw['text'] ?? '') };
-      case 'stop':
-        return { ...base, kind: 'stop' };
-      default:
-        return { ...base, kind: 'session_start' };
-    }
+    const raw = (rawEvent && typeof rawEvent === 'object' && !Array.isArray(rawEvent))
+      ? (rawEvent as Record<string, unknown>)
+      : {};
+    return normalizeClaudePayload(raw, hookEventName);
   }
 
   formatResponse(event: HostEvent, decision: HostDecision): Record<string, unknown> {

@@ -19,7 +19,8 @@ import { existsSync } from 'node:fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const distEntry = join(__dirname, '..', 'dist', 'host', 'cursor', 'hook-entry.js');
+// tsup outputs to `out/` (not `dist/`) — see tsup.config.ts header for why.
+const outEntry = join(__dirname, '..', 'out', 'host', 'cursor', 'hook-entry.js');
 
 function fallback() {
   // No compiled module available. Cursor still needs a valid response shape.
@@ -43,8 +44,8 @@ function fallback() {
   }
 }
 
-if (existsSync(distEntry)) {
-  const mod = await import(distEntry);
+if (existsSync(outEntry)) {
+  const mod = await import(outEntry);
   if (typeof mod.runHook === 'function') {
     await mod.runHook();
   } else {

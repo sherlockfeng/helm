@@ -1850,6 +1850,70 @@ code, pre {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* PR3 — kind-classified candidate row.
+   Headline gets the chip + LLM gist; original text folds away. */
+.helm-conv-candidate-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.helm-conv-candidate-headline {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+.helm-conv-kind-chip {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+.helm-conv-kind-chip-spec     { background: rgba(59,130,246,0.16); color: #1d4ed8; }
+.helm-conv-kind-chip-example  { background: rgba(34,197,94,0.16);  color: #166534; }
+.helm-conv-kind-chip-warning  { background: rgba(245,158,11,0.18); color: #b45309; }
+.helm-conv-kind-chip-runbook  { background: rgba(168,85,247,0.16); color: #6b21a8; }
+.helm-conv-kind-chip-glossary { background: rgba(20,184,166,0.16); color: #0f766e; }
+.helm-conv-kind-chip-other    { background: rgba(110,110,115,0.16); color: var(--text-secondary); }
+
+.helm-conv-candidate-excerpt-full {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-pre, rgba(0,0,0,0.03));
+  margin: 4px 0 0;
+}
+
+/* TL;DR — quiet, 2-line section at the top of the detail pane. */
+.helm-conv-tldr-section {
+  padding-top: 10px;
+  padding-bottom: 12px;
+}
+.helm-conv-tldr-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  padding-left: 12px;
+  border-left: 2px solid var(--accent, #3b82f6);
+}
+.helm-conv-tldr-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .helm-conv-candidate-foot {
   display: flex;
   align-items: center;

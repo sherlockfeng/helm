@@ -69,6 +69,8 @@ import { saveHelmConfig } from '../config/loader.js';
 import { WorkflowEngine } from '../workflow/engine.js';
 import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
+import { generateChatTldr } from '../summarizer/chat-tldr.js';
+import { generateCandidateGist } from '../summarizer/candidate-gist.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
 import { setupMcp as runSetupMcp } from '../cli/setup-mcp.js';
@@ -809,6 +811,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         for (const candidate of result.inserted) {
           events.emit({ type: 'knowledge_candidate.created', candidate });
         }
+        // PR3 (conv detail): classify + gist each new candidate so the
+        // Conversations rail's KNOWLEDGE OUT section can render them as
+        // categorical headlines instead of raw 2-line excerpts. Best
+        // effort — any failure leaves the row unchanged (renderer falls
+        // back to chunkText).
+        for (const candidate of result.inserted) {
+          void generateCandidateGist(deps.db, candidate.id, {
+            llm: engineRouter.current().summarize,
+            model: liveConfig.cursor.model,
+          }).catch(() => { /* swallow */ });
+        }
         if (result.candidatesCreated > 0 || result.segments > 0) {
           captureLog.info('capture_sweep_completed', {
             data: {
@@ -901,6 +914,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     ?? DEFAULT_TIMEOUTS.waitPollMs;
   bridge.registerHandler('host_stop', async (req: HostStopRequest): Promise<HostStopResponse> => {
     autoUpsertSession(deps.db, events, log, req.host_session_id);
+    // PR3 (conv detail): fire-and-forget TL;DR regeneration so the
+    // detail pane's top block stays roughly fresh. Throttling can be
+    // added later once we have cost numbers; today the cost is one
+    // small LLM call per Stop.
+    void generateChatTldr(deps.db, req.host_session_id, {
+      llm: engineRouter.current().summarize,
+      model: liveConfig.cursor.model,
+    }).catch(() => { /* swallow — never block the stop long-poll */ });
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
   });
 

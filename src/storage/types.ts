@@ -281,6 +281,9 @@ export interface KnowledgeCandidate {
   decidedAt?: string;
   /** Phase 79: chat_capture (Phase 78 default) vs subscription (peer push). */
   provenance: CandidateProvenance;
+  /** PR3: LLM-generated one-line headline used by Conversations detail to
+   *  show "📘 spec  Brief description" instead of the raw 2-line excerpt. */
+  gist?: string;
 }
 
 /**
@@ -535,6 +538,14 @@ export interface HostSession {
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;
+  /**
+   * PR3 (conv detail TL;DR): LLM-generated 2-line summary of the chat,
+   * surfaced at the top of the detail pane. Regenerated on Stop, throttled
+   * by callers via `summaryGeneratedAt`. Absent when generation hasn't
+   * happened or failed.
+   */
+  summary?: string;
+  summaryGeneratedAt?: string;
 }
 
 export interface ChannelBinding {

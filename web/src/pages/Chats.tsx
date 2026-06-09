@@ -28,10 +28,12 @@ import { toast } from 'sonner';
 import { Combobox } from '../components/Combobox.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
+import Markdown from 'react-markdown';
 import type {
   ActiveChat,
   ConversationDetailCandidate,
   ConversationDetailKnowledgeInPlay,
+  ConversationDetailTurn,
 } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -353,6 +355,9 @@ function ConversationDetailPane({
         onRemoveRole={(rid) => { void removeRole(rid); }}
       />
 
+      {/* Timeline — turn-by-turn conversation content */}
+      <TimelineSection turns={data?.turns ?? []} loading={loading && !data} />
+
       {/* Knowledge OUT */}
       <KnowledgeOutSection
         candidates={candidates}
@@ -592,6 +597,169 @@ function CandidateRow({
       </div>
     </li>
   );
+}
+
+// ── Timeline section ──────────────────────────────────────────────────────
+
+const INITIAL_VISIBLE_TURNS = 5;
+
+function TimelineSection({
+  turns,
+  loading,
+}: {
+  turns: ConversationDetailTurn[];
+  loading: boolean;
+}): ReactElement {
+  const [showAll, setShowAll] = useState(false);
+  // Newest first — matches the rail's "what just happened" mental model.
+  const sorted = [...turns].sort((a, b) => b.index - a.index);
+  const visible = showAll ? sorted : sorted.slice(0, INITIAL_VISIBLE_TURNS);
+  const hidden = sorted.length - visible.length;
+
+  return (
+    <div className="helm-conv-section">
+      <div className="helm-conv-section-header">
+        <span className="helm-conv-section-label">Timeline</span>
+        <span className="helm-conv-section-meta">
+          {turns.length === 0
+            ? (loading ? 'loading…' : 'no turns yet')
+            : `${turns.length} turn${turns.length === 1 ? '' : 's'}`}
+        </span>
+      </div>
+
+      {turns.length === 0 && !loading && (
+        <p className="helm-conv-empty">
+          No prompts captured yet — the chat shows up here as soon as the first
+          hook fires.
+        </p>
+      )}
+
+      {visible.length > 0 && (
+        <ol className="helm-conv-turns">
+          {visible.map((turn, i) => (
+            <TimelineTurnCard
+              key={turn.index}
+              turn={turn}
+              // Auto-expand the most recent turn — that's the one a developer
+              // glancing at a live chat actually wants to see in full.
+              defaultExpanded={i === 0}
+            />
+          ))}
+        </ol>
+      )}
+
+      {hidden > 0 && !showAll && (
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          onClick={() => setShowAll(true)}
+        >
+          show {hidden} older turn{hidden === 1 ? '' : 's'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TimelineTurnCard({
+  turn,
+  defaultExpanded,
+}: {
+  turn: ConversationDetailTurn;
+  defaultExpanded: boolean;
+}): ReactElement {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const toolCount = turn.toolEvents.filter((e) => e.kind === 'tool_use').length;
+  const userOneLine = firstLine(turn.userPrompt.text) || '(empty prompt)';
+  const assistantOneLine = turn.assistantResponse
+    ? firstLine(turn.assistantResponse.text) || '(empty response)'
+    : null;
+
+  return (
+    <li className={`helm-conv-turn${expanded ? ' expanded' : ''}`}>
+      <button
+        type="button"
+        className="helm-conv-turn-header"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="helm-conv-turn-caret" aria-hidden>{expanded ? '▼' : '▶'}</span>
+        <span className="helm-conv-turn-index">Turn {turn.index}</span>
+        <span className="helm-conv-turn-time muted">
+          {formatRelative(turn.userPrompt.createdAt)}
+        </span>
+        {toolCount > 0 && (
+          <span className="helm-conv-turn-tools" title={`${toolCount} tool call${toolCount === 1 ? '' : 's'}`}>
+            {toolCount} tool{toolCount === 1 ? '' : 's'}
+          </span>
+        )}
+        {!turn.assistantResponse && (
+          <span className="helm-conv-turn-inflight">in-flight</span>
+        )}
+      </button>
+
+      {!expanded && (
+        <div className="helm-conv-turn-preview">
+          <div className="helm-conv-turn-line">
+            <span className="helm-conv-turn-who helm-conv-turn-who-user">you</span>
+            <span className="helm-conv-turn-text">{userOneLine}</span>
+          </div>
+          {assistantOneLine && (
+            <div className="helm-conv-turn-line">
+              <span className="helm-conv-turn-who helm-conv-turn-who-ai">AI</span>
+              <span className="helm-conv-turn-text">{assistantOneLine}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="helm-conv-turn-body">
+          <div className="helm-conv-turn-msg helm-conv-turn-msg-user">
+            <span className="helm-conv-turn-who helm-conv-turn-who-user">you</span>
+            <Markdown>{turn.userPrompt.text || '_(empty prompt)_'}</Markdown>
+          </div>
+          {turn.assistantResponse && (
+            <div className="helm-conv-turn-msg helm-conv-turn-msg-ai">
+              <span className="helm-conv-turn-who helm-conv-turn-who-ai">AI</span>
+              <Markdown>{turn.assistantResponse.text || '_(empty response)_'}</Markdown>
+            </div>
+          )}
+          {turn.toolEvents.length > 0 && (
+            <div className="helm-conv-turn-tools-list">
+              <div className="helm-conv-turn-tools-label">tool events</div>
+              <ul>
+                {turn.toolEvents.map((e, i) => (
+                  <li key={i}>
+                    <span className="helm-conv-turn-tool-kind">{e.kind}</span>
+                    <code>{summarizePayload(e.payload)}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function firstLine(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const nl = trimmed.indexOf('\n');
+  const line = nl === -1 ? trimmed : trimmed.slice(0, nl);
+  return line.length > 160 ? `${line.slice(0, 157)}…` : line;
+}
+
+function summarizePayload(p: Record<string, unknown>): string {
+  // Concise one-liner for the tool-events list — caller wraps in <code>.
+  const cmd = p['command'] ?? p['cmd'];
+  const tool = p['tool'];
+  if (tool && cmd) return `${String(tool)}: ${String(cmd).slice(0, 100)}`;
+  if (cmd) return String(cmd).slice(0, 120);
+  if (tool) return String(tool);
+  return JSON.stringify(p).slice(0, 120);
 }
 
 // ── Small UI pieces ───────────────────────────────────────────────────────

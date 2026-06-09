@@ -14,7 +14,8 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
-import { getConversationDetail } from '../../../src/api/conversation-detail.js';
+import { getConversationDetail, groupEventsIntoTurns } from '../../../src/api/conversation-detail.js';
+import type { HostEventLogEntry } from '../../../src/storage/types.js';
 import { appendHostEvent } from '../../../src/storage/repos/host-event-log.js';
 import { recordRetrieval } from '../../../src/storage/repos/retrieval-log.js';
 
@@ -186,5 +187,104 @@ describe('getConversationDetail', () => {
     }
     const detail = getConversationDetail(db, 's-1', { timelineLimit: 10 })!;
     expect(detail.timeline).toHaveLength(10);
+  });
+
+  it('exposes pre-grouped turns alongside the raw timeline', () => {
+    seedSession(db, 's-1');
+    const t1 = '2026-06-09T10:00:00.000Z';
+    const t2 = '2026-06-09T10:00:05.000Z';
+    const t3 = '2026-06-09T10:01:00.000Z';
+    appendHostEvent(db, { hostSessionId: 's-1', kind: 'prompt',   payload: { text: 'hi' },     createdAt: t1 });
+    appendHostEvent(db, { hostSessionId: 's-1', kind: 'response', payload: { text: 'hello' },  createdAt: t2 });
+    appendHostEvent(db, { hostSessionId: 's-1', kind: 'prompt',   payload: { text: 'more?' }, createdAt: t3 });
+    const detail = getConversationDetail(db, 's-1')!;
+    expect(detail.turns).toHaveLength(2);
+    expect(detail.turns[0]!.userPrompt.text).toBe('hi');
+    expect(detail.turns[0]!.assistantResponse?.text).toBe('hello');
+    expect(detail.turns[1]!.userPrompt.text).toBe('more?');
+    expect(detail.turns[1]!.assistantResponse).toBeUndefined(); // in-flight
+  });
+});
+
+// ── groupEventsIntoTurns — unit (pure) ───────────────────────────────────
+
+function ev(
+  kind: HostEventLogEntry['kind'],
+  payload: Record<string, unknown>,
+  createdAt: string,
+): HostEventLogEntry {
+  return { id: 0, hostSessionId: 's', kind, payload, createdAt };
+}
+
+describe('groupEventsIntoTurns', () => {
+  it('returns [] for empty timeline', () => {
+    expect(groupEventsIntoTurns([])).toEqual([]);
+  });
+
+  it('one prompt + one response → one turn with both', () => {
+    const turns = groupEventsIntoTurns([
+      ev('prompt',   { text: 'q' }, 't1'),
+      ev('response', { text: 'a' }, 't2'),
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.userPrompt).toEqual({ text: 'q', createdAt: 't1' });
+    expect(turns[0]!.assistantResponse).toEqual({ text: 'a', createdAt: 't2' });
+    expect(turns[0]!.toolEvents).toEqual([]);
+    expect(turns[0]!.index).toBe(1);
+  });
+
+  it('tool_use + tool_result between prompt and next prompt land in the right turn', () => {
+    const turns = groupEventsIntoTurns([
+      ev('prompt',      { text: 'q1' },              't1'),
+      ev('tool_use',    { tool: 'Bash', cmd: 'ls' }, 't2'),
+      ev('tool_result', { ok: true },                't3'),
+      ev('response',    { text: 'done' },            't4'),
+      ev('prompt',      { text: 'q2' },              't5'),
+    ]);
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.toolEvents).toHaveLength(2);
+    expect(turns[0]!.toolEvents[0]!.kind).toBe('tool_use');
+    expect(turns[1]!.toolEvents).toEqual([]);
+  });
+
+  it('multiple response chunks: last one wins (long-response coalescing)', () => {
+    const turns = groupEventsIntoTurns([
+      ev('prompt',   { text: 'q' },                't1'),
+      ev('response', { text: 'partial' },          't2'),
+      ev('response', { text: 'final, longer one' }, 't3'),
+    ]);
+    expect(turns[0]!.assistantResponse?.text).toBe('final, longer one');
+    expect(turns[0]!.assistantResponse?.createdAt).toBe('t3');
+  });
+
+  it('orphan response (no prior prompt) is dropped, not crashed', () => {
+    const turns = groupEventsIntoTurns([
+      ev('response', { text: 'orphan' }, 't1'),
+      ev('prompt',   { text: 'q' },      't2'),
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.userPrompt.text).toBe('q');
+    expect(turns[0]!.assistantResponse).toBeUndefined();
+  });
+
+  it('in-flight turn (prompt without response) still emitted', () => {
+    const turns = groupEventsIntoTurns([
+      ev('prompt',   { text: 'q1' }, 't1'),
+      ev('response', { text: 'a1' }, 't2'),
+      ev('prompt',   { text: 'q2' }, 't3'),
+      // no response for q2 yet
+    ]);
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.assistantResponse).toBeUndefined();
+    expect(turns[1]!.userPrompt.text).toBe('q2');
+  });
+
+  it('non-string payload.text becomes empty string (defensive)', () => {
+    const turns = groupEventsIntoTurns([
+      ev('prompt',   { /* no text field */ },     't1'),
+      ev('response', { text: 12345 as unknown }, 't2'),
+    ]);
+    expect(turns[0]!.userPrompt.text).toBe('');
+    expect(turns[0]!.assistantResponse?.text).toBe('');
   });
 });

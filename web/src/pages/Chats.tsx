@@ -780,12 +780,20 @@ function TimelineTurnCard({
         <div className="helm-conv-turn-body">
           <div className="helm-conv-turn-msg helm-conv-turn-msg-user">
             <span className="helm-conv-turn-who helm-conv-turn-who-user">you</span>
-            <Markdown>{turn.userPrompt.text || '_(empty prompt)_'}</Markdown>
+            {/* react-markdown emits multiple top-level <p> children; without a
+                wrapping div they each become flex items and split the row
+                into N narrow columns. Wrap once to keep markdown a single
+                flex child that stacks naturally. */}
+            <div className="helm-conv-turn-md">
+              <Markdown>{turn.userPrompt.text || '_(empty prompt)_'}</Markdown>
+            </div>
           </div>
           {turn.assistantResponse && (
             <div className="helm-conv-turn-msg helm-conv-turn-msg-ai">
               <span className="helm-conv-turn-who helm-conv-turn-who-ai">AI</span>
-              <Markdown>{turn.assistantResponse.text || '_(empty response)_'}</Markdown>
+              <div className="helm-conv-turn-md">
+                <Markdown>{turn.assistantResponse.text || '_(empty response)_'}</Markdown>
+              </div>
             </div>
           )}
           {turn.toolEvents.length > 0 && (

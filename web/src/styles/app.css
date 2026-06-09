@@ -2073,10 +2073,11 @@ code, pre {
 .helm-conv-turn-msg-ai :is(p, ul, ol) {
   color: var(--text);
 }
-/* Markdown's <p> wraps everything — flex-grow the markdown root so the
-   "you"/"AI" chip stays left-aligned and content fills remaining width. */
-.helm-conv-turn-msg > div:nth-child(2),
-.helm-conv-turn-msg > :not(.helm-conv-turn-who) {
+/* Single flex item for the markdown body — paragraphs stack vertically
+   inside this wrapper. Without the wrapper, each <p> emitted by
+   react-markdown becomes its own flex child and the row degenerates
+   into N narrow columns (one column per top-level block element). */
+.helm-conv-turn-md {
   flex: 1;
   min-width: 0;
   overflow-x: auto;

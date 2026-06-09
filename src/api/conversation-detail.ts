@@ -50,9 +50,36 @@ export interface KnowledgeInPlayPoint extends RetrievalLogPoint {
   roleName?: string;
 }
 
+/**
+ * One turn = one user prompt + the assistant response that followed +
+ * any tool events (tool_use / tool_result / progress) that fired
+ * between this prompt and the next. The renderer's Timeline section
+ * walks these instead of the raw event log — turn granularity matches
+ * how a developer mentally segments the chat.
+ *
+ * The response is optional because a turn can be in-flight (prompt sent
+ * but response not yet captured) or because some agents emit events
+ * helm doesn't yet log as 'response' kind.
+ */
+export interface ConversationDetailTurn {
+  /** 1-indexed turn number within the chat. */
+  index: number;
+  userPrompt: { text: string; createdAt: string };
+  assistantResponse?: { text: string; createdAt: string };
+  /** Tool calls / progress events that fell within this turn's window. */
+  toolEvents: ReadonlyArray<{
+    kind: HostEventLogEntry['kind'];
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }>;
+}
+
 export interface ConversationDetail {
   session: HostSession;
+  /** Raw chronological events. Kept for back-compat + power consumers. */
   timeline: HostEventLogEntry[];
+  /** Pre-grouped turns. Empty when the chat hasn't logged any prompt yet. */
+  turns: ConversationDetailTurn[];
   knowledgeInPlay: ReadonlyArray<{
     log: RetrievalLog;
     points: KnowledgeInPlayPoint[];
@@ -104,6 +131,7 @@ export function getConversationDetail(
   const candidateLimit = opts.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT;
 
   const timeline = listHostEvents(db, hostSessionId, { limit: timelineLimit });
+  const turns = groupEventsIntoTurns(timeline);
 
   const retrievals = getRetrievalsForSession(db, hostSessionId, retrievalLimit);
   const knowledgeInPlay = retrievals.map((log) => ({
@@ -133,7 +161,69 @@ export function getConversationDetail(
     return out;
   });
 
-  return { session, timeline, knowledgeInPlay, candidates };
+  return { session, timeline, turns, knowledgeInPlay, candidates };
+}
+
+/**
+ * Walk an event log (already in chronological order) and group into
+ * turns. A `prompt` starts a new turn; subsequent `response` /
+ * `tool_use` / `tool_result` / `progress` events accumulate into the
+ * current turn. The last turn may lack a response (in-flight chat).
+ *
+ * Events before the first prompt (rare — only if an out-of-order
+ * response fires before any prompt is captured) are dropped: they
+ * don't belong to any turn the renderer can render.
+ *
+ * Exported for unit testing. The aggregator's purity (no DB / no Date)
+ * makes it easy to pin.
+ */
+export function groupEventsIntoTurns(
+  events: readonly HostEventLogEntry[],
+): ConversationDetailTurn[] {
+  const turns: ConversationDetailTurn[] = [];
+  let current: {
+    index: number;
+    userPrompt: { text: string; createdAt: string };
+    assistantResponse?: { text: string; createdAt: string };
+    toolEvents: Array<{
+      kind: HostEventLogEntry['kind'];
+      payload: Record<string, unknown>;
+      createdAt: string;
+    }>;
+  } | null = null;
+
+  for (const ev of events) {
+    if (ev.kind === 'prompt') {
+      if (current) turns.push(current);
+      const text = typeof ev.payload['text'] === 'string'
+        ? (ev.payload['text'] as string)
+        : '';
+      current = {
+        index: turns.length + 1,
+        userPrompt: { text, createdAt: ev.createdAt },
+        toolEvents: [],
+      };
+      continue;
+    }
+    if (!current) continue; // orphan event before first prompt
+
+    if (ev.kind === 'response') {
+      const text = typeof ev.payload['text'] === 'string'
+        ? (ev.payload['text'] as string)
+        : '';
+      // Last response in the turn wins — long agent responses can emit
+      // multiple chunks. The renderer wants the final concatenated text.
+      current.assistantResponse = { text, createdAt: ev.createdAt };
+      continue;
+    }
+    current.toolEvents.push({
+      kind: ev.kind,
+      payload: ev.payload,
+      createdAt: ev.createdAt,
+    });
+  }
+  if (current) turns.push(current);
+  return turns;
 }
 
 /**

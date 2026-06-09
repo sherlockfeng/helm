@@ -1870,6 +1870,195 @@ code, pre {
   opacity: 1;
 }
 
+/* ─── Timeline section ─────────────────────────────────────────────── */
+.helm-conv-turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.helm-conv-turn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+.helm-conv-turn.expanded { background: var(--bg-elev); }
+
+.helm-conv-turn-header {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.helm-conv-turn-header:hover { background: var(--hover); }
+.helm-conv-turn-caret {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  display: inline-block;
+  width: 10px;
+}
+.helm-conv-turn-index {
+  font-weight: 600;
+  color: var(--text);
+}
+.helm-conv-turn-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.helm-conv-turn-tools {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+.helm-conv-turn-inflight {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent, #f59e0b);
+}
+.helm-conv-turn-tools + .helm-conv-turn-inflight { margin-left: 6px; }
+
+/* Collapsed preview — 1-line user + 1-line assistant */
+.helm-conv-turn-preview {
+  padding: 4px 10px 8px 28px; /* align under the caret */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.helm-conv-turn-line {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.helm-conv-turn-who {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  line-height: 14px;
+  flex-shrink: 0;
+}
+.helm-conv-turn-who-user { background: rgba(110, 110, 115, 0.15); color: var(--text-secondary); }
+.helm-conv-turn-who-ai   { background: rgba(59, 130, 246, 0.18); color: #1d4ed8; }
+.helm-conv-turn-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  min-width: 0;
+}
+
+/* Expanded body — full markdown */
+.helm-conv-turn-body {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.helm-conv-turn-msg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.helm-conv-turn-msg > .helm-conv-turn-who {
+  margin-top: 2px;
+}
+.helm-conv-turn-msg :is(p, ul, ol, pre, blockquote) {
+  margin: 4px 0;
+}
+.helm-conv-turn-msg pre {
+  background: var(--bg-pre, rgba(0,0,0,0.04));
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+.helm-conv-turn-msg code {
+  background: var(--bg-pre, rgba(0,0,0,0.04));
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+.helm-conv-turn-msg pre code {
+  padding: 0;
+  background: transparent;
+}
+.helm-conv-turn-msg-user :is(p, ul, ol) {
+  color: var(--text);
+}
+.helm-conv-turn-msg-ai :is(p, ul, ol) {
+  color: var(--text);
+}
+/* Markdown's <p> wraps everything — flex-grow the markdown root so the
+   "you"/"AI" chip stays left-aligned and content fills remaining width. */
+.helm-conv-turn-msg > div:nth-child(2),
+.helm-conv-turn-msg > :not(.helm-conv-turn-who) {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.helm-conv-turn-tools-list {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.helm-conv-turn-tools-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.helm-conv-turn-tools-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.helm-conv-turn-tools-list li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.helm-conv-turn-tool-kind {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.helm-conv-turn-tools-list code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
 /* Ambient footer — one muted line, no chrome */
 .helm-conv-footer {
   padding: 10px 0 12px;

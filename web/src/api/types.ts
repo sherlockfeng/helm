@@ -355,9 +355,25 @@ export interface ConversationDetailCandidate {
   createdAt: string;
 }
 
+/**
+ * Pre-grouped turn (prompt + matching response + intra-turn tool events).
+ * The detail pane's Timeline section renders these instead of raw events.
+ */
+export interface ConversationDetailTurn {
+  index: number;
+  userPrompt: { text: string; createdAt: string };
+  assistantResponse?: { text: string; createdAt: string };
+  toolEvents: ReadonlyArray<{
+    kind: 'prompt' | 'response' | 'tool_use' | 'tool_result' | 'progress';
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }>;
+}
+
 export interface ConversationDetail {
   session: ConversationDetailSession;
   timeline: ConversationDetailEvent[];
+  turns: ConversationDetailTurn[];
   knowledgeInPlay: ConversationDetailKnowledgeInPlay[];
   candidates: ConversationDetailCandidate[];
 }

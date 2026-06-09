@@ -815,12 +815,15 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         // Conversations rail's KNOWLEDGE OUT section can render them as
         // categorical headlines instead of raw 2-line excerpts. Best
         // effort — any failure leaves the row unchanged (renderer falls
-        // back to chunkText).
+        // back to chunkText). Sync try/catch wraps `.current()` because
+        // it throws when no engine is wired (see host_stop handler).
         for (const candidate of result.inserted) {
-          void generateCandidateGist(deps.db, candidate.id, {
-            llm: engineRouter.current().summarize,
-            model: liveConfig.cursor.model,
-          }).catch(() => { /* swallow */ });
+          try {
+            void generateCandidateGist(deps.db, candidate.id, {
+              llm: engineRouter.current().summarize,
+              model: liveConfig.cursor.model,
+            }).catch(() => { /* swallow async rejections */ });
+          } catch { /* engine unavailable — skip classification */ }
         }
         if (result.candidatesCreated > 0 || result.segments > 0) {
           captureLog.info('capture_sweep_completed', {
@@ -915,13 +918,17 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   bridge.registerHandler('host_stop', async (req: HostStopRequest): Promise<HostStopResponse> => {
     autoUpsertSession(deps.db, events, log, req.host_session_id);
     // PR3 (conv detail): fire-and-forget TL;DR regeneration so the
-    // detail pane's top block stays roughly fresh. Throttling can be
-    // added later once we have cost numbers; today the cost is one
-    // small LLM call per Stop.
-    void generateChatTldr(deps.db, req.host_session_id, {
-      llm: engineRouter.current().summarize,
-      model: liveConfig.cursor.model,
-    }).catch(() => { /* swallow — never block the stop long-poll */ });
+    // detail pane's top block stays roughly fresh. Wrapped in sync
+    // try/catch because `engineRouter.current()` throws when no engine
+    // is wired (CI, fresh installs before Settings is touched); a
+    // `.catch()` only handles promise rejections. The Stop handler
+    // must never propagate an engine-availability error to the bridge.
+    try {
+      void generateChatTldr(deps.db, req.host_session_id, {
+        llm: engineRouter.current().summarize,
+        model: liveConfig.cursor.model,
+      }).catch(() => { /* swallow async rejections too */ });
+    } catch { /* engine unavailable — skip the LLM pass */ }
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
   });
 

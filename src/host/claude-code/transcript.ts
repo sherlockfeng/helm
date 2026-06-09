@@ -85,6 +85,59 @@ function extractAssistantText(line: unknown): string | null {
   return textFromContent(obj['content']);
 }
 
+/**
+ * Pull the most recent `customTitle` from a claude code transcript.
+ *
+ * Claude code appends `{"type":"custom-title","customTitle":"...","sessionId":"..."}`
+ * lines into the transcript whenever the session title changes (auto-summary
+ * or user rename). The list is append-only, so the LAST occurrence wins.
+ *
+ * Uses the same tail-bytes reader as `readLastAssistantMessage` — we only
+ * need the most recent ~1 MiB to find any title set in the last few thousand
+ * turns. Returns null when no title is present or the file is unreadable.
+ */
+export function readLatestCustomTitle(transcriptPath: string): string | null {
+  if (!transcriptPath) return null;
+  let size: number;
+  try { size = statSync(transcriptPath).size; }
+  catch { return null; }
+  if (size === 0) return null;
+
+  const start = Math.max(0, size - TAIL_BYTES);
+  const length = size - start;
+  let buf: Buffer;
+  if (start === 0) {
+    try { buf = readFileSync(transcriptPath); }
+    catch { return null; }
+  } else {
+    buf = Buffer.alloc(length);
+    let fd: number;
+    try { fd = openSync(transcriptPath, 'r'); }
+    catch { return null; }
+    try { readSync(fd, buf, 0, length, start); }
+    catch { closeSync(fd); return null; }
+    closeSync(fd);
+  }
+
+  const lines = buf.toString('utf8').split('\n');
+  if (start > 0 && lines.length > 0) lines.shift();
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    // Cheap pre-filter — most lines are user/assistant messages, skip the
+    // JSON parse unless the keyword is present.
+    if (!line.includes('"custom-title"')) continue;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed['type'] !== 'custom-title') continue;
+      const title = parsed['customTitle'];
+      if (typeof title === 'string' && title.trim()) return title.trim();
+    } catch { /* malformed — skip */ }
+  }
+  return null;
+}
+
 function textFromContent(content: unknown): string | null {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return null;

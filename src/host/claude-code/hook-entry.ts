@@ -27,7 +27,7 @@ import {
   isClaudeHookEvent,
   normalizeClaudePayload,
 } from './normalize.js';
-import { readLastAssistantMessage } from './transcript.js';
+import { readLastAssistantMessage, readLatestCustomTitle } from './transcript.js';
 
 interface ParsedArgs {
   event?: string;
@@ -83,13 +83,30 @@ export async function runHook(options: RunHookOptions = {}): Promise<void> {
         const transcriptPath = typeof payload['transcript_path'] === 'string'
           ? (payload['transcript_path'] as string)
           : '';
-        const text = transcriptPath ? readLastAssistantMessage(transcriptPath) : null;
-        if (text) {
-          const respEv = buildAgentResponseFromTranscript(payload, text);
-          const respReq = eventToBridgeRequest(respEv);
-          if (respReq) {
-            await sendBridgeMessage(respReq, { socketPath, timeoutMs })
-              .catch(() => { /* swallow */ });
+        if (transcriptPath) {
+          const text = readLastAssistantMessage(transcriptPath);
+          if (text) {
+            const respEv = buildAgentResponseFromTranscript(payload, text);
+            const respReq = eventToBridgeRequest(respEv);
+            if (respReq) {
+              await sendBridgeMessage(respReq, { socketPath, timeoutMs })
+                .catch(() => { /* swallow */ });
+            }
+          }
+
+          // Sync claude's own session title (TUI sidebar name) into helm.
+          // Claude appends `{"type":"custom-title",...}` rows to the
+          // transcript whenever the title shifts — auto-summary or user
+          // rename. Helm's chatLabel() prefers `displayName`, so writing
+          // the title there makes the rail row show the same name as
+          // claude code does. Last-write-wins on the server side.
+          const title = readLatestCustomTitle(transcriptPath);
+          const hostSessionId = primary.hostSessionId;
+          if (title && hostSessionId && hostSessionId !== 'unknown') {
+            await sendBridgeMessage(
+              { type: 'host_chat_rename', host_session_id: hostSessionId, title },
+              { socketPath, timeoutMs },
+            ).catch(() => { /* swallow */ });
           }
         }
       }

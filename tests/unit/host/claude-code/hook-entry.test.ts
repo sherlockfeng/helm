@@ -107,6 +107,36 @@ describe('runHook (claude code)', () => {
     expect(resp.response_text).toBe('world response');
   });
 
+  it('Stop emits host_chat_rename when transcript carries a custom-title', async () => {
+    await startCapturingBridge();
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    writeFileSync(transcriptPath, [
+      JSON.stringify({ role: 'user', content: 'kick off' }),
+      JSON.stringify({ role: 'assistant', content: 'sure' }),
+      JSON.stringify({ type: 'custom-title', customTitle: 'helm-build-fix', sessionId: 'sess-Y2' }),
+    ].join('\n') + '\n');
+
+    await drive(
+      ['--event', 'Stop'],
+      { session_id: 'sess-Y2', hook_event_name: 'Stop', transcript_path: transcriptPath },
+    );
+    const rename = captured.find((r) => r.type === 'host_chat_rename') as Extract<AnyBridgeRequest, { type: 'host_chat_rename' }>;
+    expect(rename).toBeDefined();
+    expect(rename.host_session_id).toBe('sess-Y2');
+    expect(rename.title).toBe('helm-build-fix');
+  });
+
+  it('Stop does NOT emit host_chat_rename when transcript has no custom-title row', async () => {
+    await startCapturingBridge();
+    const transcriptPath = join(dir, 'transcript.jsonl');
+    writeFileSync(transcriptPath, JSON.stringify({ role: 'assistant', content: 'hi' }) + '\n');
+    await drive(
+      ['--event', 'Stop'],
+      { session_id: 'sess-Y3', hook_event_name: 'Stop', transcript_path: transcriptPath },
+    );
+    expect(captured.find((r) => r.type === 'host_chat_rename')).toBeUndefined();
+  });
+
   it('Stop with no transcript path still emits stop (no agent_response)', async () => {
     await startCapturingBridge();
     const out = await drive(

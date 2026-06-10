@@ -16,6 +16,7 @@ export const BRIDGE_MESSAGE_TYPES = [
   'host_progress',
   'host_stop',
   'host_approval_request',
+  'host_chat_rename',
   'channel_inbound_message',
   'channel_approval_decision',
   'channel_create_binding',
@@ -173,6 +174,22 @@ export interface ChannelDisableWaitResponse extends BridgeResponse {
   ok: boolean;
 }
 
+/**
+ * Push a host-side chat label change into helm. Currently emitted by the
+ * Claude Code hook entry when the transcript's `customTitle` shifts (claude
+ * auto-summarises a name, or the user renames via the TUI). Server writes
+ * the value to `host_sessions.display_name`. Empty / unchanged values are
+ * no-ops on the server side.
+ */
+export interface HostChatRenameRequest extends BridgeRequest {
+  type: 'host_chat_rename';
+  host_session_id: string;
+  title: string;
+}
+export interface HostChatRenameResponse extends BridgeResponse {
+  ok: boolean;
+}
+
 // ── Discriminated unions ───────────────────────────────────────────────────
 
 export type AnyBridgeRequest =
@@ -182,6 +199,7 @@ export type AnyBridgeRequest =
   | HostProgressRequest
   | HostStopRequest
   | HostApprovalRequestRequest
+  | HostChatRenameRequest
   | ChannelInboundMessageRequest
   | ChannelApprovalDecisionRequest
   | ChannelCreateBindingRequest
@@ -197,6 +215,7 @@ export interface ResponseTypeMap {
   host_progress: HostProgressResponse;
   host_stop: HostStopResponse;
   host_approval_request: HostApprovalRequestResponse;
+  host_chat_rename: HostChatRenameResponse;
   channel_inbound_message: ChannelInboundMessageResponse;
   channel_approval_decision: ChannelApprovalDecisionResponse;
   channel_create_binding: ChannelCreateBindingResponse;

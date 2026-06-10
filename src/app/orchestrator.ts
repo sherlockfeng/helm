@@ -88,6 +88,7 @@ import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants
 import {
   closeStaleHostSessions,
   getHostSession,
+  setHostSessionDisplayName,
   setHostSessionFirstPrompt,
   setLastInjectedGuideVersion,
   setLastInjectedRoleIds,
@@ -122,7 +123,12 @@ import { createCursorAgentSpawner } from '../spawner/cursor-spawner.js';
 import type { Logger, LoggerFactory } from '../logger/index.js';
 import { createEventBus, type EventBus } from '../events/bus.js';
 import { attachLarkChannel, type LarkWiringHandle } from './lark-wiring.js';
-import type { HostStopRequest, HostStopResponse } from '../bridge/protocol.js';
+import type {
+  HostStopRequest,
+  HostStopResponse,
+  HostChatRenameRequest,
+  HostChatRenameResponse,
+} from '../bridge/protocol.js';
 import { buildVerificationRunner } from '../verification/bootstrap.js';
 import { KnowledgeRepoManager } from '../knowledge-repo/manager.js';
 import { createNodeGitRunner } from '../knowledge-repo/git-runner.js';
@@ -930,6 +936,23 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       }).catch(() => { /* swallow async rejections too */ });
     } catch { /* engine unavailable — skip the LLM pass */ }
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
+  });
+
+  // Sync claude-side chat titles into helm. Emitted by the claude code hook
+  // entry on Stop (tails the transcript's `custom-title` rows). Other agents
+  // can wire the same request when they expose a title hook.
+  bridge.registerHandler('host_chat_rename', async (req: HostChatRenameRequest): Promise<HostChatRenameResponse> => {
+    autoUpsertSession(deps.db, events, log, req.host_session_id);
+    const trimmed = (req.title ?? '').trim();
+    if (!trimmed) return { ok: false };
+    const existing = getHostSession(deps.db, req.host_session_id);
+    // Only write when the value actually changes — avoids SSE noise on
+    // every Stop hook when the title hasn't shifted.
+    if (existing?.displayName === trimmed) return { ok: true };
+    setHostSessionDisplayName(deps.db, req.host_session_id, trimmed);
+    const updated = getHostSession(deps.db, req.host_session_id);
+    if (updated) events.emit({ type: 'session.started', session: updated });
+    return { ok: true };
   });
 
   // ── Lark channel (opt-in) ───────────────────────────────────────────────

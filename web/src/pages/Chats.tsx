@@ -19,14 +19,15 @@
  * detail aggregate is fetched only for the currently-selected row.
  */
 
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { toast } from 'sonner';
 import { Combobox } from '../components/Combobox.js';
-import { ConfirmDialog } from '../components/Dialog.js';
+import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
+import { Button } from '../components/Button.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import Markdown from 'react-markdown';
 import type {
@@ -35,6 +36,7 @@ import type {
   ConversationDetailKnowledgeInPlay,
   ConversationDetailTurn,
   RoleSuggestion,
+  UnknownEntity,
 } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -381,6 +383,16 @@ function ConversationDetailPane({
       {/* Timeline — turn-by-turn conversation content */}
       <TimelineSection turns={data?.turns ?? []} loading={loading && !data} />
 
+      {/* Unknown-entities layer (PR-C): chat mentions things helm has
+          no role for. Surfaces "create a new role" affordance — higher
+          priority than the suggestion layer because it solves a
+          completely uncovered domain. */}
+      <UnknownEntitiesSection
+        unknownEntities={data?.unknownEntities ?? []}
+        hostSessionId={chat.id}
+        onSpawned={() => reload()}
+      />
+
       {/* Role-suggestion layer: which existing roles' entities does this
           chat touch? Surfaces "this chat is about TCE — TCE 专家 might
           want some of it" before the user has bound the role. */}
@@ -527,6 +539,173 @@ function KnowledgeInSection({
         </>
       )}
     </div>
+  );
+}
+
+// ── Unknown entities (Path B — spawn role from chat) ────────────────────
+
+function UnknownEntitiesSection({
+  unknownEntities,
+  hostSessionId,
+  onSpawned,
+}: {
+  unknownEntities: UnknownEntity[];
+  hostSessionId: string;
+  onSpawned: () => void;
+}): ReactElement | null {
+  const [showModal, setShowModal] = useState(false);
+  if (unknownEntities.length === 0) return null;
+  return (
+    <>
+      <div className="helm-conv-section">
+        <div className="helm-conv-section-header">
+          <span className="helm-conv-section-label">helm 不认识的内容</span>
+          <span className="helm-conv-section-meta">
+            {unknownEntities.length} unknown {unknownEntities.length === 1 ? 'entity' : 'entities'}
+          </span>
+        </div>
+        <p className="helm-conv-empty" style={{ marginBottom: 8 }}>
+          这条 chat 反复提到 helm 还没有 role 覆盖的内容。要不要建一个 role 来沉淀？
+        </p>
+        <div className="helm-conv-unknown-chips">
+          {unknownEntities.map((e) => (
+            <span key={e.entity} className="helm-conv-unknown-chip" title={`${e.mentions} mentions`}>
+              {e.entity} <span className="helm-conv-unknown-chip-count">×{e.mentions}</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <button
+            type="button"
+            className="helm-conv-link-button"
+            onClick={() => setShowModal(true)}
+          >
+            + 新建 role…
+          </button>
+        </div>
+      </div>
+      {showModal && (
+        <SpawnRoleModal
+          hostSessionId={hostSessionId}
+          unknownEntities={unknownEntities}
+          onClose={() => setShowModal(false)}
+          onSpawned={(roleName, total) => {
+            setShowModal(false);
+            toast.success(`Role "${roleName}" 已创建 · 自动提取了 ${total} 个候选`);
+            onSpawned();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function SpawnRoleModal({
+  hostSessionId,
+  unknownEntities,
+  onClose,
+  onSpawned,
+}: {
+  hostSessionId: string;
+  unknownEntities: UnknownEntity[];
+  onClose: () => void;
+  onSpawned: (roleName: string, totalCandidates: number) => void;
+}): ReactElement {
+  // Default selection: top 5 entities. User can uncheck.
+  const initial = useMemo(
+    () => new Set(unknownEntities.slice(0, 5).map((e) => e.entity)),
+    [unknownEntities],
+  );
+  const [selected, setSelected] = useState<Set<string>>(initial);
+  const [roleName, setRoleName] = useState(
+    unknownEntities[0] ? `${unknownEntities[0].entity} 专家` : '新建 role',
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  function toggle(entity: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(entity)) next.delete(entity);
+      else next.add(entity);
+      return next;
+    });
+  }
+
+  async function submit(): Promise<void> {
+    if (selected.size === 0 || !roleName.trim()) return;
+    setSubmitting(true);
+    try {
+      const r = await helmApi.spawnRoleFromChat(hostSessionId, {
+        entities: Array.from(selected),
+        roleName: roleName.trim(),
+      });
+      onSpawned(r.roleName, r.updateCount + r.newCount);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      toast.error(`Spawn role failed: ${msg}`);
+    } finally { setSubmitting(false); }
+  }
+
+  return (
+    <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 560)}
+        aria-label="Create role from chat"
+      >
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>从这条 chat 新建 role</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            helm 会用 chat 里提到选中实体的段落作为 role 的种子知识，自动训练 + 提取候选。
+          </div>
+        </div>
+
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Role name</div>
+          <input
+            type="text"
+            value={roleName}
+            onChange={(e) => setRoleName(e.target.value.slice(0, 60))}
+            placeholder="OG 专家"
+            style={{
+              width: '100%', padding: '6px 10px', fontSize: 13,
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+            }}
+          />
+        </label>
+
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+          种子实体（chat 里提到这些词的段落会被收进 role）
+        </div>
+        <div className="helm-conv-unknown-chips" style={{ marginBottom: 12 }}>
+          {unknownEntities.map((e) => {
+            const on = selected.has(e.entity);
+            return (
+              <button
+                key={e.entity}
+                type="button"
+                onClick={() => toggle(e.entity)}
+                className={`helm-conv-unknown-chip${on ? ' is-selected' : ''}`}
+                aria-pressed={on}
+              >
+                {on ? '✓ ' : ''}{e.entity}
+                <span className="helm-conv-unknown-chip-count">×{e.mentions}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <Button
+            variant="primary"
+            disabled={submitting || selected.size === 0 || !roleName.trim()}
+            onClick={() => { void submit(); }}
+          >
+            {submitting ? '创建中…' : `创建 role + 提取`}
+          </Button>
+          <button type="button" onClick={onClose} disabled={submitting}>取消</button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

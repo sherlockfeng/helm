@@ -87,6 +87,27 @@ export const helmApi = {
       { roleId },
     ),
 
+  /**
+   * PR-C: spawn a new role from this chat's unknown entities, train it
+   * on the relevant passages, and auto-run curation. Returns the new
+   * role id + curation tally.
+   */
+  spawnRoleFromChat: (
+    hostSessionId: string,
+    input: { entities: string[]; roleName?: string; roleId?: string },
+  ) =>
+    request<{
+      roleId: string;
+      roleName: string;
+      updateCount: number;
+      newCount: number;
+      candidateIds: string[];
+    }>(
+      'POST',
+      `/api/conversations/${encodeURIComponent(hostSessionId)}/spawn-role`,
+      input,
+    ),
+
   // Phase 25 / 42: legacy single-role setter — replaces the chat's entire
   // role list with this one role (or empty when null). Kept for clients that
   // haven't switched to addChatRole / removeChatRole.

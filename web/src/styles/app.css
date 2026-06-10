@@ -1866,6 +1866,55 @@ code, pre {
   font-style: italic;
 }
 
+/* PR-C — unknown entity chips (chat mentions helm has no role for).
+   Amber palette so the section reads as "warning, action needed" without
+   actually being an error. */
+.helm-conv-unknown-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.helm-conv-unknown-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+/* Inside the spawn-role modal the chips are interactive toggles. */
+button.helm-conv-unknown-chip {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-pre, rgba(0,0,0,0.04));
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  border: 1px solid transparent;
+}
+button.helm-conv-unknown-chip:hover {
+  background: rgba(245, 158, 11, 0.10);
+}
+button.helm-conv-unknown-chip.is-selected {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92400e;
+  font-weight: 600;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+.helm-conv-unknown-chip-count {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
 /* Knowledge OUT — candidate excerpts with hover triage actions */
 .helm-conv-candidates {
   list-style: none;

@@ -399,6 +399,11 @@ export interface RoleSuggestion {
   isBound: boolean;
 }
 
+export interface UnknownEntity {
+  entity: string;
+  mentions: number;
+}
+
 export interface ConversationDetail {
   session: ConversationDetailSession;
   timeline: ConversationDetailEvent[];
@@ -406,6 +411,7 @@ export interface ConversationDetail {
   knowledgeInPlay: ConversationDetailKnowledgeInPlay[];
   candidates: ConversationDetailCandidate[];
   roleSuggestions: RoleSuggestion[];
+  unknownEntities: UnknownEntity[];
 }
 
 /** Phase 79 — one row in the Settings → Storage plugins list. */

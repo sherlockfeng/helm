@@ -255,6 +255,24 @@ export interface HttpApiDeps {
     roleId: string;
   }) => Promise<{ updateCount: number; newCount: number; candidateIds: string[] }>;
   /**
+   * PR-C (Path B): create a new role from a chat's unknown entities,
+   * then immediately run curation against the new role so the user
+   * sees candidates without a second click. Returns the new role id +
+   * the curation tally.
+   */
+  spawnRoleFromChat?: (input: {
+    hostSessionId: string;
+    entities: string[];
+    roleName?: string;
+    roleId?: string;
+  }) => Promise<{
+    roleId: string;
+    roleName: string;
+    updateCount: number;
+    newCount: number;
+    candidateIds: string[];
+  }>;
+  /**
    * Train (or re-train) a role from documents (B3). When undefined, the
    * Roles page's POST /api/roles/:id/train endpoint returns 501. Tests
    * inject a stub; the orchestrator wires it via the same embedFn used
@@ -534,6 +552,47 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         const detail = getConversationDetail(deps.db, conversationDetailMatch[1]!);
         if (!detail) return send(res, 404, { error: 'Conversation not found' });
         return send(res, 200, detail);
+      }
+
+      // PR-C: create a role from this chat's unknown entities, train
+      // it on the chat passages mentioning those entities, and auto-run
+      // curation. One round-trip from the renderer's "新建 role" modal.
+      const conversationSpawnRoleMatch = url.pathname.match(
+        /^\/api\/conversations\/([^/]+)\/spawn-role$/,
+      );
+      if (conversationSpawnRoleMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.spawnRoleFromChat) {
+          return send(res, 501, {
+            error: 'not_implemented',
+            message: 'Spawn-role engine not wired — open Settings → Default engine to enable.',
+          });
+        }
+        let body: { entities?: unknown; roleName?: unknown; roleId?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return send(res, 400, { error: 'invalid_json' }); }
+        const entities = Array.isArray(body.entities)
+          ? body.entities.filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
+          : [];
+        if (entities.length === 0) {
+          return send(res, 400, { error: 'invalid_request', message: 'entities[] required' });
+        }
+        const roleName = typeof body.roleName === 'string' ? body.roleName.trim() : undefined;
+        const roleId = typeof body.roleId === 'string' ? body.roleId.trim() : undefined;
+        try {
+          const result = await deps.spawnRoleFromChat({
+            hostSessionId: conversationSpawnRoleMatch[1]!,
+            entities,
+            ...(roleName ? { roleName } : {}),
+            ...(roleId ? { roleId } : {}),
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          return send(res, 500, {
+            error: 'spawn_role_failed',
+            message: (err as Error).message,
+          });
+        }
       }
 
       // PR-B: trigger LLM curation for one chat × role pair. Called from

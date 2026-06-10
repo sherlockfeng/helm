@@ -72,6 +72,10 @@ import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
 import { generateCandidateGist } from '../summarizer/candidate-gist.js';
 import { runCurationForRole } from '../summarizer/curation.js';
+import {
+  pickSeedDocsForUnknownEntities,
+  suggestRoleNameFromEntities,
+} from '../knowledge/spawn-role-from-chat.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
 import { setupMcp as runSetupMcp } from '../cli/setup-mcp.js';
@@ -1435,6 +1439,39 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           llm: adapter.summarize,
           model: liveConfig.cursor.model,
         });
+      },
+      // PR-C (Path B): spawn a brand-new role from this chat's unknown
+      // entities. Pipeline:
+      //   1. Pick chat passages that mention the user-confirmed entities
+      //   2. trainRole() — creates role + indexes chunks + entities
+      //   3. runCurationForRole() against the same chat — closes the loop
+      //      so the user lands on candidates instead of an empty role
+      spawnRoleFromChat: async ({ hostSessionId, entities, roleName, roleId }) => {
+        const adapter = engineRouter.current();
+        const suggested = suggestRoleNameFromEntities(entities);
+        const finalRoleId = roleId ?? suggested?.id ?? `chat-${hostSessionId.slice(0, 8)}-expert`;
+        const finalRoleName = roleName ?? suggested?.name ?? '新建 role';
+        const seedDocs = pickSeedDocsForUnknownEntities(deps.db, hostSessionId, entities);
+        if (seedDocs.length === 0) {
+          throw new Error('No chat passages mention the given entities — cannot seed the role.');
+        }
+        await trainRole(deps.db, {
+          roleId: finalRoleId,
+          name: finalRoleName,
+          documents: seedDocs,
+          embedFn: makePseudoEmbedFn(),
+        });
+        const cur = await runCurationForRole(deps.db, hostSessionId, finalRoleId, {
+          llm: adapter.summarize,
+          model: liveConfig.cursor.model,
+        });
+        return {
+          roleId: finalRoleId,
+          roleName: finalRoleName,
+          updateCount: cur.updateCount,
+          newCount: cur.newCount,
+          candidateIds: cur.candidateIds,
+        };
       },
       // B3: train the same roles LocalRolesProvider reads from. The shared
       // pseudo-embed function keeps the embeddings consistent between

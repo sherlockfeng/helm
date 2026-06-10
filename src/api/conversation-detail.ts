@@ -26,6 +26,7 @@ import { getHostSession } from '../storage/repos/host-sessions.js';
 import { listHostEvents } from '../storage/repos/host-event-log.js';
 import { getRetrievalsForSession } from '../storage/repos/retrieval-log.js';
 import { suggestRolesForChat, type RoleSuggestion } from '../knowledge/chat-role-suggester.js';
+import { unknownEntitiesForChat, type UnknownEntity } from '../knowledge/chat-unknown-entities.js';
 import type {
   HostEventLogEntry,
   HostSession,
@@ -108,6 +109,13 @@ export interface ConversationDetail {
    * conversation (or when the chat hasn't logged enough text yet).
    */
   roleSuggestions: RoleSuggestion[];
+  /**
+   * Path B (PR-C): high-frequency entities in this chat that NO role's
+   * index covers. Drives the "🤷 helm 不认识的内容" prompt to create a
+   * new role. Complementary to roleSuggestions — the suggester finds
+   * matches; this one finds the gap.
+   */
+  unknownEntities: UnknownEntity[];
 }
 
 export interface ConversationDetailOptions {
@@ -178,8 +186,12 @@ export function getConversationDetail(
   });
 
   const roleSuggestions = suggestRolesForChat(db, hostSessionId);
+  const unknownEntities = unknownEntitiesForChat(db, hostSessionId);
 
-  return { session, timeline, turns, knowledgeInPlay, candidates, roleSuggestions };
+  return {
+    session, timeline, turns, knowledgeInPlay, candidates,
+    roleSuggestions, unknownEntities,
+  };
 }
 
 /**

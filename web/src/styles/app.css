@@ -1812,6 +1812,60 @@ code, pre {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
 }
 
+/* ─── Role suggestions (KNOWLEDGE OUT — discovery layer) ────────────── */
+.helm-conv-suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.helm-conv-suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.helm-conv-suggestion-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.helm-conv-suggestion-role {
+  font-weight: 600;
+  color: var(--text);
+}
+.helm-conv-suggestion-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex: 1;
+}
+.helm-conv-suggestion-entities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.helm-conv-entity-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-pre, rgba(0,0,0,0.04));
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  white-space: nowrap;
+}
+.helm-conv-entity-more {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 1px 4px;
+  font-style: italic;
+}
+
 /* Knowledge OUT — candidate excerpts with hover triage actions */
 .helm-conv-candidates {
   list-style: none;

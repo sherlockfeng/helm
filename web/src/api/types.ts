@@ -379,12 +379,21 @@ export interface ConversationDetailTurn {
   }>;
 }
 
+export interface RoleSuggestion {
+  roleId: string;
+  roleName: string;
+  hitEntities: string[];
+  totalHits: number;
+  isBound: boolean;
+}
+
 export interface ConversationDetail {
   session: ConversationDetailSession;
   timeline: ConversationDetailEvent[];
   turns: ConversationDetailTurn[];
   knowledgeInPlay: ConversationDetailKnowledgeInPlay[];
   candidates: ConversationDetailCandidate[];
+  roleSuggestions: RoleSuggestion[];
 }
 
 /** Phase 79 — one row in the Settings → Storage plugins list. */

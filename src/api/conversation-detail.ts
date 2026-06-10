@@ -25,6 +25,7 @@ import type Database from 'better-sqlite3';
 import { getHostSession } from '../storage/repos/host-sessions.js';
 import { listHostEvents } from '../storage/repos/host-event-log.js';
 import { getRetrievalsForSession } from '../storage/repos/retrieval-log.js';
+import { suggestRolesForChat, type RoleSuggestion } from '../knowledge/chat-role-suggester.js';
 import type {
   HostEventLogEntry,
   HostSession,
@@ -100,6 +101,13 @@ export interface ConversationDetail {
     /** PR3: classified kind from KnowledgeChunkKind taxonomy. */
     kind?: 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
   }>;
+  /**
+   * Curation-discovery layer: roles whose entity index overlaps with
+   * this chat's text. Drives the "💡 这条对话涉及" suggestion section in
+   * the detail pane. Empty when no role's entities show up in the
+   * conversation (or when the chat hasn't logged enough text yet).
+   */
+  roleSuggestions: RoleSuggestion[];
 }
 
 export interface ConversationDetailOptions {
@@ -169,7 +177,9 @@ export function getConversationDetail(
     return out;
   });
 
-  return { session, timeline, turns, knowledgeInPlay, candidates };
+  const roleSuggestions = suggestRolesForChat(db, hostSessionId);
+
+  return { session, timeline, turns, knowledgeInPlay, candidates, roleSuggestions };
 }
 
 /**

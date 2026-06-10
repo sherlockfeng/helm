@@ -61,7 +61,9 @@ describe('suggestRolesForChat', () => {
 
   it('returns [] when no role\'s entities show up in the chat', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR', 'TCE-fallback']);
+    // Role entities must be 3+ uppercase tokens to match extractEntities()
+    // Tier 2 — this mirrors what the real capture indexer produces.
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
     appendPrompt(db, 's1', '我想讨论 React hooks 的最佳实践');
     appendResponse(db, 's1', 'useState / useEffect / useMemo');
     expect(suggestRolesForChat(db, 's1')).toEqual([]);
@@ -69,21 +71,23 @@ describe('suggestRolesForChat', () => {
 
   it('returns the role when ≥2 distinct entities mentioned ≥3 times total', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR', 'TCE-fallback']);
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
+    // Chat text mentions all three tokens; "TCE-CSR" parses as TCE + CSR
+    // via the extractor's word-boundary rule — same tokens stored above.
     appendPrompt(db, 's1', '我想看 TCE 怎么走 TCE-CSR 的');
-    appendResponse(db, 's1', 'TCE 通过 TCE-fallback 路由, TCE-CSR 是子模块');
+    appendResponse(db, 's1', 'TCE 通过 BAM 路由, CSR 是子模块');
     const out = suggestRolesForChat(db, 's1');
     expect(out).toHaveLength(1);
     expect(out[0]!.roleId).toBe('tce');
     expect(out[0]!.roleName).toBe('TCE 专家');
-    expect(out[0]!.hitEntities.sort()).toEqual(['TCE', 'TCE-CSR', 'TCE-fallback']);
-    expect(out[0]!.totalHits).toBeGreaterThanOrEqual(4); // TCE×3 + TCE-CSR×2 + TCE-fallback×1
+    expect(out[0]!.hitEntities.sort()).toEqual(['BAM', 'CSR', 'TCE']);
+    expect(out[0]!.totalHits).toBeGreaterThanOrEqual(4);
     expect(out[0]!.isBound).toBe(false);
   });
 
   it('suppresses suggestions below the distinct-entity threshold', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR', 'TCE-fallback']);
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
     // Only ONE distinct entity mentioned, even if mentioned many times.
     appendPrompt(db, 's1', 'TCE TCE TCE TCE TCE');
     expect(suggestRolesForChat(db, 's1')).toEqual([]);
@@ -91,24 +95,24 @@ describe('suggestRolesForChat', () => {
 
   it('sorts multiple matched roles by distinct-entity count, then total hits', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR', 'TCE-fallback']);
-    seedRoleWithEntities(db, 'og', 'OG 专家', ['OG', 'OG-BD', 'v5 schema', 'BAM']);
-    // OG hit harder
-    appendPrompt(db, 's1', 'OG 和 OG-BD 在 v5 schema 下用 BAM IDL Load');
-    appendResponse(db, 's1', 'OG 走 OG-BD; TCE 跑 TCE-CSR');
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
+    seedRoleWithEntities(db, 'og', 'OG 专家', ['BFF', 'SSR', 'IDL', 'JSON']);
+    // OG hit harder: 4 distinct tokens vs TCE's 2
+    appendPrompt(db, 's1', 'BFF 和 SSR 在 IDL 下用 JSON');
+    appendResponse(db, 's1', 'BFF 走 SSR; TCE 跑 CSR');
     const out = suggestRolesForChat(db, 's1');
     expect(out.map((s) => s.roleId)).toEqual(['og', 'tce']);
   });
 
   it('marks isBound=true for roles already on the chat', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR', 'TCE-fallback']);
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
     // Bind the role to the session.
     db.prepare(`
       INSERT INTO host_session_roles (host_session_id, role_id, created_at)
       VALUES (?, ?, datetime('now'))
     `).run('s1', 'tce');
-    appendPrompt(db, 's1', 'TCE 通过 TCE-CSR 在 TCE-fallback 模式下');
+    appendPrompt(db, 's1', 'TCE 通过 CSR 在 BAM 模式下');
     const out = suggestRolesForChat(db, 's1');
     expect(out[0]!.isBound).toBe(true);
     // Sanity — confirm the binding actually landed.
@@ -117,8 +121,8 @@ describe('suggestRolesForChat', () => {
 
   it('respects custom thresholds via options', () => {
     seedSession(db);
-    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'TCE-CSR']);
-    appendPrompt(db, 's1', 'TCE TCE-CSR'); // 2 distinct, 2 total
+    seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR']);
+    appendPrompt(db, 's1', 'TCE CSR'); // 2 distinct, 2 total
     expect(suggestRolesForChat(db, 's1')).toEqual([]); // default minTotal=3
     const relaxed = suggestRolesForChat(db, 's1', { minTotalHits: 2 });
     expect(relaxed).toHaveLength(1);

@@ -49,7 +49,11 @@ export function pickSeedDocsForUnknownEntities(
     turnIndex += 1;
     if (!mentionsAny(text, lowerSet)) continue;
 
-    const trimmed = text.length > budget ? `${text.slice(0, budget)}…` : text;
+    // Reserve one char for the truncation ellipsis so the final string
+    // length is exactly `budget`, not `budget + 1`.
+    const trimmed = text.length > budget
+      ? `${text.slice(0, Math.max(0, budget - 1))}…`
+      : text;
     budget -= trimmed.length;
     docs.push({
       filename: `chat-${hostSessionId.slice(0, 8)}-turn-${turnIndex}-${ev.kind}.md`,

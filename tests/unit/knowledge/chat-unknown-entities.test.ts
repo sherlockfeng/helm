@@ -54,12 +54,15 @@ describe('unknownEntitiesForChat', () => {
 
   it('surfaces only the entities NOT covered by any role, sorted by mentions desc', () => {
     seedSession(db);
+    // Note: entities must be ≥3 uppercase chars to clear extractEntities
+    // Tier 2 (the regex \b[A-Z]{3,}\d{0,3}\b). 2-letter "OG" would never
+    // be extracted; use BAM / DECC / TCE which are real-world acronyms.
     seedKnownEntities(db, ['TCE', 'CSR']);
-    // OG ×4, BAM ×3, TCE ×5 (but TCE is known)
-    appendPrompt(db, 's1', 'TCE TCE TCE TCE TCE OG OG BAM');
-    appendResponse(db, 's1', 'OG OG BAM BAM');
+    // DECC ×4, BAM ×3, TCE ×5 (but TCE is known)
+    appendPrompt(db, 's1', 'TCE TCE TCE TCE TCE DECC DECC BAM');
+    appendResponse(db, 's1', 'DECC DECC BAM BAM');
     const out = unknownEntitiesForChat(db, 's1');
-    expect(out.map((u) => u.entity)).toEqual(['OG', 'BAM']);
+    expect(out.map((u) => u.entity)).toEqual(['DECC', 'BAM']);
     expect(out[0]!.mentions).toBe(4);
     expect(out[1]!.mentions).toBe(3);
   });
@@ -67,11 +70,11 @@ describe('unknownEntitiesForChat', () => {
   it('respects the minMentions threshold', () => {
     seedSession(db);
     seedKnownEntities(db, ['TCE']);
-    appendPrompt(db, 's1', 'OG BAM DECC'); // each ×1, below default minMentions=3
+    appendPrompt(db, 's1', 'BAM DECC ABC'); // each ×1, below default minMentions=3
     expect(unknownEntitiesForChat(db, 's1')).toEqual([]);
     // Relax: at least 1 mention → all 3 unknowns appear
     const relaxed = unknownEntitiesForChat(db, 's1', { minMentions: 1 });
-    expect(relaxed.map((u) => u.entity).sort()).toEqual(['BAM', 'DECC', 'OG']);
+    expect(relaxed.map((u) => u.entity).sort()).toEqual(['ABC', 'BAM', 'DECC']);
   });
 
   it('caps result at topN sorted slots', () => {

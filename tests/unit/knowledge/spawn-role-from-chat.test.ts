@@ -65,26 +65,26 @@ describe('pickSeedDocsForUnknownEntities', () => {
       createdAt: new Date().toISOString(),
     });
     appendHostEvent(db, {
-      hostSessionId: 's1', kind: 'response', payload: { text: 'OG schema is v5 now' },
+      hostSessionId: 's1', kind: 'response', payload: { text: 'BAM schema is v5 now' },
       createdAt: new Date().toISOString(),
     });
     appendHostEvent(db, {
-      hostSessionId: 's1', kind: 'prompt', payload: { text: 'BAM IDL load is the way' },
+      hostSessionId: 's1', kind: 'prompt', payload: { text: 'DECC IDL load is the way' },
       createdAt: new Date().toISOString(),
     });
-    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['OG', 'BAM']);
+    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['BAM', 'DECC']);
     expect(docs).toHaveLength(2);
-    expect(docs[0]!.content).toContain('OG schema');
-    expect(docs[1]!.content).toContain('BAM IDL');
+    expect(docs[0]!.content).toContain('BAM schema');
+    expect(docs[1]!.content).toContain('DECC IDL');
   });
 
   it('caps total seed content at the budget', () => {
-    const long = 'OG ' + 'x'.repeat(20_000);
+    const long = 'BAM ' + 'x'.repeat(20_000);
     appendHostEvent(db, {
       hostSessionId: 's1', kind: 'response', payload: { text: long },
       createdAt: new Date().toISOString(),
     });
-    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['OG']);
+    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['BAM']);
     expect(docs).toHaveLength(1);
     // SEED_CHAR_BUDGET is 8000 in the implementation.
     expect(docs[0]!.content.length).toBeLessThanOrEqual(8_000);
@@ -94,11 +94,11 @@ describe('pickSeedDocsForUnknownEntities', () => {
     for (let i = 0; i < 10; i++) {
       appendHostEvent(db, {
         hostSessionId: 's1', kind: 'response',
-        payload: { text: `Turn ${i}: OG is mentioned here` },
+        payload: { text: `Turn ${i}: BAM is mentioned here` },
         createdAt: new Date().toISOString(),
       });
     }
-    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['OG']);
+    const docs = pickSeedDocsForUnknownEntities(db, 's1', ['BAM']);
     expect(docs.length).toBeLessThanOrEqual(5);
   });
 

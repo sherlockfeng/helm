@@ -34,6 +34,7 @@ import type {
   ConversationDetailCandidate,
   ConversationDetailKnowledgeInPlay,
   ConversationDetailTurn,
+  RoleSuggestion,
 } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -380,6 +381,15 @@ function ConversationDetailPane({
       {/* Timeline — turn-by-turn conversation content */}
       <TimelineSection turns={data?.turns ?? []} loading={loading && !data} />
 
+      {/* Role-suggestion layer: which existing roles' entities does this
+          chat touch? Surfaces "this chat is about TCE — TCE 专家 might
+          want some of it" before the user has bound the role. */}
+      <RoleSuggestionsSection
+        suggestions={data?.roleSuggestions ?? []}
+        onAddRole={(rid) => { void addRole(rid); }}
+        savingRole={savingRole}
+      />
+
       {/* Knowledge OUT */}
       <KnowledgeOutSection
         candidates={candidates}
@@ -514,6 +524,68 @@ function KnowledgeInSection({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ── Role suggestions (KNOWLEDGE OUT — discovery layer) ────────────────────
+
+function RoleSuggestionsSection({
+  suggestions,
+  onAddRole,
+  savingRole,
+}: {
+  suggestions: RoleSuggestion[];
+  onAddRole: (roleId: string) => void;
+  savingRole: boolean;
+}): ReactElement | null {
+  // Only show unbound roles — bound ones are already in KNOWLEDGE IN and
+  // capture would (in a future PR) run automatically. Silence is the
+  // right default here; if nothing's worth surfacing, no section appears.
+  const unbound = suggestions.filter((s) => !s.isBound);
+  if (unbound.length === 0) return null;
+
+  return (
+    <div className="helm-conv-section">
+      <div className="helm-conv-section-header">
+        <span className="helm-conv-section-label">这条对话涉及</span>
+        <span className="helm-conv-section-meta">
+          {unbound.length} {unbound.length === 1 ? 'role' : 'roles'} matched
+        </span>
+      </div>
+      <ul className="helm-conv-suggestions">
+        {unbound.map((s) => (
+          <li key={s.roleId} className="helm-conv-suggestion">
+            <div className="helm-conv-suggestion-head">
+              <span className="helm-conv-suggestion-role">{s.roleName}</span>
+              <span className="helm-conv-suggestion-meta">
+                {s.hitEntities.length} {s.hitEntities.length === 1 ? 'entity' : 'entities'}
+                {' · '}
+                {s.totalHits} {s.totalHits === 1 ? 'mention' : 'mentions'}
+              </span>
+              <button
+                type="button"
+                className="helm-conv-link-button"
+                disabled={savingRole}
+                onClick={() => onAddRole(s.roleId)}
+                title="Bind this role to the chat so future captures land here"
+              >
+                + bind
+              </button>
+            </div>
+            <div className="helm-conv-suggestion-entities">
+              {s.hitEntities.slice(0, 6).map((e) => (
+                <span key={e} className="helm-conv-entity-chip">{e}</span>
+              ))}
+              {s.hitEntities.length > 6 && (
+                <span className="helm-conv-entity-more">
+                  +{s.hitEntities.length - 6}
+                </span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

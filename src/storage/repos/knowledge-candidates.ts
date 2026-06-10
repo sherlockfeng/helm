@@ -34,6 +34,7 @@ function rowToCandidate(row: Record<string, unknown>): KnowledgeCandidate {
   if (row['host_session_id'] != null) c.hostSessionId = String(row['host_session_id']);
   if (row['decided_at'] != null) c.decidedAt = String(row['decided_at']);
   if (row['gist'] != null) c.gist = String(row['gist']);
+  if (row['target_chunk_id'] != null) c.targetChunkId = String(row['target_chunk_id']);
   return c;
 }
 
@@ -75,10 +76,12 @@ export function insertCandidateIfNew(
     db.prepare(`
       INSERT INTO knowledge_candidates
         (id, role_id, host_session_id, chunk_text, source_segment_index,
-         kind, score_entity, score_cosine, text_hash, status, created_at, decided_at, provenance)
+         kind, score_entity, score_cosine, text_hash, status, created_at,
+         decided_at, provenance, gist, target_chunk_id)
       VALUES
         (@id, @role_id, @host_session_id, @chunk_text, @source_segment_index,
-         @kind, @score_entity, @score_cosine, @text_hash, @status, @created_at, @decided_at, @provenance)
+         @kind, @score_entity, @score_cosine, @text_hash, @status, @created_at,
+         @decided_at, @provenance, @gist, @target_chunk_id)
     `).run({
       id: c.id,
       role_id: c.roleId,
@@ -93,6 +96,8 @@ export function insertCandidateIfNew(
       created_at: c.createdAt,
       decided_at: c.decidedAt ?? null,
       provenance: c.provenance ?? 'chat_capture',
+      gist: c.gist ?? null,
+      target_chunk_id: c.targetChunkId ?? null,
     });
     return true;
   } catch (err) {

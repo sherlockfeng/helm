@@ -71,6 +71,7 @@ import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
 import { generateCandidateGist } from '../summarizer/candidate-gist.js';
+import { runCurationForRole } from '../summarizer/curation.js';
 import { HelmConfigSchema } from '../config/schema.js';
 import { consumePendingBind, createPendingLarkBind } from './lark-wiring.js';
 import { setupMcp as runSetupMcp } from '../cli/setup-mcp.js';
@@ -1400,6 +1401,18 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // runtime errors from CursorLlmClient (Cursor not installed / not
       // signed in) bubble as 500. Tests bypass by overriding the dep.
       summarizeCampaign: summarizeFn(),
+      // PR-B: trigger LLM curation for one chat × role. Wrapped to read
+      // the current engine on each call so a Settings switch takes
+      // effect immediately. engineRouter.current() throws synchronously
+      // when no engine is available — caught inside the closure and
+      // surfaced as a clean handler error rather than a bridge crash.
+      runCuration: async ({ hostSessionId, roleId }) => {
+        const adapter = engineRouter.current();
+        return runCurationForRole(deps.db, hostSessionId, roleId, {
+          llm: adapter.summarize,
+          model: liveConfig.cursor.model,
+        });
+      },
       // B3: train the same roles LocalRolesProvider reads from. The shared
       // pseudo-embed function keeps the embeddings consistent between
       // training-time and search-time so the chunks match.

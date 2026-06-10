@@ -350,7 +350,16 @@ export interface ConversationDetailKnowledgeInPlay {
   points: ConversationDetailRetrievalPoint[];
 }
 
-export type CandidateKind = 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
+export type CandidateKind =
+  | 'spec'
+  | 'example'
+  | 'warning'
+  | 'runbook'
+  | 'glossary'
+  | 'decision'
+  | 'open_question'
+  | 'workaround'
+  | 'other';
 
 export interface ConversationDetailCandidate {
   id: string;
@@ -362,6 +371,9 @@ export interface ConversationDetailCandidate {
   gist?: string;
   /** PR3: classified kind, drives the emoji + chip color. */
   kind?: CandidateKind;
+  /** PR-B: when set, this candidate updates an existing chunk; renderer
+   *  shows it under 🔄 Updates with a target reference. */
+  targetChunkId?: string;
 }
 
 /**

@@ -386,7 +386,9 @@ function ConversationDetailPane({
           want some of it" before the user has bound the role. */}
       <RoleSuggestionsSection
         suggestions={data?.roleSuggestions ?? []}
+        hostSessionId={chat.id}
         onAddRole={(rid) => { void addRole(rid); }}
+        onExtracted={() => reload()}
         savingRole={savingRole}
       />
 
@@ -532,16 +534,18 @@ function KnowledgeInSection({
 
 function RoleSuggestionsSection({
   suggestions,
+  hostSessionId,
   onAddRole,
+  onExtracted,
   savingRole,
 }: {
   suggestions: RoleSuggestion[];
+  hostSessionId: string;
   onAddRole: (roleId: string) => void;
+  onExtracted: () => void;
   savingRole: boolean;
 }): ReactElement | null {
-  // Only show unbound roles — bound ones are already in KNOWLEDGE IN and
-  // capture would (in a future PR) run automatically. Silence is the
-  // right default here; if nothing's worth surfacing, no section appears.
+  // Only show unbound roles — bound ones are already in KNOWLEDGE IN.
   const unbound = suggestions.filter((s) => !s.isBound);
   if (unbound.length === 0) return null;
 
@@ -555,38 +559,94 @@ function RoleSuggestionsSection({
       </div>
       <ul className="helm-conv-suggestions">
         {unbound.map((s) => (
-          <li key={s.roleId} className="helm-conv-suggestion">
-            <div className="helm-conv-suggestion-head">
-              <span className="helm-conv-suggestion-role">{s.roleName}</span>
-              <span className="helm-conv-suggestion-meta">
-                {s.hitEntities.length} {s.hitEntities.length === 1 ? 'entity' : 'entities'}
-                {' · '}
-                {s.totalHits} {s.totalHits === 1 ? 'mention' : 'mentions'}
-              </span>
-              <button
-                type="button"
-                className="helm-conv-link-button"
-                disabled={savingRole}
-                onClick={() => onAddRole(s.roleId)}
-                title="Bind this role to the chat so future captures land here"
-              >
-                + bind
-              </button>
-            </div>
-            <div className="helm-conv-suggestion-entities">
-              {s.hitEntities.slice(0, 6).map((e) => (
-                <span key={e} className="helm-conv-entity-chip">{e}</span>
-              ))}
-              {s.hitEntities.length > 6 && (
-                <span className="helm-conv-entity-more">
-                  +{s.hitEntities.length - 6}
-                </span>
-              )}
-            </div>
-          </li>
+          <RoleSuggestionRow
+            key={s.roleId}
+            suggestion={s}
+            hostSessionId={hostSessionId}
+            savingRole={savingRole}
+            onAddRole={onAddRole}
+            onExtracted={onExtracted}
+          />
         ))}
       </ul>
     </div>
+  );
+}
+
+function RoleSuggestionRow({
+  suggestion,
+  hostSessionId,
+  savingRole,
+  onAddRole,
+  onExtracted,
+}: {
+  suggestion: RoleSuggestion;
+  hostSessionId: string;
+  savingRole: boolean;
+  onAddRole: (roleId: string) => void;
+  onExtracted: () => void;
+}): ReactElement {
+  const [extracting, setExtracting] = useState(false);
+
+  async function extract(): Promise<void> {
+    setExtracting(true);
+    try {
+      const r = await helmApi.extractForRole(hostSessionId, suggestion.roleId);
+      const total = r.updateCount + r.newCount;
+      if (total === 0) {
+        toast.message(`No new knowledge points found for ${suggestion.roleName}.`);
+      } else {
+        toast.success(
+          `Extracted ${total} candidate${total === 1 ? '' : 's'} for ${suggestion.roleName}`
+          + ` (${r.updateCount} update · ${r.newCount} new)`,
+        );
+      }
+      onExtracted();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err as Error).message;
+      toast.error(`Extract failed: ${msg}`);
+    } finally { setExtracting(false); }
+  }
+
+  return (
+    <li className="helm-conv-suggestion">
+      <div className="helm-conv-suggestion-head">
+        <span className="helm-conv-suggestion-role">{suggestion.roleName}</span>
+        <span className="helm-conv-suggestion-meta">
+          {suggestion.hitEntities.length} {suggestion.hitEntities.length === 1 ? 'entity' : 'entities'}
+          {' · '}
+          {suggestion.totalHits} {suggestion.totalHits === 1 ? 'mention' : 'mentions'}
+        </span>
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          disabled={extracting || savingRole}
+          onClick={() => { void extract(); }}
+          title="Run the LLM curation pass for this role on this chat"
+        >
+          {extracting ? 'extracting…' : '↗ extract'}
+        </button>
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          disabled={savingRole || extracting}
+          onClick={() => onAddRole(suggestion.roleId)}
+          title="Bind this role so future captures land here"
+        >
+          + bind
+        </button>
+      </div>
+      <div className="helm-conv-suggestion-entities">
+        {suggestion.hitEntities.slice(0, 6).map((e) => (
+          <span key={e} className="helm-conv-entity-chip">{e}</span>
+        ))}
+        {suggestion.hitEntities.length > 6 && (
+          <span className="helm-conv-entity-more">
+            +{suggestion.hitEntities.length - 6}
+          </span>
+        )}
+      </div>
+    </li>
   );
 }
 
@@ -599,6 +659,12 @@ function KnowledgeOutSection({
   loading: boolean;
   onDecided: () => void;
 }): ReactElement {
+  // PR-B: split by whether the candidate refines an existing chunk
+  // (UPDATE) or proposes new knowledge (NEW). Different visual
+  // affordances — updates carry a reference to the chunk they replace.
+  const updates = candidates.filter((c) => c.targetChunkId);
+  const news = candidates.filter((c) => !c.targetChunkId);
+
   return (
     <div className="helm-conv-section">
       <div className="helm-conv-section-header">
@@ -606,22 +672,43 @@ function KnowledgeOutSection({
         <span className="helm-conv-section-meta">
           {candidates.length === 0
             ? (loading ? 'loading…' : '0 candidates')
-            : `${candidates.length} ${candidates.length === 1 ? 'candidate' : 'candidates'}`}
+            : (
+              <>
+                {updates.length > 0 && `${updates.length} update${updates.length === 1 ? '' : 's'}`}
+                {updates.length > 0 && news.length > 0 && ' · '}
+                {news.length > 0 && `${news.length} new`}
+              </>
+            )}
         </span>
       </div>
 
       {candidates.length === 0 && !loading && (
         <p className="helm-conv-empty">
-          <span className="helm-conv-pulse-dot" aria-hidden /> Watching for promotable passages…
+          <span className="helm-conv-pulse-dot" aria-hidden /> Click ↗ extract on a role
+          {' '}above to mine knowledge from this chat.
         </p>
       )}
 
-      {candidates.length > 0 && (
-        <ul className="helm-conv-candidates">
-          {candidates.map((c) => (
-            <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
-          ))}
-        </ul>
+      {updates.length > 0 && (
+        <div className="helm-conv-out-group">
+          <div className="helm-conv-out-group-label">🔄 建议更新</div>
+          <ul className="helm-conv-candidates">
+            {updates.map((c) => (
+              <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {news.length > 0 && (
+        <div className="helm-conv-out-group">
+          <div className="helm-conv-out-group-label">💡 新知识</div>
+          <ul className="helm-conv-candidates">
+            {news.map((c) => (
+              <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -731,6 +818,9 @@ const KIND_EMOJI: Record<NonNullable<ConversationDetailCandidate['kind']>, strin
   warning: '⚠️',
   runbook: '🛠',
   glossary: '📖',
+  decision: '🎯',
+  open_question: '❓',
+  workaround: '🩹',
   other: '📝',
 };
 

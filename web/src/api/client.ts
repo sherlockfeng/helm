@@ -75,6 +75,18 @@ export const helmApi = {
       `/api/conversations/${encodeURIComponent(hostSessionId)}/detail`,
     ),
 
+  /**
+   * PR-B: trigger LLM curation for one chat × role. The server runs the
+   * pass synchronously and returns the count of update / new candidates
+   * created. Caller refetches conversationDetail to pull the new rows.
+   */
+  extractForRole: (hostSessionId: string, roleId: string) =>
+    request<{ updateCount: number; newCount: number; candidateIds: string[] }>(
+      'POST',
+      `/api/conversations/${encodeURIComponent(hostSessionId)}/extract`,
+      { roleId },
+    ),
+
   // Phase 25 / 42: legacy single-role setter — replaces the chat's entire
   // role list with this one role (or empty when null). Kept for clients that
   // haven't switched to addChatRole / removeChatRole.

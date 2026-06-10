@@ -72,10 +72,20 @@ export type KnowledgeChunkKind =
   | 'warning'
   | 'runbook'
   | 'glossary'
+  /** PR-B: chat-specific cognitive artifacts — these only appear as
+   *  candidates extracted from conversations, not as authored chunks.
+   *  - decision      : a choice and its rationale ("we picked X over Y because Z")
+   *  - open_question : explicit unknown the chat surfaces ("we don't know how X behaves")
+   *  - workaround    : a known-temporary hack with stated limits */
+  | 'decision'
+  | 'open_question'
+  | 'workaround'
   | 'other';
 
 export const KNOWLEDGE_CHUNK_KINDS: readonly KnowledgeChunkKind[] = [
-  'spec', 'example', 'warning', 'runbook', 'glossary', 'other',
+  'spec', 'example', 'warning', 'runbook', 'glossary',
+  'decision', 'open_question', 'workaround',
+  'other',
 ];
 
 /**
@@ -284,6 +294,10 @@ export interface KnowledgeCandidate {
   /** PR3: LLM-generated one-line headline used by Conversations detail to
    *  show "📘 spec  Brief description" instead of the raw 2-line excerpt. */
   gist?: string;
+  /** PR-B: when set, this candidate refines an existing chunk (UPDATE
+   *  action vs NEW action). The renderer shows a diff against the
+   *  target's current text on hover/click. */
+  targetChunkId?: string;
 }
 
 /**

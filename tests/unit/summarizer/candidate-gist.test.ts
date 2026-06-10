@@ -54,7 +54,9 @@ describe('parseGistResponse', () => {
   });
 
   it('returns null when kind isn\'t in the taxonomy', () => {
-    expect(parseGistResponse('kind: decision\ngist: ship X')).toBeNull();
+    // 'decision' became a valid kind in PR-B's curation taxonomy expansion.
+    // Use a clearly bogus value here so the negative case still bites.
+    expect(parseGistResponse('kind: floofarama\ngist: ship X')).toBeNull();
   });
 
   it('returns null when gist is missing', () => {

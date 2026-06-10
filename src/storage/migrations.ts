@@ -957,6 +957,22 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE knowledge_candidates ADD COLUMN gist TEXT;
     `,
   },
+  {
+    version: 25,
+    description:
+      'Curation report (PR-B) — knowledge_candidates.target_chunk_id'
+      + ' marks a candidate as an UPDATE to an existing chunk (vs NEW'
+      + ' knowledge). Nullable, ON DELETE SET NULL so dropping the chunk'
+      + ' downgrades the candidate to a New-knowledge entry instead of'
+      + ' cascading the delete.',
+    up: `
+      ALTER TABLE knowledge_candidates
+        ADD COLUMN target_chunk_id TEXT
+        REFERENCES knowledge_chunks(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_candidates_target_chunk
+        ON knowledge_candidates(target_chunk_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

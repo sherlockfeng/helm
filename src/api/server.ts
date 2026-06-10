@@ -246,6 +246,15 @@ export interface HttpApiDeps {
    */
   summarizeCampaign?: (campaignId: string) => Promise<unknown>;
   /**
+   * PR-B (Conversations curation): run the LLM-driven curation pass
+   * for one chat × role pair. Returns the resulting candidate count.
+   * Undefined when no engine is wired — the endpoint surfaces 501.
+   */
+  runCuration?: (input: {
+    hostSessionId: string;
+    roleId: string;
+  }) => Promise<{ updateCount: number; newCount: number; candidateIds: string[] }>;
+  /**
    * Train (or re-train) a role from documents (B3). When undefined, the
    * Roles page's POST /api/roles/:id/train endpoint returns 501. Tests
    * inject a stub; the orchestrator wires it via the same embedFn used
@@ -525,6 +534,42 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         const detail = getConversationDetail(deps.db, conversationDetailMatch[1]!);
         if (!detail) return send(res, 404, { error: 'Conversation not found' });
         return send(res, 200, detail);
+      }
+
+      // PR-B: trigger LLM curation for one chat × role pair. Called from
+      // the renderer when the user clicks "extract" on a role suggestion.
+      // Best-effort — returns counts but doesn't block on candidate
+      // dedup / SSE; the caller refetches /detail after the round-trip.
+      const conversationExtractMatch = url.pathname.match(
+        /^\/api\/conversations\/([^/]+)\/extract$/,
+      );
+      if (conversationExtractMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.runCuration) {
+          return send(res, 501, {
+            error: 'not_implemented',
+            message: 'Curation engine is not wired — open Settings → Default engine to enable.',
+          });
+        }
+        let body: { roleId?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return send(res, 400, { error: 'invalid_json' }); }
+        const roleId = typeof body.roleId === 'string' ? body.roleId.trim() : '';
+        if (!roleId) {
+          return send(res, 400, { error: 'invalid_request', message: 'roleId is required' });
+        }
+        try {
+          const result = await deps.runCuration({
+            hostSessionId: conversationExtractMatch[1]!,
+            roleId,
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          return send(res, 500, {
+            error: 'curation_failed',
+            message: (err as Error).message,
+          });
+        }
       }
 
       if (url.pathname === '/api/active-chats') {

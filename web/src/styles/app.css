@@ -1936,6 +1936,21 @@ code, pre {
 .helm-conv-kind-chip-runbook  { background: rgba(168,85,247,0.16); color: #6b21a8; }
 .helm-conv-kind-chip-glossary { background: rgba(20,184,166,0.16); color: #0f766e; }
 .helm-conv-kind-chip-other    { background: rgba(110,110,115,0.16); color: var(--text-secondary); }
+/* PR-B chat-extracted kinds — distinct hues so a glance separates them
+   from authored knowledge. */
+.helm-conv-kind-chip-decision       { background: rgba(99,102,241,0.18); color: #4338ca; }
+.helm-conv-kind-chip-open_question  { background: rgba(217,70,239,0.16); color: #86198f; }
+.helm-conv-kind-chip-workaround     { background: rgba(244,114,182,0.16); color: #9d174d; }
+
+/* PR-B: 🔄 Updates vs 💡 New sub-headers within KNOWLEDGE OUT */
+.helm-conv-out-group { margin-top: 6px; }
+.helm-conv-out-group + .helm-conv-out-group { margin-top: 12px; }
+.helm-conv-out-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
 
 .helm-conv-candidate-excerpt-full {
   font-size: 12px;

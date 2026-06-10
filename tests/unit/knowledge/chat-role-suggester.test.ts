@@ -97,10 +97,13 @@ describe('suggestRolesForChat', () => {
     seedSession(db);
     seedRoleWithEntities(db, 'tce', 'TCE 专家', ['TCE', 'CSR', 'BAM']);
     seedRoleWithEntities(db, 'og', 'OG 专家', ['BFF', 'SSR', 'IDL', 'JSON']);
-    // OG hit harder: 4 distinct tokens vs TCE's 2
+    // Both roles need to clear minDistinct=2 AND minTotal=3 to be suggested.
+    // OG: BFF×2 + SSR×2 + IDL×1 + JSON×1 = 4 distinct, 6 total.
+    // TCE: TCE×2 + CSR×1 + BAM×1   = 3 distinct, 4 total.
     appendPrompt(db, 's1', 'BFF 和 SSR 在 IDL 下用 JSON');
-    appendResponse(db, 's1', 'BFF 走 SSR; TCE 跑 CSR');
+    appendResponse(db, 's1', 'BFF 走 SSR; TCE 跑 CSR, 后续也用 TCE BAM');
     const out = suggestRolesForChat(db, 's1');
+    // OG has more distinct hits (4 > 3), so sorts first.
     expect(out.map((s) => s.roleId)).toEqual(['og', 'tce']);
   });
 

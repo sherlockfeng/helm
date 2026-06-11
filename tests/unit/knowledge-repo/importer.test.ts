@@ -259,10 +259,14 @@ describe('importRepoIntoLibrary', () => {
 
   it('llm-wiki: chat-captured/<user>/<role> uses the third path segment as role', () => {
     const fs = makeFs({
-      '/repo/dr-docs/index.md': '---\nid: wiki-dr\n---\n# DR\nbody',
-      '/repo/chat-captured/hyf/dr-docs/og-v5.md': '---\nid: cap-og-v5\n---\n# OG v5\nbody',
-      '/repo/chat-captured/hyf/argos/alerts.md': '---\nid: cap-alerts\n---\n# Alerts\nbody',
-      '/repo/chat-captured/zhang/dr-docs/cdn.md': '---\nid: cap-cdn\n---\n# CDN\nbody',
+      '/repo/dr-docs/index.md': '# DR\nbody',
+      // doc-lsp shape (what promote will write in PR-2): concept fence
+      // carries the explicit id.
+      '/repo/chat-captured/hyf/dr-docs/og-v5.md':
+        '# OG v5\n\n```concept\nid: cap-og-v5\n```\n\nbody',
+      // Plain markdown — id falls back to the file basename.
+      '/repo/chat-captured/hyf/argos/alerts.md': '# Alerts\nbody',
+      '/repo/chat-captured/zhang/dr-docs/cdn.md': '# CDN\nbody',
       // Hidden user dir — skipped entirely.
       '/repo/chat-captured/.tmp/dr-docs/x.md': '# hidden',
       // Role dir with no .md — no bucket, no role.
@@ -280,23 +284,25 @@ describe('importRepoIntoLibrary', () => {
     expect(getRole(db, 'argos')?.name).toBe('argos');
     expect(summary.pointsUpserted).toBe(4);
     expect(getRolesForPoint(db, 'cap-og-v5')).toEqual(['dr-docs']);
-    expect(getRolesForPoint(db, 'cap-cdn')).toEqual(['dr-docs']);
-    expect(getRolesForPoint(db, 'cap-alerts')).toEqual(['argos']);
+    expect(getRolesForPoint(db, 'cdn')).toEqual(['dr-docs']);
+    expect(getRolesForPoint(db, 'alerts')).toEqual(['argos']);
   });
 
   it('persists source_file repo-root-relative on insert and refreshes it on update', () => {
+    // Plain markdown under llm-wiki: id falls back to the basename ('og'),
+    // which stays stable when the file moves between dirs below.
     const v1 = makeFs({
-      '/repo/chat-captured/hyf/dr/og.md': '---\nid: sf-og\n---\n# OG\nv1 body',
+      '/repo/chat-captured/hyf/dr/og.md': '# OG\nv1 body',
     });
     importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v1 });
     const read = (): string => (db.prepare(
-      `SELECT source_file FROM knowledge_chunks WHERE id = 'sf-og'`,
+      `SELECT source_file FROM knowledge_chunks WHERE id = 'og'`,
     ).get() as { source_file: string }).source_file;
     expect(read()).toBe('chat-captured/hyf/dr/og.md');
     // Same point id moved to a regular wiki dir — the update path must
     // refresh source_file so publish round-trips into the new location.
     const v2 = makeFs({
-      '/repo/dr/og.md': '---\nid: sf-og\n---\n# OG\nv2 body',
+      '/repo/dr/og.md': '# OG\nv2 body',
     });
     importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v2 });
     expect(read()).toBe('dr/og.md');
@@ -320,7 +326,7 @@ describe('importRepoIntoLibrary', () => {
       isBuiltin: false, createdAt: '2026-01-01T00:00:00.000Z',
     });
     const fs = makeFs({
-      '/repo/dr-docs/index.md': '---\nid: keep-prompt\n---\n# X\nbody',
+      '/repo/dr-docs/index.md': '# X\nbody',
     });
     importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs });
     const role = getRole(db, 'dr-docs');

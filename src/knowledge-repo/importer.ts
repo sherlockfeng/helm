@@ -34,7 +34,6 @@ import {
   type KnowledgeRepoProfile,
   type ParsedPoint,
 } from './profiles.js';
-import { randomUUID } from 'node:crypto';
 import {
   insertChunk,
   insertChunkEntity,
@@ -43,7 +42,6 @@ import {
   getRole,
 } from '../storage/repos/roles.js';
 import { extractEntities } from '../roles/entity-extract.js';
-import { insertMergeConflict } from '../storage/repos/knowledge-merge-conflict.js';
 import {
   setAliasesForPoint,
 } from '../storage/repos/knowledge-point-alias.js';
@@ -63,23 +61,6 @@ export interface ImporterInput {
   profile: KnowledgeRepoProfile;
   /** Mark every imported point with this source ref (e.g. repoId). */
   sourceRef?: string;
-  /**
-   * PR 5.5c: Repo id this import belongs to. When set, the importer
-   * uses it to record merge_conflict rows when the local body diverged
-   * from the row's previous import (edit_version > 1). When absent, the
-   * importer falls back to the legacy sync-overwrite behavior.
-   */
-  repoId?: string;
-  /** PR 5.5c: SHA the imported content came from; stored on conflict rows. */
-  remoteRevision?: string;
-  /**
-   * R-10: optional embedding factory. When provided, each upserted /
-   * inserted chunk gets its embedding column populated so the cosine
-   * retrieval leg treats imported content the same as locally-trained
-   * chunks. When absent, embeddings stay NULL — the entity leg still
-   * works, but cosine matching is degraded.
-   */
-  embedFn?: (text: string) => Promise<Float32Array>;
   /** Override fs functions for tests. */
   fs?: {
     readdirSync?: typeof readdirSync;
@@ -92,7 +73,11 @@ export interface ImporterInput {
 export interface ImportSummary {
   rolesImported: number;
   pointsUpserted: number;
-  /** PR 5.5c: count of conflicts recorded — these did NOT overwrite. */
+  /**
+   * PR-4 (files-as-truth): always 0. The merge-conflict flow is retired
+   * — files in the working copy ARE the truth, so the import always
+   * syncs the DB row to the file. Field kept for API compatibility.
+   */
   conflictsDetected: number;
   /** Per-file failures (path → message). The importer continues on each. */
   errors: Record<string, string>;
@@ -152,18 +137,15 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         const parsed = parsePointFile({
           text: raw, relativePath: relPath, profile: input.profile,
         });
-        const detected = upsertPoint(input.db, bucket.roleId, parsed, {
+        upsertPoint(input.db, bucket.roleId, parsed, {
           sourceRef: input.sourceRef,
           repoRelPath,
-          ...(input.repoId        ? { repoId:         input.repoId } : {}),
-          ...(input.remoteRevision ? { remoteRevision: input.remoteRevision } : {}),
         });
-        if (detected === 'conflict') summary.conflictsDetected += 1;
-        else summary.pointsUpserted += 1;
-        // R-10: enrich the chunk so retrieval picks it up. Entity leg is
-        // always populated (cheap, deterministic); embedding leg only when
-        // an embedFn was injected (production wires this; some tests skip).
-        enrichChunk(input.db, parsed, bucket.roleId, relPath, input.embedFn);
+        summary.pointsUpserted += 1;
+        // R-10: index entities so retrieval picks the chunk up (cheap,
+        // deterministic). The embedding write retired with the cosine
+        // leg (PR-4).
+        enrichChunk(input.db, parsed, bucket.roleId, relPath);
       } catch (err) {
         summary.errors[file] = (err as Error).message;
       }
@@ -348,18 +330,12 @@ function enumerateGeneric(fs: WalkerFs, localPath: string): RoleBucket[] {
   }];
 }
 
-/**
- * R-10: keep imported chunks searchable by indexing entities + writing
- * an embedding when the caller injected one. Best-effort: failures
- * during the embedFn don't abort the import — the entity leg is
- * enough to surface the chunk in retrieval even without cosine.
- */
+/** R-10: keep imported chunks searchable by indexing entities. */
 function enrichChunk(
   db: Database.Database,
   parsed: ParsedPoint,
   roleId: string,
   filename: string,
-  embedFn?: (text: string) => Promise<Float32Array>,
 ): void {
   const now = new Date().toISOString();
   // Wipe existing entity rows for this chunk so a re-import that
@@ -371,22 +347,6 @@ function enrichChunk(
     insertChunkEntity(db, {
       chunkId: parsed.id, roleId, entity: e.entity, createdAt: now,
     });
-  }
-  if (embedFn) {
-    // Fire-and-forget: the import returns the synchronous summary
-    // immediately and the embedding lands when the LLM call returns.
-    // Imported chunks without a current embedding still rank below
-    // already-embedded ones, but the entity leg covers them in the
-    // meantime.
-    void embedFn(parsed.body)
-      .then((vec) => {
-        db.prepare(`UPDATE knowledge_chunks SET embedding = ? WHERE id = ?`)
-          .run(Buffer.from(vec.buffer), parsed.id);
-      })
-      .catch(() => {
-        // Same rationale as elsewhere in the importer: per-chunk
-        // failures shouldn't poison a 500-chunk pull.
-      });
   }
 }
 
@@ -440,14 +400,12 @@ function upsertPoint(
   parsed: ParsedPoint,
   opts: {
     sourceRef?: string;
-    repoId?: string;
-    remoteRevision?: string;
     /** Repo-root-relative path of the .md this point came from.
      *  Persisted to chunk.source_file — files-as-truth provenance +
      *  llmWikiLayout publish round-trip. */
     repoRelPath?: string;
   },
-): 'inserted' | 'updated' | 'conflict' {
+): 'inserted' | 'updated' {
   const now = new Date().toISOString();
   const existing = getChunkById(db, parsed.id);
   if (!existing) {
@@ -468,35 +426,12 @@ function upsertPoint(
     return 'inserted';
   }
 
-  // PR 5.5c: conflict detection. When the import would change the
-  // body AND the local row has been edited since the previous sync
-  // (edit_version > 1), record a merge conflict instead of clobbering.
-  // edit_version === 1 means the row was either freshly inserted or
-  // was last touched by the importer itself — safe to overwrite.
-  const bodiesDiffer = existing.chunkText !== parsed.body;
-  const localTouched = (existing.editVersion ?? 1) > 1;
-  if (bodiesDiffer && localTouched && opts.repoId) {
-    insertMergeConflict(db, {
-      id: `mc-${randomUUID()}`,
-      repoId: opts.repoId,
-      pointId: parsed.id,
-      localBody: existing.chunkText,
-      remoteBody: parsed.body,
-      localVersion: existing.editVersion ?? 1,
-      remoteRevision: opts.remoteRevision ?? 'unknown',
-    });
-    // Sync the aux tables (aliases / rel / role attach) to the remote
-    // shape anyway — metadata sync is safe; only the body waits on the
-    // user's resolution. source_file is metadata too (the file may have
-    // moved even while the body conflicts).
-    applySourceFile(db, parsed.id, opts.repoRelPath);
-    attachRoleToPoint(db, parsed.id, roleId);
-    syncAuxTables(db, parsed);
-    return 'conflict';
-  }
-
-  // Re-import: refresh body / kind. We do NOT bump edit_version here
-  // because the import is treated as a sync, not a user edit.
+  // PR-4 (files-as-truth): the file in the working copy IS the source
+  // of truth, so a re-import always syncs the DB row to it — the old
+  // edit_version-gated merge-conflict flow is retired. Local DB edits
+  // that should survive belong in the file (promote writes them there).
+  // We still do NOT bump edit_version: the import is a sync, not a
+  // user edit.
   db.prepare(`
     UPDATE knowledge_chunks SET chunk_text = ?, kind = ? WHERE id = ?
   `).run(parsed.body, parsed.kind, parsed.id);

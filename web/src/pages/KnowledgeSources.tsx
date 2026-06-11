@@ -2,9 +2,10 @@
  * Knowledge › Sources — R-6 (reviewer follow-up).
  *
  * The bidirectional knowledge-repo manager. Lists subscribed repos
- * with sync-status badges; per-row Fetch / Import / Publish / Conflicts
- * actions hit the manager directly. A seed picker enrolls curated
- * repos in one click (e.g. llm-wiki).
+ * with sync-status badges; per-row Fetch / Import / Publish actions hit
+ * the manager directly. A seed picker enrolls curated repos in one
+ * click (e.g. llm-wiki). The PR 5.5c merge-conflict resolver was
+ * retired in files-as-truth PR-4 — files win; imports sync the DB.
  *
  * Why this page exists: PR 5.5a–e shipped the full backend
  * (subscribe / fetch / import / publish / conflicts), but the renderer
@@ -13,7 +14,7 @@
  * required a curl from the terminal.
  */
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
@@ -24,7 +25,6 @@ import { EmptyState } from '../components/EmptyState.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import type {
-  KnowledgeMergeConflict,
   KnowledgeRepo,
   KnowledgeRepoSeed,
   RoleChunk,
@@ -34,22 +34,10 @@ import type {
 export function KnowledgeSourcesPage(): ReactElement {
   const reposQuery = useApi(() => helmApi.listKnowledgeRepos('all'), []);
   const seedsQuery = useApi(() => helmApi.listKnowledgeRepoSeeds(), []);
-  const conflictsQuery = useApi(() => helmApi.listKnowledgeRepoConflicts({ status: 'open' }), []);
 
   const reload = (): void => {
     reposQuery.reload();
-    conflictsQuery.reload();
   };
-
-  const conflictsByRepo = useMemo(() => {
-    const map = new Map<string, KnowledgeMergeConflict[]>();
-    for (const c of conflictsQuery.data?.conflicts ?? []) {
-      const list = map.get(c.repoId) ?? [];
-      list.push(c);
-      map.set(c.repoId, list);
-    }
-    return map;
-  }, [conflictsQuery.data]);
 
   return (
     <div className="helm-page">
@@ -88,7 +76,6 @@ export function KnowledgeSourcesPage(): ReactElement {
         <RepoRow
           key={r.id}
           repo={r}
-          conflicts={conflictsByRepo.get(r.id) ?? []}
           onActed={reload}
         />
       ))}
@@ -203,14 +190,12 @@ function SeedList({
 }
 
 function RepoRow({
-  repo, conflicts, onActed,
+  repo, onActed,
 }: {
   repo: KnowledgeRepo;
-  conflicts: KnowledgeMergeConflict[];
   onActed: () => void;
 }): ReactElement {
   const [busy, setBusy] = useState<'fetch' | 'import' | 'unsubscribe' | null>(null);
-  const [showConflicts, setShowConflicts] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
 
   const run = async <T,>(label: typeof busy, fn: () => Promise<T>, successMsg: string): Promise<void> => {
@@ -235,15 +220,6 @@ function RepoRow({
           <div style={{ fontSize: 11 }}>
             <ClassificationBadge classification={repo.classification} />
             <StatusBadge status={repo.status} />
-            {conflicts.length > 0 && (
-              <span style={{
-                padding: '1px 6px', borderRadius: 4, fontSize: 11,
-                backgroundColor: '#fef3c7', color: '#92400e',
-                marginLeft: 4, fontWeight: 600,
-              }}>
-                {conflicts.length} conflict{conflicts.length === 1 ? '' : 's'}
-              </span>
-            )}
           </div>
         </div>
         <div className="muted" style={{ fontSize: 11 }}>
@@ -268,11 +244,6 @@ function RepoRow({
           >
             {busy === 'import' ? 'Importing…' : 'Import'}
           </Button>
-          {conflicts.length > 0 && (
-            <button onClick={() => setShowConflicts((p) => !p)}>
-              {showConflicts ? 'Hide' : 'Resolve'} conflicts
-            </button>
-          )}
           <Button
             disabled={busy !== null}
             onClick={() => setShowPublish(true)}
@@ -293,9 +264,6 @@ function RepoRow({
             </button>
           </span>
         </div>
-        {showConflicts && (
-          <ConflictResolver conflicts={conflicts} onResolved={onActed} />
-        )}
         {repo.profile === 'llm-wiki' && (
           <CapturedPanel repo={repo} busyParent={busy !== null} />
         )}
@@ -377,85 +345,6 @@ function CapturedPanel({
   );
 }
 
-function ConflictResolver({
-  conflicts, onResolved,
-}: {
-  conflicts: KnowledgeMergeConflict[];
-  onResolved: () => void;
-}): ReactElement {
-  return (
-    <details open style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-      <summary style={{ cursor: 'pointer', fontSize: 12 }}>
-        {conflicts.length} open conflict{conflicts.length === 1 ? '' : 's'}
-      </summary>
-      {conflicts.map((c) => <ConflictRow key={c.id} conflict={c} onResolved={onResolved} />)}
-    </details>
-  );
-}
-
-function ConflictRow({
-  conflict, onResolved,
-}: {
-  conflict: KnowledgeMergeConflict;
-  onResolved: () => void;
-}): ReactElement {
-  const [body, setBody] = useState(conflict.remoteBody);
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      await helmApi.resolveKnowledgeRepoConflict(conflict.id, body);
-      toast.success('Resolved.');
-      onResolved();
-    } catch (err) {
-      toast.error(`Resolve failed: ${err instanceof ApiError ? err.message : String(err)}`);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <div style={{ padding: 8, border: '1px solid var(--border)', borderRadius: 4, marginTop: 6 }}>
-      <div className="muted" style={{ fontSize: 11 }}>
-        point <code>{conflict.pointId}</code> · local v{conflict.localVersion} vs remote <code>{conflict.remoteRevision.slice(0, 8)}</code>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6, fontSize: 11 }}>
-        <div>
-          <div className="muted">Local</div>
-          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto', margin: 0 }}>{conflict.localBody}</pre>
-        </div>
-        <div>
-          <div className="muted">Remote</div>
-          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto', margin: 0 }}>{conflict.remoteBody}</pre>
-        </div>
-      </div>
-      <label style={{ display: 'block', marginTop: 6 }}>Resolved body
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={6}
-          style={{ width: '100%', fontFamily: 'inherit', fontSize: 12 }}
-        />
-      </label>
-      <div>
-        <Button onClick={submit} disabled={busy} variant="primary" aria-busy={busy}>
-          {busy ? 'Resolving…' : 'Apply resolution'}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Publish flow (Path: helm → llm-wiki). Pick a role → tick the chunks
- * worth sharing → helm serializes them to .md in an ephemeral worktree,
- * pushes a branch, and (when gh/glab is available for the host) opens
- * the PR/MR. Public repos enforce R-0: internal-visibility chunks are
- * disabled in the list instead of failing at the precheck.
- *
- * Replaces the dead `Library?publishTarget=` link — the Library page
- * never implemented that query param, so the publish backend sat
- * unreachable from the UI.
- */
 function PublishModal({
   repo,
   onClose,

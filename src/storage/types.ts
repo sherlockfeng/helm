@@ -497,6 +497,7 @@ export interface RetrievalLogPoint {
   fusionScore: number;
   legContrib?: {
     bm25Rank?: number;
+    /** PR-4: cosine leg retired; field kept so legacy rows still parse. */
     cosineRank?: number;
     entityRank?: number;
     relExpansionFrom?: string;
@@ -879,23 +880,6 @@ export interface KnowledgeRepo {
   profile: 'helm-native' | 'llm-wiki' | 'generic';
 }
 
-// ── KnowledgeMergeConflict (PR 5.5c / migration v23) ───────────────────────
-
-export type KnowledgeMergeConflictStatus = 'open' | 'resolved';
-
-export interface KnowledgeMergeConflict {
-  id: string;
-  repoId: string;
-  pointId: string;
-  localBody: string;
-  remoteBody: string;
-  /** edit_version the local chunk was at when the conflict was recorded. */
-  localVersion: number;
-  /** Commit SHA the remote body came from. */
-  remoteRevision: string;
-  status: KnowledgeMergeConflictStatus;
-  resolvedBody?: string;
-  resolvedAt?: number;
-  createdAt: number;
-  updatedAt: number;
-}
+// KnowledgeMergeConflict (PR 5.5c / migration v23) retired in
+// files-as-truth PR-4 — table dropped in migration v27; the working-copy
+// file is the source of truth and imports always sync the DB row to it.

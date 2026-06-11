@@ -92,31 +92,22 @@ describe('multipath retrieval — strategy router', () => {
     const out = parseJson(await mcpClient.callTool({
       name: 'search_knowledge',
       arguments: { roleId: 'role-multi', query: 'BRAVO tce rollback', topK: 4 },
-    })) as Array<{ chunkText: string; score: number; bm25Score?: number; cosineScore?: number; entityScore?: number }>;
+    })) as Array<{ chunkText: string; score: number; bm25Score?: number; entityScore?: number }>;
     expect(out.length).toBeGreaterThan(0);
     expect(out[0]!.chunkText).toContain('tce rollback procedure');
     // At least one leg contributed a raw score to the top hit.
     const top = out[0]!;
-    const someLeg = (top.bm25Score ?? 0) + (top.cosineScore ?? 0) + (top.entityScore ?? 0);
+    const someLeg = (top.bm25Score ?? 0) + (top.entityScore ?? 0);
     expect(someLeg).toBeGreaterThan(0);
   });
 
-  it('strategy=bm25 surfaces literal token matches even when cosine has stronger signal elsewhere', async () => {
+  it('strategy=bm25 surfaces literal token matches', async () => {
     await seedRole();
     const out = parseJson(await mcpClient.callTool({
       name: 'search_knowledge',
       arguments: { roleId: 'role-multi', query: 'tce rollback', topK: 3, strategy: 'bm25' },
     })) as Array<{ chunkText: string }>;
     expect(out[0]?.chunkText).toContain('tce rollback');
-  });
-
-  it('strategy=cosine ignores literal tokens; works on marker-embedded semantic signal', async () => {
-    await seedRole();
-    const out = parseJson(await mcpClient.callTool({
-      name: 'search_knowledge',
-      arguments: { roleId: 'role-multi', query: 'BRAVO incident', topK: 3, strategy: 'cosine' },
-    })) as Array<{ chunkText: string }>;
-    expect(out[0]?.chunkText).toContain('BRAVO incident');
   });
 
   it('strategy=entity matches camelCase / URL / acronym entities', async () => {

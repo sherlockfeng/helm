@@ -158,7 +158,6 @@ export class LocalRolesProvider implements KnowledgeProvider {
           fusionScore: r.score,
           legContrib: {
             bm25Rank: r.bm25Score != null ? i : undefined,
-            cosineRank: r.cosineScore != null ? i : undefined,
             entityRank: r.entityScore != null ? i : undefined,
           },
           // Every fused hit returned to the agent counts as "injected"

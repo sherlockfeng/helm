@@ -550,10 +550,10 @@ export interface KnowledgeSearchResult {
   /**
    * Phase 76: per-leg raw scores when the active strategy ran multiple
    * legs. Useful for debugging / explaining ranking. Absent fields mean
-   * the leg didn't contribute a rank for this hit.
+   * the leg didn't contribute a rank for this hit. (cosine retired in
+   * files-as-truth PR-4 — pseudo-embeddings carried no signal.)
    */
   bm25Score?: number;
-  cosineScore?: number;
   entityScore?: number;
 }
 
@@ -563,9 +563,9 @@ export interface SearchKnowledgeOptions {
   kind?: KnowledgeChunkKind;
   /**
    * Phase 76: pick the retrieval strategy. Defaults to `'fusion'` —
-   * BM25 + cosine + entity match combined via RRF. Single-leg modes
-   * (`'bm25'` / `'cosine'` / `'entity'`) are for debug + benchmark
-   * comparison; callers shouldn't use them in production paths.
+   * BM25 + entity match combined via RRF. Single-leg modes
+   * (`'bm25'` / `'entity'`) are for debug + benchmark comparison;
+   * callers shouldn't use them in production paths.
    */
   strategy?: SearchStrategy;
   /**
@@ -592,7 +592,13 @@ export async function searchKnowledge(
   db: Database.Database,
   roleId: string,
   query: string,
-  embedFn: (text: string) => Promise<Float32Array>,
+  /**
+   * PR-4: the cosine leg is retired, so the embedder is no longer used
+   * by retrieval. The positional parameter stays so the long tail of
+   * callers (MCP tools, providers, tests) doesn't churn; pass
+   * `makePseudoEmbedFn()` or anything — it's ignored.
+   */
+  _embedFn: (text: string) => Promise<Float32Array>,
   optsOrTopK: SearchKnowledgeOptions | number = {},
 ): Promise<KnowledgeSearchResult[]> {
   // Backward-compat: previous callers passed `topK` as the 5th positional arg.
@@ -608,7 +614,7 @@ export async function searchKnowledge(
   // Phase 77: thread includeArchived + decay knobs through. Defaults are
   // injected by hybrid-search when fields are omitted.
   const hits: HybridSearchHit[] = await hybridSearch({
-    db, roleId, query, embedFn, topK, strategy,
+    db, roleId, query, topK, strategy,
     ...(opts.kind ? { kind: opts.kind } : {}),
     ...(opts.includeArchived !== undefined ? { includeArchived: opts.includeArchived } : {}),
     ...(opts.decayTauDays !== undefined ? { decayTauDays: opts.decayTauDays } : {}),
@@ -624,7 +630,6 @@ export async function searchKnowledge(
     if (h.sourceFile !== undefined) r.sourceFile = h.sourceFile;
     if (h.sourceId !== undefined) r.sourceId = h.sourceId;
     if (h.bm25Score !== undefined) r.bm25Score = h.bm25Score;
-    if (h.cosineScore !== undefined) r.cosineScore = h.cosineScore;
     if (h.entityScore !== undefined) r.entityScore = h.entityScore;
     return r;
   });

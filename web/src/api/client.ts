@@ -17,7 +17,6 @@ import type {
   CycleScreenshotInput,
   DocAuditEntry,
   HelmConfig,
-  KnowledgeMergeConflict,
   KnowledgeRepo,
   KnowledgeRepoSeed,
   PendingApproval,
@@ -709,22 +708,6 @@ export const helmApi = {
       `/api/knowledge-repos/${encodeURIComponent(repoId)}${qs}`,
     );
   },
-  listKnowledgeRepoConflicts: (opts: { status?: 'open' | 'resolved' | 'all'; repoId?: string } = {}) => {
-    const params = new URLSearchParams();
-    if (opts.status) params.set('status', opts.status);
-    if (opts.repoId) params.set('repoId', opts.repoId);
-    const qs = params.toString();
-    return request<{ conflicts: KnowledgeMergeConflict[] }>(
-      'GET',
-      qs ? `/api/knowledge-repos/conflicts?${qs}` : '/api/knowledge-repos/conflicts',
-    );
-  },
-  resolveKnowledgeRepoConflict: (conflictId: string, body: string) =>
-    request<{ conflictId: string; applied: boolean }>(
-      'POST',
-      `/api/knowledge-repos/conflicts/${encodeURIComponent(conflictId)}/resolve`,
-      { body },
-    ),
   listKnowledgeRepoSeeds: () =>
     request<{ seeds: KnowledgeRepoSeed[] }>('GET', '/api/knowledge-repos/seeds'),
   subscribeKnowledgeRepoSeed: (seedId: string) =>

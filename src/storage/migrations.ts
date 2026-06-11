@@ -986,6 +986,20 @@ export const MIGRATIONS: Migration[] = [
         ADD COLUMN profile TEXT NOT NULL DEFAULT 'helm-native';
     `,
   },
+  {
+    version: 27,
+    description:
+      'files-as-truth PR-4: drop knowledge_merge_conflict. Markdown in'
+      + ' the repo working copy is the source of truth and imports always'
+      + ' sync the DB row to the file, so the DB-side 3-way merge flow'
+      + ' (PR 5.5c) has nothing left to arbitrate. Unresolved rows drop'
+      + ' with the table — file content wins on the next import.',
+    up: `
+      DROP INDEX IF EXISTS idx_merge_conflict_status;
+      DROP INDEX IF EXISTS idx_merge_conflict_repo;
+      DROP TABLE IF EXISTS knowledge_merge_conflict;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

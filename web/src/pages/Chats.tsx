@@ -380,22 +380,16 @@ function ConversationDetailPane({
         onRemoveRole={(rid) => { void removeRole(rid); }}
       />
 
-      {/* Timeline — turn-by-turn conversation content */}
-      <TimelineSection turns={data?.turns ?? []} loading={loading && !data} />
-
-      {/* Unknown-entities layer (PR-C): chat mentions things helm has
-          no role for. Surfaces "create a new role" affordance — higher
-          priority than the suggestion layer because it solves a
-          completely uncovered domain. */}
+      {/* Discovery layers sit ABOVE the timeline — they're the actionable
+          knowledge-flow signals this page exists for, and the timeline
+          (with its auto-expanded latest turn) is tall enough to push
+          anything below it out of the first viewport. Buried-below-fold
+          was exactly how the user missed them. */}
       <UnknownEntitiesSection
         unknownEntities={data?.unknownEntities ?? []}
         hostSessionId={chat.id}
         onSpawned={() => reload()}
       />
-
-      {/* Role-suggestion layer: which existing roles' entities does this
-          chat touch? Surfaces "this chat is about TCE — TCE 专家 might
-          want some of it" before the user has bound the role. */}
       <RoleSuggestionsSection
         suggestions={data?.roleSuggestions ?? []}
         hostSessionId={chat.id}
@@ -404,12 +398,18 @@ function ConversationDetailPane({
         savingRole={savingRole}
       />
 
-      {/* Knowledge OUT */}
+      {/* Knowledge OUT — directly after discovery so suggestion → extract
+          → candidates reads as one continuous flow. */}
       <KnowledgeOutSection
         candidates={candidates}
         loading={loading && !data}
         onDecided={() => reload()}
       />
+
+      {/* Timeline — turn-by-turn conversation content. Sits last among
+          the content sections: it's reference material you scroll into,
+          not a signal that competes with the knowledge-flow blocks. */}
+      <TimelineSection turns={data?.turns ?? []} loading={loading && !data} />
 
       {/* Ambient footer */}
       <div className="helm-conv-footer">

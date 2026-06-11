@@ -898,6 +898,12 @@ code, pre {
  * sized to the body container — fixed-positioned overlays need the
  * full viewport. */
 .helm-main > *:not([role="dialog"]) { max-width: var(--container-max); }
+/* The Conversations rail+detail workspace needs the full window width —
+   the 720px form-page cap left a dead column on the right and squeezed
+   the detail pane. Cap the DETAIL column instead (readability) while the
+   grid itself stretches. */
+.helm-main > .helm-rail-layout { max-width: none; }
+.helm-rail-content { max-width: 860px; }
 .helm-main > h2 {
   margin: 0 0 4px;
   font-size: 22px;

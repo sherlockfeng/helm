@@ -104,6 +104,28 @@ function ensureDepscope(config: HelmConfig): { provider: KnowledgeProviderConfig
   return findDepscope(config)!;
 }
 
+interface TikaConfig {
+  tikaEnv?: string;
+  spaceId?: string;
+  serviceKey?: string;
+}
+
+function findTika(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } | null {
+  const idx = config.knowledge.providers.findIndex((p) => p.id === 'tika');
+  if (idx < 0) return null;
+  return { provider: config.knowledge.providers[idx]!, index: idx };
+}
+
+function ensureTika(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } {
+  const found = findTika(config);
+  if (found) return found;
+  config.knowledge.providers.push({
+    id: 'tika', enabled: false,
+    config: { tikaEnv: 'office', spaceId: '', serviceKey: '' },
+  });
+  return findTika(config)!;
+}
+
 // ── Section identifiers ──────────────────────────────────────────────
 
 const SECTIONS = [
@@ -573,6 +595,8 @@ function KnowledgeSection({
 }: { draft: HelmConfig; update: (m: (c: HelmConfig) => void) => void }): ReactElement {
   const depscope = findDepscope(draft);
   const depscopeCfg: DepscopeConfig = (depscope?.provider.config ?? {}) as DepscopeConfig;
+  const tika = findTika(draft);
+  const tikaCfg: TikaConfig = (tika?.provider.config ?? {}) as TikaConfig;
 
   return (
     <>
@@ -781,6 +805,73 @@ function KnowledgeSection({
             found.provider.config = cfg as Record<string, unknown>;
           })}
         >+ Add mapping</Button>
+      </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0 }}>Tika provider</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          TikTok 内部知识平台。通过本地 MCP 进程
+          （npx @tiktok-mcp/tika）查询你的 Tika 空间，结果会出现在
+          query_knowledge 聚合里。需要先在 Tika 平台建空间并拿到
+          tenant_id / service_key；本机需可访问字节内部 npm 源。
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={tika?.provider.enabled ?? false}
+            onChange={(e) => update((c) => {
+              const found = ensureTika(c);
+              c.knowledge.providers[found.index] = {
+                ...found.provider,
+                enabled: e.target.checked,
+              };
+            })}
+          />
+          Enabled
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">TIKA_ENV</div>
+          <input
+            type="text"
+            value={tikaCfg.tikaEnv ?? 'office'}
+            placeholder="office"
+            onChange={(e) => update((c) => {
+              const found = ensureTika(c);
+              const cfg = (found.provider.config ?? {}) as TikaConfig;
+              cfg.tikaEnv = e.target.value;
+              found.provider.config = cfg as Record<string, unknown>;
+            })}
+            style={{ width: 160 }}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Space ID（租户 ID）</div>
+          <input
+            type="text"
+            value={tikaCfg.spaceId ?? ''}
+            placeholder="你的 Tika 空间 tenant_id"
+            onChange={(e) => update((c) => {
+              const found = ensureTika(c);
+              const cfg = (found.provider.config ?? {}) as TikaConfig;
+              cfg.spaceId = e.target.value;
+              found.provider.config = cfg as Record<string, unknown>;
+            })}
+          />
+        </label>
+        <label className="helm-form-row">
+          <div className="muted">Service key</div>
+          <input
+            type="password"
+            value={tikaCfg.serviceKey ?? ''}
+            placeholder="服务账号 ServiceKey"
+            onChange={(e) => update((c) => {
+              const found = ensureTika(c);
+              const cfg = (found.provider.config ?? {}) as TikaConfig;
+              cfg.serviceKey = e.target.value;
+              found.provider.config = cfg as Record<string, unknown>;
+            })}
+          />
+        </label>
       </Card>
     </>
   );

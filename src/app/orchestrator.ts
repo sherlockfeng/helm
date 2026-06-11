@@ -60,9 +60,10 @@ import {
 import { resolveSubscriptionConflict, runSubscriptionSync, type ResolveConflictStrategy } from '../subscriptions/sync.js';
 import { createMirrorRunner } from '../mirrors/runner.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
+import { TikaProvider } from '../knowledge/tika-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
-import { DepscopeProviderConfigSchema, type HelmConfig } from '../config/schema.js';
+import { DepscopeProviderConfigSchema, TikaProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
@@ -443,6 +444,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   let configuredProviderIds = new Set<string>();
   function reconfigureKnowledgeProviders(): void {
     for (const id of configuredProviderIds) {
+      // Providers owning a child process (Tika MCP bridge) must release
+      // it on hot-reload, or each Settings save leaks an npx process.
+      const prev = knowledge.get(id) as { dispose?: () => Promise<void> } | undefined;
+      if (prev?.dispose) void prev.dispose().catch(() => {});
       knowledge.unregister(id);
     }
     configuredProviderIds = new Set<string>();
@@ -1854,6 +1859,26 @@ function buildConfiguredProviders(
         cacheTtlMs: parsed.data.cacheTtlMs,
         requestTimeoutMs: parsed.data.requestTimeoutMs,
         onWarning: (msg, ctx) => loggers.module('knowledge.depscope').warn(msg, { data: ctx }),
+      }));
+      continue;
+    }
+    if (decl.id === 'tika') {
+      const parsed = TikaProviderConfigSchema.safeParse(decl.config ?? {});
+      if (!parsed.success) {
+        log.warn('knowledge_provider_config_invalid', {
+          data: { id: decl.id, issues: parsed.error.issues },
+        });
+        continue;
+      }
+      providers.push(new TikaProvider({
+        tikaEnv: parsed.data.tikaEnv,
+        spaceId: parsed.data.spaceId,
+        serviceKey: parsed.data.serviceKey,
+        ...(parsed.data.command ? { command: parsed.data.command } : {}),
+        ...(parsed.data.args ? { args: parsed.data.args } : {}),
+        ...(parsed.data.toolName ? { toolName: parsed.data.toolName } : {}),
+        ...(parsed.data.requestTimeoutMs ? { requestTimeoutMs: parsed.data.requestTimeoutMs } : {}),
+        onWarning: (msg, ctx) => loggers.module('knowledge.tika').warn(msg, { data: ctx }),
       }));
       continue;
     }

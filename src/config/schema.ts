@@ -235,3 +235,23 @@ export const DepscopeProviderConfigSchema = z.object({
 }).strict();
 
 export type DepscopeProviderConfig = z.infer<typeof DepscopeProviderConfigSchema>;
+
+/**
+ * Schema slice for the per-provider `config` blob when id === 'tika'.
+ * Credentials come from the user's Tika space (tenant id + service
+ * account key); the bridge passes them to `npx @tiktok-mcp/tika` as
+ * TIKA_ENV / TIKA_SPACE_ID / TIKA_SERVICE_KEY.
+ */
+export const TikaProviderConfigSchema = z.object({
+  tikaEnv: z.string().default('office'),
+  spaceId: z.string().min(1),
+  serviceKey: z.string().min(1),
+  /** Launcher override; default `npx -y @tiktok-mcp/tika`. */
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  /** Pin the MCP tool name if the package renames it. */
+  toolName: z.string().optional(),
+  requestTimeoutMs: z.number().int().positive().optional(),
+}).strict();
+
+export type TikaProviderConfig = z.infer<typeof TikaProviderConfigSchema>;

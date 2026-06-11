@@ -116,6 +116,16 @@ describe('hybridSearch — end-to-end with a tiny seeded role', () => {
     expect(hits[0]?.contributingLegs).toEqual(['bm25']);
   });
 
+  it('multi-token query with a non-occurring word still matches (BM25 OR semantics)', async () => {
+    // PR-4: with implicit-AND FTS5 this returned zero rows (the cosine
+    // leg used to paper over it); OR-joined tokens make BM25 a real
+    // recall leg.
+    const hits = await hybridSearch({
+      db, roleId: 'rA', query: 'tce rollback escalation zzznope', topK: 3, strategy: 'bm25',
+    });
+    expect(hits[0]?.chunkText).toContain('tce rollback');
+  });
+
   it('entity-only strategy returns hits when query contains a known entity', async () => {
     const hits = await hybridSearch({
       db, roleId: 'rA', query: 'getCycleState function', topK: 3, strategy: 'entity',

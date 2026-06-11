@@ -671,7 +671,7 @@ export function searchChunksByBm25(
   } catch {
     // FTS5 syntax errors degrade to "this leg returned nothing" so the
     // fusion path drops the BM25 weight rather than crashing the whole
-    // search. The cosine leg still has the user's intent.
+    // search; the entity leg may still catch the user's intent.
     return [];
   }
 }
@@ -687,9 +687,12 @@ export function searchChunksByBm25(
  *     can't trigger operators (e.g. token `c++` becomes `"c++"*`).
  *   - Drop tokens shorter than 1 char.
  *
- * Tokens are AND'd implicitly by FTS5 default; we don't insert explicit
- * AND because that requires the operator-uppercase form which the strip
- * step would have removed.
+ * Tokens are OR'd explicitly (files-as-truth PR-4). FTS5's implicit
+ * default is AND, which made any multi-token query with one
+ * non-occurring word return zero rows — survivable while the cosine
+ * leg existed to catch the spillover, fatal once it retired. OR turns
+ * BM25 into a recall leg; its scoring already rewards documents that
+ * match more of the query's tokens, so ranking stays sensible.
  */
 function sanitizeBm25Query(query: string): string | null {
   // Remove FTS5 control characters / operator words anywhere in the input.
@@ -703,5 +706,5 @@ function sanitizeBm25Query(query: string): string | null {
   if (tokens.length === 0) return null;
   // Wrap each token; prefix-star outside the quote so FTS5 recognizes it
   // as the prefix operator.
-  return tokens.map((t) => `"${t.replace(/"/g, '')}"*`).join(' ');
+  return tokens.map((t) => `"${t.replace(/"/g, '')}"*`).join(' OR ');
 }

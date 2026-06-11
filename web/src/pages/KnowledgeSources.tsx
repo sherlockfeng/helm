@@ -13,17 +13,22 @@
  * required a curl from the terminal.
  */
 
-import { useMemo, useState, type ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
+import { Dialog, DialogContent } from '../components/Dialog.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
-import type { KnowledgeMergeConflict, KnowledgeRepo, KnowledgeRepoSeed } from '../api/types.js';
+import type {
+  KnowledgeMergeConflict,
+  KnowledgeRepo,
+  KnowledgeRepoSeed,
+  RoleChunk,
+} from '../api/types.js';
 
 export function KnowledgeSourcesPage(): ReactElement {
   const reposQuery = useApi(() => helmApi.listKnowledgeRepos('all'), []);
@@ -205,6 +210,7 @@ function RepoRow({
 }): ReactElement {
   const [busy, setBusy] = useState<'fetch' | 'import' | 'unsubscribe' | null>(null);
   const [showConflicts, setShowConflicts] = useState(false);
+  const [showPublish, setShowPublish] = useState(false);
 
   const run = async <T,>(label: typeof busy, fn: () => Promise<T>, successMsg: string): Promise<void> => {
     setBusy(label);
@@ -266,9 +272,13 @@ function RepoRow({
               {showConflicts ? 'Hide' : 'Resolve'} conflicts
             </button>
           )}
-          <Link to={`/knowledge/library?publishTarget=${encodeURIComponent(repo.id)}`}>
-            <Button>Publish ↗</Button>
-          </Link>
+          <Button
+            disabled={busy !== null}
+            onClick={() => setShowPublish(true)}
+            title="把本地 role 的知识点序列化成 .md，推一个分支回这个仓库"
+          >
+            Publish ↗
+          </Button>
           <span style={{ marginLeft: 'auto' }}>
             <button
               disabled={busy !== null}
@@ -286,6 +296,12 @@ function RepoRow({
           <ConflictResolver conflicts={conflicts} onResolved={onActed} />
         )}
       </div>
+      {showPublish && (
+        <PublishModal
+          repo={repo}
+          onClose={() => setShowPublish(false)}
+        />
+      )}
     </Card>
   );
 }
@@ -355,6 +371,236 @@ function ConflictRow({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Publish flow (Path: helm → llm-wiki). Pick a role → tick the chunks
+ * worth sharing → helm serializes them to .md in an ephemeral worktree,
+ * pushes a branch, and (when gh/glab is available for the host) opens
+ * the PR/MR. Public repos enforce R-0: internal-visibility chunks are
+ * disabled in the list instead of failing at the precheck.
+ *
+ * Replaces the dead `Library?publishTarget=` link — the Library page
+ * never implemented that query param, so the publish backend sat
+ * unreachable from the UI.
+ */
+function PublishModal({
+  repo,
+  onClose,
+}: {
+  repo: KnowledgeRepo;
+  onClose: () => void;
+}): ReactElement {
+  const rolesQuery = useApi(() => helmApi.roles(), []);
+  const [roleId, setRoleId] = useState<string>('');
+  const [chunks, setChunks] = useState<RoleChunk[]>([]);
+  const [loadingChunks, setLoadingChunks] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ branch: string; prUrl: string; filesWritten: number } | null>(null);
+
+  // Serialization profile — inferred from the URL, overridable. llm-wiki
+  // repos want the `# title + ```concept` shape; everything else gets
+  // helm-native frontmatter.
+  const [profile, setProfile] = useState<'helm-native' | 'llm-wiki'>(
+    repo.url.includes('llm-wiki') ? 'llm-wiki' : 'helm-native',
+  );
+
+  const roles = rolesQuery.data?.roles ?? [];
+  const isPublicRepo = repo.classification === 'public';
+
+  useEffect(() => {
+    if (!roleId) { setChunks([]); setSelected(new Set()); return; }
+    setLoadingChunks(true);
+    helmApi.role(roleId)
+      .then((r) => {
+        const active = r.chunks.filter((c) => !c.archived);
+        setChunks(active);
+        setSelected(new Set());
+      })
+      .catch((err) => {
+        toast.error(`Load chunks: ${err instanceof ApiError ? err.message : String(err)}`);
+      })
+      .finally(() => setLoadingChunks(false));
+  }, [roleId]);
+
+  const eligible = (c: RoleChunk): boolean =>
+    !isPublicRepo || c.visibility === 'public';
+
+  function toggle(id: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAll(): void {
+    setSelected(new Set(chunks.filter(eligible).map((c) => c.id)));
+  }
+
+  async function submit(): Promise<void> {
+    if (selected.size === 0) return;
+    setSubmitting(true);
+    try {
+      const roleName = roles.find((r) => r.id === roleId)?.name ?? roleId;
+      const r = await helmApi.publishKnowledgeRepo(repo.id, {
+        pointIds: Array.from(selected),
+        message: message.trim()
+          || `docs(knowledge): publish ${selected.size} point${selected.size === 1 ? '' : 's'} from helm role ${roleName}`,
+        profile,
+      });
+      setResult(r);
+    } catch (err) {
+      toast.error(`Publish: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setSubmitting(false); }
+  }
+
+  return (
+    <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        width={Math.min(640, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 640)}
+        aria-label="Publish knowledge to repo"
+      >
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Publish 回 {repo.url.split('/').pop()?.replace(/\.git$/, '')}</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            选中的知识点会被序列化成 .md，推一个分支到 <code>{repo.branch}</code> 之上
+            {isPublicRepo && '。公开仓库只能发布 visibility=public 的 chunk（R-0）'}
+          </div>
+        </div>
+
+        {result ? (
+          <div>
+            <p style={{ fontSize: 13 }}>
+              ✅ 已推送 <strong>{result.filesWritten}</strong> 个文件到分支{' '}
+              <code>{result.branch}</code>
+            </p>
+            {result.prUrl ? (
+              <p style={{ fontSize: 13 }}>
+                MR: <a href={result.prUrl} target="_blank" rel="noreferrer">{result.prUrl}</a>
+              </p>
+            ) : (
+              <p className="muted" style={{ fontSize: 12 }}>
+                未自动创建 MR（本机没有该平台的 CLI）。分支已在远端，去仓库页面手动开 MR 即可。
+              </p>
+            )}
+            <div style={{ marginTop: 12 }}>
+              <Button onClick={onClose}>完成</Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <label style={{ display: 'block', marginBottom: 10 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Role</div>
+              <select
+                value={roleId}
+                onChange={(e) => setRoleId(e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', fontSize: 13 }}
+              >
+                <option value="">选择要发布的 role…</option>
+                {roles.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name} ({r.chunkCount} chunks)</option>
+                ))}
+              </select>
+            </label>
+
+            {loadingChunks && <p className="muted" style={{ fontSize: 12 }}>加载 chunks…</p>}
+
+            {!loadingChunks && roleId && chunks.length === 0 && (
+              <p className="muted" style={{ fontSize: 12 }}>这个 role 还没有知识 chunks。</p>
+            )}
+
+            {chunks.length > 0 && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    已选 {selected.size} / {chunks.filter(eligible).length} 可发布
+                  </span>
+                  <button type="button" onClick={selectAll} style={{ fontSize: 12 }}>全选</button>
+                </div>
+                <ul style={{
+                  listStyle: 'none', margin: 0, padding: 0,
+                  maxHeight: 260, overflowY: 'auto',
+                  border: '1px solid var(--border)', borderRadius: 6,
+                }}>
+                  {chunks.map((c) => {
+                    const ok = eligible(c);
+                    return (
+                      <li key={c.id} style={{
+                        display: 'flex', gap: 8, alignItems: 'flex-start',
+                        padding: '6px 10px', borderBottom: '1px solid var(--border)',
+                        opacity: ok ? 1 : 0.45,
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(c.id)}
+                          disabled={!ok}
+                          onChange={() => toggle(c.id)}
+                          style={{ marginTop: 3 }}
+                        />
+                        <div style={{ minWidth: 0, fontSize: 12 }}>
+                          <div style={{
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap', color: 'var(--text)',
+                          }}>
+                            {(c.chunkText.split('\n')[0] ?? '').slice(0, 90) || c.id}
+                          </div>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {c.kind}{c.sourceFile ? ` · ${c.sourceFile}` : ''}
+                            {!ok && ' · internal — 公开仓库不可发布'}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+
+            <label style={{ display: 'block', marginTop: 12 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Commit / MR 信息（可选，留空自动生成）</div>
+              <input
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="docs(knowledge): …"
+                style={{
+                  width: '100%', padding: '6px 10px', fontSize: 13,
+                  border: '1px solid var(--border)', borderRadius: 6,
+                }}
+              />
+            </label>
+
+            <label style={{ display: 'block', marginTop: 10 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>序列化格式</div>
+              <select
+                value={profile}
+                onChange={(e) => setProfile(e.target.value as 'helm-native' | 'llm-wiki')}
+                style={{ padding: '4px 8px', fontSize: 12 }}
+              >
+                <option value="llm-wiki">llm-wiki（# 标题 + concept 块，顶层目录=role）</option>
+                <option value="helm-native">helm-native（frontmatter，roles/&lt;id&gt;/points/）</option>
+              </select>
+            </label>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <Button
+                variant="primary"
+                disabled={submitting || selected.size === 0}
+                onClick={() => { void submit(); }}
+              >
+                {submitting ? '推送中…' : `Publish ${selected.size} 个知识点`}
+              </Button>
+              <button type="button" onClick={onClose} disabled={submitting}>取消</button>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

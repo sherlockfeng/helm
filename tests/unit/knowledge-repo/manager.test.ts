@@ -8,7 +8,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3';
-import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -583,5 +583,66 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     expect(warnCalls.length).toBe(1);
     expect(warnCalls[0]!.msg).toBe('publish_pr_create_failed');
     expect((warnCalls[0]!.data as { error?: string }).error).toMatch(/gh: not authenticated/);
+  });
+
+  it('llm-wiki profile lays files out as <roleDir>/<file>.md, never roles/<id>/points/', async () => {
+    let worktreePath = '';
+    // Snapshot the file tree right when `git add` runs — the worktree
+    // is reaped in the finally block so we can't inspect it after.
+    let treeAtAdd: string[] = [];
+    const snapshot = (dir: string, prefix = ''): string[] => {
+      const out: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) out.push(...snapshot(join(dir, entry.name), rel));
+        else out.push(rel);
+      }
+      return out;
+    };
+    const runner: GitRunner = async (args) => {
+      const first = args[0];
+      if (first === 'worktree' && args[1] === 'add') {
+        worktreePath = String(args[4]);
+        mkdirSync(worktreePath, { recursive: true });
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (first === 'add') {
+        treeAtAdd = snapshot(worktreePath);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/wikirepo');
+    mkdirSync(repo.localPath, { recursive: true });
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('dr-expert','dr','sp',?)`).run(new Date().toISOString());
+    // Chunk A: repo-relative sourceFile (came from an llm-wiki import) →
+    // republish into the SAME file.
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-rt','dr-expert','dr-docs/failover.md','RT','round trip',?,'public')
+    `).run(new Date().toISOString());
+    // Chunk B: flat trainRole-style filename (chat promotion) → must NOT
+    // land at the repo root; goes under the role dir instead.
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-chat','dr-expert','chat-48910a39-turn-3.md','Chat','from chat',?,'public')
+    `).run(new Date().toISOString());
+
+    await mgr.publish({
+      repoId: repo.id,
+      pointIds: ['p-rt', 'p-chat'],
+      message: 'wiki layout test',
+      profile: 'llm-wiki',
+    });
+
+    expect(treeAtAdd).toContain('dr-docs/failover.md');
+    expect(treeAtAdd).toContain('dr-expert/p-chat.md');
+    // Neither helm-native layout nor a root-level stray file.
+    expect(treeAtAdd.some((f) => f.startsWith('roles/'))).toBe(false);
+    expect(treeAtAdd).not.toContain('chat-48910a39-turn-3.md');
   });
 });

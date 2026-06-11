@@ -1129,6 +1129,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             if (typeof body['autoApply'] === 'boolean') {
               subscribeOpts.autoApply = body['autoApply'];
             }
+            if (body['profile'] === 'helm-native' || body['profile'] === 'llm-wiki'
+                || body['profile'] === 'generic') {
+              subscribeOpts.profile = body['profile'];
+            }
             const repo = await deps.knowledgeRepoManager.subscribe(
               body['url'] as string, subscribeOpts,
             );
@@ -1216,6 +1220,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         try {
           const repo = await deps.knowledgeRepoManager.subscribe(seed.url, {
             branch: seed.branch,
+            // v26: pin the seed's profile so import / publish / the
+            // scheduled sync sweep all use the right layout without
+            // re-inferring from the URL.
+            profile: seed.profile,
           });
           return send(res, 201, { repo, seedId: seed.id });
         } catch (err) {
@@ -1286,10 +1294,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           catch { return badRequest(res, 'invalid JSON body'); }
         }
         const VALID_PROFILES = ['helm-native', 'llm-wiki', 'generic'] as const;
+        // v26: omitted profile now falls through to the one pinned at
+        // subscribe time (manager resolves). Explicit body.profile is a
+        // per-call override.
         const profile = typeof body.profile === 'string'
           && (VALID_PROFILES as readonly string[]).includes(body.profile)
           ? body.profile as typeof VALID_PROFILES[number]
-          : 'helm-native';
+          : undefined;
         try {
           const summary = deps.knowledgeRepoManager.importNow(repoImportMatch[1]!, profile);
           return send(res, 200, summary);

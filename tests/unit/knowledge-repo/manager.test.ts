@@ -646,3 +646,126 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     expect(treeAtAdd).not.toContain('chat-48910a39-turn-3.md');
   });
 });
+
+describe('KnowledgeRepoManager.syncDue (scheduled pull sweep)', () => {
+  let db: BetterSqlite3.Database;
+  let reposRoot: string;
+
+  beforeEach(() => {
+    db = openDb();
+    reposRoot = mkdtempSync(join(tmpdir(), 'helm-repo-sync-'));
+  });
+  afterEach(() => {
+    db.close();
+    rmSync(reposRoot, { recursive: true, force: true });
+  });
+
+  /** Runner: clone OK; every fetch cycle reports the given pre/post shas. */
+  function fetchRunner(preSha: string, postSha: string): GitRunner {
+    let revParseCount = 0;
+    return async (args) => {
+      if (args[0] === 'clone') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args[0] === 'fetch') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-parse') {
+        revParseCount += 1;
+        // Odd calls = pre-fetch sha, even calls = post-fetch sha.
+        const sha = revParseCount % 2 === 1 ? preSha : postSha;
+        return { stdout: `${sha}\n`, stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+  }
+
+  it('subscribe persists the pinned profile; defaults to helm-native', async () => {
+    const runner = fetchRunner('a', 'a');
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const wiki = await mgr.subscribe('https://github.com/org/wiki', { profile: 'llm-wiki' });
+    const plain = await mgr.subscribe('https://github.com/org/plain');
+    expect(getKnowledgeRepo(db, wiki.id)!.profile).toBe('llm-wiki');
+    expect(getKnowledgeRepo(db, plain.id)!.profile).toBe('helm-native');
+  });
+
+  it('never-fetched repos are due; unmoved fetch does not import', async () => {
+    const mgr = new KnowledgeRepoManager({ db, git: fetchRunner('same', 'same'), reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/due1', { autoApply: true });
+    mkdirSync(repo.localPath, { recursive: true });
+
+    const outcomes = await mgr.syncDue();
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.fetched).toBe(true);
+    expect(outcomes[0]!.moved).toBe(false);
+    expect(outcomes[0]!.imported).toBe(false);
+  });
+
+  it('moved + autoApply imports with the pinned profile (no explicit arg)', async () => {
+    const mgr = new KnowledgeRepoManager({ db, git: fetchRunner('old', 'new'), reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/due2', {
+      autoApply: true, profile: 'llm-wiki',
+    });
+    mkdirSync(repo.localPath, { recursive: true });
+
+    const importCalls: Array<[string, unknown]> = [];
+    // Shadow the prototype method on the instance so the sweep's
+    // auto-apply path is observable without touching the importer.
+    (mgr as unknown as { importNow: (id: string, p?: unknown) => unknown }).importNow =
+      (id: string, p?: unknown) => {
+        importCalls.push([id, p]);
+        return { rolesImported: 1, pointsUpserted: 3, conflictsDetected: 0, errors: {} };
+      };
+
+    const outcomes = await mgr.syncDue();
+    expect(outcomes[0]!.moved).toBe(true);
+    expect(outcomes[0]!.imported).toBe(true);
+    expect(outcomes[0]!.importedPoints).toBe(3);
+    // No explicit profile — the real importNow resolves the pinned one.
+    expect(importCalls).toEqual([[repo.id, undefined]]);
+  });
+
+  it('moved WITHOUT autoApply fetches but leaves import for the user', async () => {
+    const mgr = new KnowledgeRepoManager({ db, git: fetchRunner('old', 'new'), reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/due3'); // autoApply default false
+    mkdirSync(repo.localPath, { recursive: true });
+    const outcomes = await mgr.syncDue();
+    expect(outcomes[0]!.moved).toBe(true);
+    expect(outcomes[0]!.imported).toBe(false);
+  });
+
+  it('recently-fetched repos are skipped until their interval elapses', async () => {
+    const mgr = new KnowledgeRepoManager({ db, git: fetchRunner('a', 'a'), reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/fresh', { syncIntervalMinutes: 60 });
+    mkdirSync(repo.localPath, { recursive: true });
+
+    const t0 = Date.now();
+    await mgr.fetchNow(repo.id); // stamps last_fetched_at ≈ t0
+
+    // 10 minutes later: not due.
+    expect(await mgr.syncDue(t0 + 10 * 60_000)).toHaveLength(0);
+    // 61 minutes later: due again.
+    const later = await mgr.syncDue(t0 + 61 * 60_000);
+    expect(later).toHaveLength(1);
+  });
+
+  it('a failing repo records its error and the sweep continues', async () => {
+    // First repo's fetch explodes; second repo is fine.
+    let cloneCount = 0;
+    const runner: GitRunner = async (args) => {
+      if (args[0] === 'clone') { cloneCount += 1; return { stdout: '', stderr: '', exitCode: 0 }; }
+      if (args[0] === 'fetch') {
+        return { stdout: '', stderr: 'remote unreachable', exitCode: 128 };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'x\n', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const a = await mgr.subscribe('https://github.com/org/broken');
+    const b = await mgr.subscribe('https://github.com/org/alsobroken');
+    mkdirSync(a.localPath, { recursive: true });
+    mkdirSync(b.localPath, { recursive: true });
+
+    const outcomes = await mgr.syncDue();
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((o) => o.error)).toBe(true);
+    // Sweep didn't bail after the first failure.
+    expect(outcomes.map((o) => o.repoId).sort()).toEqual([a.id, b.id].sort());
+  });
+});

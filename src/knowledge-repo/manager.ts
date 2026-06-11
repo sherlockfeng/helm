@@ -25,6 +25,7 @@ import {
   getKnowledgeRepo,
   getKnowledgeRepoByUrl,
   insertKnowledgeRepo,
+  listKnowledgeRepos,
   recordRepoError,
   recordRepoFetch,
   setRepoStatus,
@@ -128,6 +129,19 @@ export interface SubscribeOptions {
   syncIntervalMinutes?: number;
   /** When true, fast-forward fetches apply without going through review. */
   autoApply?: boolean;
+  /** v26 — layout/serialization profile pinned at subscribe time.
+   *  Defaults to 'helm-native'. */
+  profile?: KnowledgeRepoProfile;
+}
+
+export interface SyncSweepOutcome {
+  repoId: string;
+  fetched: boolean;
+  moved: boolean;
+  imported: boolean;
+  /** pointsUpserted from the auto-apply import, when one ran. */
+  importedPoints?: number;
+  error?: string;
 }
 
 export interface FetchOutcome {
@@ -208,6 +222,9 @@ export class KnowledgeRepoManager {
     }
     if (opts.autoApply !== undefined) {
       insertParams.autoApply = opts.autoApply;
+    }
+    if (opts.profile !== undefined) {
+      insertParams.profile = opts.profile;
     }
     insertKnowledgeRepo(this.db, insertParams);
     return getKnowledgeRepo(this.db, id)!;
@@ -316,8 +333,13 @@ export class KnowledgeRepoManager {
       let filesWritten = 0;
       let prUrl = '';
       try {
+        // v26: explicit profile wins; otherwise the one pinned at
+        // subscribe time. 'generic' has no serializer — degrade to
+        // helm-native frontmatter.
+        const effProfile: SerializerProfile | undefined = input.profile
+          ?? (repo.profile === 'llm-wiki' ? 'llm-wiki' : 'helm-native');
         const layout = input.layout
-          ?? (input.profile === 'llm-wiki' ? llmWikiLayout : defaultLayout);
+          ?? (effProfile === 'llm-wiki' ? llmWikiLayout : defaultLayout);
         for (const pid of input.pointIds) {
           const chunk = getChunkById(this.db, pid);
           if (!chunk) continue;
@@ -325,7 +347,7 @@ export class KnowledgeRepoManager {
           const rel = getOutgoingRels(this.db, pid);
           const text = serializePoint({
             chunk, aliases, rel,
-            ...(input.profile ? { profile: input.profile } : {}),
+            ...(effProfile ? { profile: effProfile } : {}),
           });
           const absPath = join(worktreePath, layout(chunk));
           mkdirSync(dirname(absPath), { recursive: true });
@@ -397,14 +419,57 @@ export class KnowledgeRepoManager {
    * 5.5b's mapper handles missing roles/, missing role.yaml, etc.
    * gracefully.
    */
-  importNow(repoId: string, profile: KnowledgeRepoProfile = 'helm-native'): ImportSummary {
+  importNow(repoId: string, profile?: KnowledgeRepoProfile): ImportSummary {
     const repo = getKnowledgeRepo(this.db, repoId);
     if (!repo) {
       throw new KnowledgeRepoManagerError(`unknown repo: ${repoId}`);
     }
+    // v26: default to the profile pinned at subscribe time. Explicit
+    // arg still wins so callers can do a one-off re-read under a
+    // different layout (e.g. debugging a mis-classified repo).
+    const effective = profile ?? repo.profile;
     return importRepoIntoLibrary({
-      db: this.db, localPath: repo.localPath, profile, sourceRef: repoId,
+      db: this.db, localPath: repo.localPath, profile: effective, sourceRef: repoId,
     });
+  }
+
+  /**
+   * Scheduled-sync sweep (llm-wiki milestone, pull side). Walks every
+   * ACTIVE repo whose `sync_interval_minutes` has elapsed since
+   * `last_fetched_at` (or that has never been fetched), fetches it, and
+   * — when the branch moved AND the repo opted into `auto_apply` —
+   * imports immediately using the pinned profile.
+   *
+   * Per-repo failures are recorded on the row (recordRepoError inside
+   * fetchNow) and reported in the outcome; the sweep continues so one
+   * dead remote can't starve the rest.
+   */
+  async syncDue(now: number = Date.now()): Promise<SyncSweepOutcome[]> {
+    const due = listKnowledgeRepos(this.db, { status: 'active' }).filter((r) => {
+      if (r.lastFetchedAt == null) return true;
+      return r.lastFetchedAt + r.syncIntervalMinutes * 60_000 <= now;
+    });
+
+    const outcomes: SyncSweepOutcome[] = [];
+    for (const repo of due) {
+      const outcome: SyncSweepOutcome = {
+        repoId: repo.id, fetched: false, moved: false, imported: false,
+      };
+      try {
+        const fetch = await this.fetchNow(repo.id);
+        outcome.fetched = true;
+        outcome.moved = fetch.moved;
+        if (fetch.moved && repo.autoApply) {
+          const summary = this.importNow(repo.id);
+          outcome.imported = true;
+          outcome.importedPoints = summary.pointsUpserted;
+        }
+      } catch (err) {
+        outcome.error = (err as Error).message;
+      }
+      outcomes.push(outcome);
+    }
+    return outcomes;
   }
 
   /**

@@ -105,6 +105,8 @@ import {
 import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { slugifyPointId } from '../knowledge-repo/slug.js';
+import { queryKnowledge } from '../mcp/tools/query-knowledge.js';
+import type { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginRegistry } from '../plugins/index.js';
 import { bundleToBytes, packRole, resolveBundleUploadUrl } from '../roles/bundle.js';
@@ -196,6 +198,13 @@ export interface HttpApiDeps {
    * unavailable. Production wires this from orchestrator.
    */
   knowledgeRepoManager?: KnowledgeRepoManager;
+  /**
+   * Tika T2: provider registry for POST /api/knowledge-lookup — the
+   * renderer's "Tika 对照" button queries external knowledge (Tika,
+   * depscope, …) with a candidate's text to show org-side context next
+   * to chat-captured content. Absent = endpoint responds 501.
+   */
+  knowledge?: KnowledgeProviderRegistry;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -1223,6 +1232,39 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               error: 'publish_failed', stage, message: err.message,
             });
           }
+          return internalError(res, err);
+        }
+      }
+
+      // Tika T2: ad-hoc external-knowledge lookup for the renderer.
+      //   POST /api/knowledge-lookup  body { query, providers? }
+      // Used by the "Tika 对照" button next to candidates: query org
+      // knowledge with the captured text and show both side by side.
+      if (url.pathname === '/api/knowledge-lookup') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledge) {
+          return send(res, 501, { error: 'no_knowledge_registry' });
+        }
+        let body: { query?: unknown; providers?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body.query !== 'string' || body.query.trim().length === 0) {
+          return badRequest(res, 'query must be a non-empty string');
+        }
+        const providers = Array.isArray(body.providers)
+          && body.providers.every((p): p is string => typeof p === 'string')
+          ? body.providers
+          : undefined;
+        try {
+          const result = await queryKnowledge(
+            deps.knowledge,
+            { query: body.query, ...(providers ? { providers } : {}) },
+            // Tika's RAG round-trip regularly exceeds the 5s default
+            // used for session-context fetches.
+            { searchTimeoutMs: 20_000 },
+          );
+          return send(res, 200, result);
+        } catch (err) {
           return internalError(res, err);
         }
       }

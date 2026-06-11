@@ -583,6 +583,73 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
  * so its state (which candidate is being edited / busy state) doesn't
  * rerender the whole detail panel on every button click.
  */
+/**
+ * Tika T2: on-demand org-knowledge comparison for one candidate. Queries
+ * the Tika provider with the captured text and renders the answer next
+ * to the chat content, so the curation decision (new / duplicate /
+ * contradicts org knowledge) is made with both sides visible. Lazy —
+ * nothing fires until the user clicks (a Tika round-trip can take
+ * seconds and may pop an SSO browser window on first use).
+ */
+function TikaCompare({ text }: { text: string }) {
+  const [state, setState] = useState<
+    | { phase: 'idle' }
+    | { phase: 'loading' }
+    | { phase: 'done'; body: string | null; reason?: string }
+  >({ phase: 'idle' });
+
+  const run = async (): Promise<void> => {
+    setState({ phase: 'loading' });
+    try {
+      const r = await helmApi.lookupKnowledge(text, ['tika']);
+      const body = r.snippets.map((s) => s.body).join('\n\n').trim();
+      if (body) {
+        setState({ phase: 'done', body });
+      } else {
+        const diag = r.diagnostics.find((d) => d.provider === 'tika');
+        setState({
+          phase: 'done', body: null,
+          ...(diag && diag.status !== 'ok' ? { reason: `${diag.status}${diag.reason ? `: ${diag.reason}` : ''}` } : {}),
+        });
+      }
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setState({ phase: 'done', body: null, reason: msg });
+    }
+  };
+
+  if (state.phase === 'idle') {
+    return (
+      <button
+        onClick={() => { void run(); }}
+        title="用这段沉淀文本查询 Tika，组织已有知识和 chat 内容并排对照"
+        style={{ fontSize: 12, marginTop: 6 }}
+      >
+        Tika 对照
+      </button>
+    );
+  }
+  if (state.phase === 'loading') {
+    return <span className="muted" style={{ fontSize: 12 }}>Tika 查询中…（首次可能拉起 SSO 授权）</span>;
+  }
+  return (
+    <div style={{
+      marginTop: 6, padding: '8px 10px', borderRadius: 6, width: '100%',
+      backgroundColor: '#f5f3ff', border: '1px solid #ddd6fe',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: '#6d28d9', marginBottom: 4 }}>
+        Tika 已有相关
+        <button onClick={() => { void run(); }} style={{ marginLeft: 8, fontSize: 11 }}>重查</button>
+      </div>
+      {state.body
+        ? <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{state.body}</pre>
+        : <span className="muted" style={{ fontSize: 12 }}>
+            {state.reason ? `查询未成功（${state.reason}）` : '未找到相关组织知识 — 这可能是真正的新知识'}
+          </span>}
+    </div>
+  );
+}
+
 function RoleCandidates({
   roleId,
   onChange,
@@ -730,6 +797,7 @@ function RoleCandidates({
                   </>
                 )}
               </div>
+              {!isEditing && <TikaCompare text={c.chunkText} />}
             </li>
           );
         })}

@@ -689,6 +689,12 @@ export const helmApi = {
     request<{ branch: string; prUrl: string; filesWritten: number }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
     ),
+  // Tika T2: ad-hoc external-knowledge lookup (Tika 对照 button).
+  lookupKnowledge: (query: string, providers?: string[]) =>
+    request<{
+      snippets: Array<{ source: string; title: string; body: string; score?: number; citation?: string }>;
+      diagnostics: Array<{ provider: string; status: 'ok' | 'skipped' | 'error' | 'timeout'; snippetCount: number; reason?: string }>;
+    }>('POST', '/api/knowledge-lookup', { query, ...(providers ? { providers } : {}) }),
   // Files-as-truth PR-3: captured-points batch publish.
   listCapturedUnpublished: (repoId: string) =>
     request<{ files: UnpublishedCapturedFile[] }>(

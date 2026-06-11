@@ -870,6 +870,13 @@ export interface KnowledgeRepo {
   lastError?: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Migration v26 — layout/serialization profile fixed at subscribe
+   * time. Mirrors knowledge-repo/profiles.ts KnowledgeRepoProfile;
+   * duplicated as a literal union here so storage types stay free of
+   * knowledge-repo imports.
+   */
+  profile: 'helm-native' | 'llm-wiki' | 'generic';
 }
 
 // ── KnowledgeMergeConflict (PR 5.5c / migration v23) ───────────────────────

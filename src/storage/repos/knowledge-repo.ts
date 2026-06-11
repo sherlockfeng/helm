@@ -24,6 +24,8 @@ export interface InsertKnowledgeRepoInput {
   autoApply?: boolean;
   classification: KnowledgeRepoClassification;
   status?: KnowledgeRepoStatus;
+  /** v26 — layout/serialization profile. Defaults to 'helm-native'. */
+  profile?: KnowledgeRepo['profile'];
 }
 
 const DEFAULT_SYNC_INTERVAL_MIN = 30;
@@ -37,11 +39,11 @@ export function insertKnowledgeRepo(
     INSERT INTO knowledge_repo (
       id, url, branch, local_path,
       sync_interval_minutes, auto_apply, classification, status,
-      created_at, updated_at
+      profile, created_at, updated_at
     ) VALUES (
       @id, @url, @branch, @local_path,
       @sync_interval_minutes, @auto_apply, @classification, @status,
-      @created_at, @updated_at
+      @profile, @created_at, @updated_at
     )
   `).run({
     id: input.id,
@@ -52,6 +54,7 @@ export function insertKnowledgeRepo(
     auto_apply: input.autoApply ? 1 : 0,
     classification: input.classification,
     status: input.status ?? 'active',
+    profile: input.profile ?? 'helm-native',
     created_at: now, updated_at: now,
   });
 }
@@ -169,6 +172,9 @@ function rowToRepo(row: Record<string, unknown>): KnowledgeRepo {
     status: String(row['status']) as KnowledgeRepoStatus,
     createdAt: Number(row['created_at']),
     updatedAt: Number(row['updated_at']),
+    profile: (row['profile'] != null
+      ? String(row['profile'])
+      : 'helm-native') as KnowledgeRepo['profile'],
   };
   if (row['last_fetched_sha'] != null) r.lastFetchedSha = String(row['last_fetched_sha']);
   if (row['last_fetched_at']  != null) r.lastFetchedAt  = Number(row['last_fetched_at']);

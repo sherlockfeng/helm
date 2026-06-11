@@ -1255,6 +1255,44 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     logger: deps.loggers.module('knowledge-repo.manager'),
   });
 
+  // llm-wiki milestone (pull side): scheduled sync sweep for git-repo
+  // subscriptions. Each row carries its own sync_interval_minutes (the
+  // column existed since v22 but nothing read it); the cron tick is
+  // just "wake up and ask the manager who's due". The manager's
+  // per-repo FIFO lock makes a tick racing a manual "Fetch" click
+  // safe — second caller queues behind the first.
+  const repoSyncLog = deps.loggers.module('knowledge-repo.sync');
+  let repoSweepInFlight = false;
+  async function runRepoSyncSweep(): Promise<void> {
+    if (repoSweepInFlight) return;
+    repoSweepInFlight = true;
+    try {
+      const outcomes = await knowledgeRepoManager.syncDue();
+      const acted = outcomes.filter((o) => o.fetched || o.error);
+      if (acted.length > 0) {
+        repoSyncLog.info('repo_sync_sweep', {
+          data: {
+            due: outcomes.length,
+            moved: outcomes.filter((o) => o.moved).length,
+            imported: outcomes.filter((o) => o.imported).length,
+            errors: outcomes.filter((o) => o.error).map((o) => `${o.repoId}: ${o.error}`),
+          },
+        });
+      }
+    } catch (err) {
+      repoSyncLog.warn('repo_sync_sweep_failed', {
+        data: { error: (err as Error).message },
+      });
+    } finally {
+      repoSweepInFlight = false;
+    }
+  }
+  const REPO_SYNC_CRON_MS = 5 * 60 * 1000;
+  const repoSyncCron: NodeJS.Timeout = setInterval(() => {
+    void runRepoSyncSweep();
+  }, REPO_SYNC_CRON_MS);
+  repoSyncCron.unref?.();
+
   // PR 5b: try to bootstrap a real Verification runner from
   // `~/.helm/benchmark/providers.json`. Failures (missing file →
   // null; malformed JSON / unresolvable env → caught + logged) leave
@@ -1683,6 +1721,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // Order matters: clear the cron first so a tick doesn't fire while
       // plugins are tearing down (TOS SDK destroy is not idempotent).
       clearInterval(subscriptionCron);
+      clearInterval(repoSyncCron);
       await pluginRegistry.shutdownAll((id, err) => {
         pluginsLog.warn('plugin_shutdown_failed', {
           data: { id, error: err.message },

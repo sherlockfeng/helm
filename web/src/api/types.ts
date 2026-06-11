@@ -491,6 +491,8 @@ export interface KnowledgeRepo {
   lastFetchedAt?: number;
   lastError?: string;
   createdAt: number;
+  /** v26 — layout/serialization profile pinned at subscribe time. */
+  profile: 'helm-native' | 'llm-wiki' | 'generic';
 }
 
 /** R-6 — curated seed catalogue entry (e.g. llm-wiki one-click). */

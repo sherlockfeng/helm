@@ -973,6 +973,19 @@ export const MIGRATIONS: Migration[] = [
         ON knowledge_candidates(target_chunk_id);
     `,
   },
+  {
+    version: 26,
+    description:
+      'knowledge_repo.profile — persist the repo layout/serialization'
+      + ' profile (helm-native / llm-wiki / generic) at subscribe time.'
+      + ' Previously the UI and importer each re-inferred it from the'
+      + ' URL; the scheduled sync sweep needs the authoritative value'
+      + ' to auto-import correctly.',
+    up: `
+      ALTER TABLE knowledge_repo
+        ADD COLUMN profile TEXT NOT NULL DEFAULT 'helm-native';
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

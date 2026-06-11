@@ -401,11 +401,11 @@ function PublishModal({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ branch: string; prUrl: string; filesWritten: number } | null>(null);
 
-  // Serialization profile — inferred from the URL, overridable. llm-wiki
-  // repos want the `# title + ```concept` shape; everything else gets
-  // helm-native frontmatter.
+  // Serialization profile — defaults to the one pinned at subscribe
+  // time (v26), overridable per publish. 'generic' has no serializer →
+  // degrade to helm-native frontmatter.
   const [profile, setProfile] = useState<'helm-native' | 'llm-wiki'>(
-    repo.url.includes('llm-wiki') ? 'llm-wiki' : 'helm-native',
+    repo.profile === 'llm-wiki' ? 'llm-wiki' : 'helm-native',
   );
 
   const roles = rolesQuery.data?.roles ?? [];

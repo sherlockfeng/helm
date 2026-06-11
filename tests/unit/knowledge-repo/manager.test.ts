@@ -172,6 +172,14 @@ describe('KnowledgeRepoManager.fetchNow', () => {
         result: { exitCode: 0 } },
       { match: (args: readonly string[]) => args[0] === 'rev-parse',
         result: { stdout: `${postSha}\n`, exitCode: 0 } },
+      // PR-3: moved=true now triggers a working-tree sync — collision
+      // scan (diff + status, both empty here) and the ff-only merge.
+      { match: (args: readonly string[]) => args[0] === 'diff',
+        result: { stdout: '', exitCode: 0 } },
+      { match: (args: readonly string[]) => args[0] === 'status',
+        result: { stdout: '', exitCode: 0 } },
+      { match: (args: readonly string[]) => args[0] === 'merge',
+        result: { exitCode: 0 } },
     ];
     let used = new Set<number>();
     const runner: GitRunner = async (args) => {
@@ -194,6 +202,7 @@ describe('KnowledgeRepoManager.fetchNow', () => {
     const outcome = await mgr.fetchNow(repo.id);
     expect(outcome.moved).toBe(true);
     expect(outcome.headSha).toBe(postSha);
+    expect(outcome.treeSynced).toBe(true);
     const after = getKnowledgeRepo(db, repo.id)!;
     expect(after.lastFetchedSha).toBe(postSha);
     expect(after.status).toBe('active');

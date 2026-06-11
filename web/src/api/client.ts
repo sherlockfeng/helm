@@ -29,6 +29,7 @@ import type {
   RoleSummary,
   Task,
   TrainRoleInput,
+  UnpublishedCapturedFile,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -688,6 +689,18 @@ export const helmApi = {
   ) =>
     request<{ branch: string; prUrl: string; filesWritten: number }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
+    ),
+  // Files-as-truth PR-3: captured-points batch publish.
+  listCapturedUnpublished: (repoId: string) =>
+    request<{ files: UnpublishedCapturedFile[] }>(
+      'GET', `/api/knowledge-repos/${encodeURIComponent(repoId)}/captured`,
+    ),
+  publishCaptured: (repoId: string, input: { message?: string } = {}) =>
+    request<{
+      branch: string; prUrl: string; filesWritten: number;
+      pointIds: string[]; skipped: string[];
+    }>(
+      'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish-captured`, input,
     ),
   unsubscribeKnowledgeRepo: (repoId: string, removeData?: boolean) => {
     const qs = removeData ? '?removeData=true' : '';

@@ -28,6 +28,7 @@ import type {
   KnowledgeRepo,
   KnowledgeRepoSeed,
   RoleChunk,
+  UnpublishedCapturedFile,
 } from '../api/types.js';
 
 export function KnowledgeSourcesPage(): ReactElement {
@@ -295,6 +296,9 @@ function RepoRow({
         {showConflicts && (
           <ConflictResolver conflicts={conflicts} onResolved={onActed} />
         )}
+        {repo.profile === 'llm-wiki' && (
+          <CapturedPanel repo={repo} busyParent={busy !== null} />
+        )}
       </div>
       {showPublish && (
         <PublishModal
@@ -303,6 +307,73 @@ function RepoRow({
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * Files-as-truth PR-3: "N 条已沉淀未发布" — captured points sitting in
+ * the working copy that the remote hasn't seen. One click opens a
+ * single batch MR for all of them (公司仓库必须走 MR).
+ */
+function CapturedPanel({
+  repo, busyParent,
+}: { repo: KnowledgeRepo; busyParent: boolean }): ReactElement | null {
+  const capturedQuery = useApi(() => helmApi.listCapturedUnpublished(repo.id), [repo.id]);
+  const [publishing, setPublishing] = useState(false);
+  const [lastResult, setLastResult] = useState<{ branch: string; prUrl: string } | null>(null);
+
+  const files: UnpublishedCapturedFile[] = capturedQuery.data?.files ?? [];
+  if (capturedQuery.loading || files.length === 0) return null;
+  const indexed = files.filter((f) => f.pointId);
+
+  const openMr = async (): Promise<void> => {
+    setPublishing(true);
+    try {
+      const r = await helmApi.publishCaptured(repo.id);
+      setLastResult({ branch: r.branch, prUrl: r.prUrl });
+      toast.success(r.prUrl
+        ? `MR 已创建：${r.prUrl}`
+        : `分支已推送：${r.branch}（未检测到 gh/glab，请手动开 MR）`);
+      capturedQuery.reload();
+    } catch (err) {
+      toast.error(`开 MR 失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setPublishing(false); }
+  };
+
+  return (
+    <div style={{
+      marginTop: 6, padding: '8px 10px', borderRadius: 6,
+      backgroundColor: '#eff6ff', border: '1px solid #bfdbfe',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#1d4ed8' }}>
+          {files.length} 条已沉淀未发布
+        </span>
+        <Button
+          disabled={publishing || busyParent || indexed.length === 0}
+          aria-busy={publishing}
+          onClick={() => { void openMr(); }}
+          title="批量序列化 chat-captured 知识点，推分支并创建 MR"
+        >
+          {publishing ? '开 MR 中…' : '开 MR'}
+        </Button>
+        {lastResult?.prUrl && (
+          <a href={lastResult.prUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+            {lastResult.prUrl}
+          </a>
+        )}
+      </div>
+      <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+        {files.map((f) => (
+          <li key={f.relPath}>
+            <code>{f.relPath}</code>
+            {f.title && <span className="muted"> — {f.title}</span>}
+            {!f.isNew && <span style={{ color: '#92400e' }}> · 已修改</span>}
+            {!f.pointId && <span style={{ color: '#dc2626' }}> · 未入索引（将跳过）</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

@@ -498,6 +498,15 @@ export interface KnowledgeRepo {
   profile: 'helm-native' | 'llm-wiki' | 'generic';
 }
 
+/** Files-as-truth PR-3 — a captured file not yet on the remote. */
+export interface UnpublishedCapturedFile {
+  relPath: string;
+  /** true = never published (untracked); false = modified since last publish. */
+  isNew: boolean;
+  pointId?: string;
+  title?: string;
+}
+
 /** R-6 — curated seed catalogue entry (e.g. llm-wiki one-click). */
 export interface KnowledgeRepoSeed {
   id: string;

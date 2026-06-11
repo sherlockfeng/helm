@@ -36,7 +36,11 @@ import {
   cloneRepo,
   fetchRepo,
   GitCommandError,
+  listChangedFiles,
+  mergeFfOnly,
   removeWorktree,
+  showFileAtRef,
+  statusPorcelain,
   type GitRunner,
 } from './git.js';
 import {
@@ -58,7 +62,7 @@ import {
   type CreatePrResult,
   type PrPlatformRunner,
 } from './publish.js';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '../logger/index.js';
 import { getAliasesForPoint } from '../storage/repos/knowledge-point-alias.js';
@@ -150,6 +154,37 @@ export interface FetchOutcome {
   moved: boolean;
   /** SHA after this fetch. */
   headSha: string;
+  /** PR-3: true when the working tree was fast-forwarded to the new SHA. */
+  treeSynced?: boolean;
+  /** PR-3: untracked-vs-incoming collisions resolved before the merge. */
+  collisions?: CapturedCollision[];
+}
+
+/**
+ * PR-3: an untracked local file (typically a captured point) that an
+ * incoming merge would have overwritten, and how it was cleared.
+ */
+export interface CapturedCollision {
+  relPath: string;
+  /**
+   * 'removed_identical' — local bytes matched the incoming tracked
+   * version (the usual case: our own MR merged), so the untracked copy
+   * was simply deleted.
+   * 'backed_up' — content diverged; local copy moved to
+   * .helm-backup/<relPath> (hidden dir — invisible to the importer)
+   * and the reviewed upstream version wins in the working tree.
+   */
+  action: 'removed_identical' | 'backed_up';
+}
+
+/** PR-3: a captured file in the working copy not yet on the remote. */
+export interface UnpublishedCaptured {
+  relPath: string;
+  /** '??' = new (never published), otherwise modified since last publish. */
+  isNew: boolean;
+  /** Chunk whose source_file points at this path, when indexed. */
+  pointId?: string;
+  title?: string;
 }
 
 export class KnowledgeRepoManagerError extends Error {
@@ -262,7 +297,39 @@ export class KnowledgeRepoManager {
           status: 'active',
           lastError: null,
         });
-        return { repoId, moved: result.moved, headSha: result.headSha };
+        const outcome: FetchOutcome = {
+          repoId, moved: result.moved, headSha: result.headSha,
+        };
+        // PR-3: a fetch alone never changed what importNow reads — the
+        // working tree stayed at clone-time state. Fast-forward it to
+        // the fetched SHA so files-as-truth holds ("the working copy IS
+        // the source of truth"). Untracked captured files that the
+        // merge would overwrite are cleared first (git refuses
+        // otherwise): identical content is just deleted, divergent
+        // content is parked under .helm-backup/.
+        if (result.moved) {
+          try {
+            outcome.collisions = await this.clearMergeCollisions(repo);
+            await mergeFfOnly(this.git, repo.localPath, `origin/${repo.branch}`);
+            outcome.treeSynced = true;
+          } catch (err) {
+            // Leave the tree as-is; the fetch itself succeeded, so keep
+            // status 'active' (the index still serves) but surface the
+            // problem on the row for the UI.
+            const message = `working-tree sync failed: ${(err as Error).message}`;
+            recordRepoFetch(this.db, repoId, {
+              lastFetchedSha: result.headSha,
+              lastFetchedAt: Date.now(),
+              status: 'active',
+              lastError: message,
+            });
+            this.logger?.warn('knowledge_repo_tree_sync_failed', {
+              data: { repoId, message },
+            });
+            outcome.treeSynced = false;
+          }
+        }
+        return outcome;
       } catch (err) {
         const message = err instanceof GitCommandError
           ? err.message
@@ -431,6 +498,126 @@ export class KnowledgeRepoManager {
     return importRepoIntoLibrary({
       db: this.db, localPath: repo.localPath, profile: effective, sourceRef: repoId,
     });
+  }
+
+  /**
+   * PR-3: clear untracked files that the upcoming ff merge would
+   * overwrite. Runs inside fetchNow's repo lock. Returns what was
+   * cleared and how (see CapturedCollision).
+   */
+  private async clearMergeCollisions(repo: KnowledgeRepo): Promise<CapturedCollision[]> {
+    const remoteRef = `origin/${repo.branch}`;
+    const incoming = await listChangedFiles(this.git, repo.localPath, 'HEAD', remoteRef);
+    if (incoming.length === 0) return [];
+    const untracked = new Set(
+      (await statusPorcelain(this.git, repo.localPath))
+        .filter((e) => e.status === '??')
+        .map((e) => e.path),
+    );
+    const collisions: CapturedCollision[] = [];
+    for (const relPath of incoming) {
+      if (!untracked.has(relPath)) continue;
+      const absPath = join(repo.localPath, relPath);
+      let local: string | null = null;
+      try { local = readFileSync(absPath, 'utf8'); } catch { continue; }
+      const remote = await showFileAtRef(this.git, repo.localPath, remoteRef, relPath);
+      if (remote !== null && remote === local) {
+        // Typical loop closure: our captured file's MR merged upstream;
+        // the tracked version takes over byte-for-byte.
+        rmSync(absPath);
+        collisions.push({ relPath, action: 'removed_identical' });
+      } else {
+        // Diverged (e.g. edited during MR review). The reviewed
+        // upstream version wins; park the local copy where the
+        // importer can't see it (hidden dir) for manual salvage.
+        const backupAbs = join(repo.localPath, '.helm-backup', relPath);
+        mkdirSync(dirname(backupAbs), { recursive: true });
+        renameSync(absPath, backupAbs);
+        collisions.push({ relPath, action: 'backed_up' });
+      }
+    }
+    return collisions;
+  }
+
+  /**
+   * PR-3: captured files in the working copy that the remote doesn't
+   * have yet — the "N 条已沉淀未发布" feed. Untracked = never
+   * published; tracked-but-modified = changed since the last publish.
+   * Read-only (git status + DB lookups), so no repo lock.
+   */
+  async listUnpublishedCaptured(repoId: string): Promise<UnpublishedCaptured[]> {
+    const repo = getKnowledgeRepo(this.db, repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${repoId}`);
+    }
+    if (!existsSync(repo.localPath)) return [];
+    const entries = await statusPorcelain(this.git, repo.localPath, 'chat-captured');
+    const out: UnpublishedCaptured[] = [];
+    for (const e of entries) {
+      if (!e.path.endsWith('.md')) continue;
+      const row = this.db.prepare(
+        `SELECT id, chunk_text FROM knowledge_chunks WHERE source_file = ?`,
+      ).get(e.path) as { id: string; chunk_text: string } | undefined;
+      const item: UnpublishedCaptured = {
+        relPath: e.path,
+        isNew: e.status === '??',
+      };
+      if (row) {
+        item.pointId = row.id;
+        const firstLine = row.chunk_text.split('\n')
+          .find((l) => l.trim().length > 0);
+        if (firstLine) item.title = firstLine.replace(/^#+\s*/, '').trim();
+      }
+      out.push(item);
+    }
+    return out;
+  }
+
+  /**
+   * PR-3: batch-publish every unpublished captured point as one MR.
+   * Thin orchestration over publish() — which serializes from the DB
+   * and (via llmWikiLayout + source_file) writes each point to the
+   * exact path its captured file already occupies, inside an ephemeral
+   * worktree. Files without an indexed chunk are skipped and reported.
+   *
+   * No own lock: publish() acquires the repo lock itself, and taking
+   * it here first would deadlock the FIFO chain.
+   */
+  async publishCaptured(input: {
+    repoId: string;
+    message?: string;
+    anonymous?: boolean;
+  }): Promise<PublishResult & { pointIds: string[]; skipped: string[] }> {
+    const unpublished = await this.listUnpublishedCaptured(input.repoId);
+    const pointIds = unpublished
+      .map((u) => u.pointId)
+      .filter((id): id is string => typeof id === 'string');
+    const skipped = unpublished
+      .filter((u) => !u.pointId)
+      .map((u) => u.relPath);
+    if (pointIds.length === 0) {
+      throw new KnowledgeRepoManagerError(
+        'no unpublished captured points (nothing indexed under chat-captured/)',
+      );
+    }
+    const message = input.message ?? [
+      `feat(chat-captured): publish ${pointIds.length} captured knowledge point(s)`,
+      '',
+      ...unpublished.filter((u) => u.pointId).map((u) => `- ${u.relPath}`),
+    ].join('\n');
+    const result = await this.publish({
+      repoId: input.repoId,
+      pointIds,
+      message,
+      branchName: `helm/captured/${new Date().toISOString().slice(0, 10)}-${sha256Short(pointIds.join(',')).slice(0, 6)}`,
+      ...(input.anonymous !== undefined ? { anonymous: input.anonymous } : {}),
+    });
+    if (skipped.length > 0) {
+      this.logger?.warn('publish_captured_skipped_unindexed', {
+        data: { repoId: input.repoId, skipped },
+      });
+    }
+    return { ...result, pointIds, skipped };
   }
 
   /**

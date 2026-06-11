@@ -33,6 +33,7 @@ import {
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
 import { getConversationDetail } from './conversation-detail.js';
+import { refreshClaudeSessionTitle } from '../host/claude-code/title-refresh.js';
 import {
   flipCaseStatus,
   getCase,
@@ -549,6 +550,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       );
       if (conversationDetailMatch) {
         if (req.method !== 'GET') return methodNotAllowed(res);
+        // Lazy title sync: claude code has no rename hook, so an idle
+        // chat renamed in the TUI never syncs via Stop. Opening the
+        // detail is the natural "user is looking at this chat" moment
+        // to catch up. Best-effort — failures must not break the read.
+        try { refreshClaudeSessionTitle(deps.db, conversationDetailMatch[1]!); }
+        catch { /* transcript unreadable — keep the stored name */ }
         const detail = getConversationDetail(deps.db, conversationDetailMatch[1]!);
         if (!detail) return send(res, 404, { error: 'Conversation not found' });
         return send(res, 200, detail);

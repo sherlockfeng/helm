@@ -517,20 +517,6 @@ export interface KnowledgeRepoSeed {
   classification: 'internal' | 'public';
 }
 
-/** R-6 — 3-way merge conflict surfaced by the importer. */
-export interface KnowledgeMergeConflict {
-  id: string;
-  repoId: string;
-  pointId: string;
-  localBody: string;
-  remoteBody: string;
-  localVersion: number;
-  remoteRevision: string;
-  status: 'open' | 'resolved';
-  createdAt: number;
-  resolvedAt?: number;
-}
-
 /** Phase 73: one row in the Sources block of the Role detail page. */
 export interface KnowledgeSource {
   id: string;

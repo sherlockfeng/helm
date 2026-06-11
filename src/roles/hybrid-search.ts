@@ -1,12 +1,14 @@
 /**
- * Multipath retrieval with RRF fusion (Phase 76).
+ * Multipath retrieval with RRF fusion (Phase 76; cosine leg retired in
+ * files-as-truth PR-4 — the embedding column only ever held
+ * `makePseudoEmbedFn` bag-of-codepoints vectors with no semantic value,
+ * so the leg added noise, not recall. Real semantic retrieval can come
+ * back later as a derived index without touching the source of truth).
  *
- * Three parallel retrieval legs:
+ * Two parallel retrieval legs:
  *   1. BM25 over `knowledge_chunks_fts` (FTS5 virtual table) — token-level
  *      lexical recall, good for named entities and explicit terms.
- *   2. Cosine over the existing embedding column — semantic recall, good
- *      for paraphrases and conceptual queries.
- *   3. Entity match — exact-string hits on rule-extracted entities
+ *   2. Entity match — exact-string hits on rule-extracted entities
  *      (acronyms / camelCase / URLs / filenames). Cheap precision boost
  *      when the query mentions a specific named thing.
  *
@@ -37,7 +39,6 @@ import type {
   KnowledgeChunkKind,
 } from '../storage/types.js';
 import { extractEntitiesFromQuery } from './entity-extract.js';
-import { cosineSimilarity } from './library-math.js';
 import {
   DEFAULT_DECAY_ALPHA,
   DEFAULT_DECAY_TAU_DAYS,
@@ -54,13 +55,14 @@ export const RRF_K = 60;
  * relative magnitudes, but values within [0, 1] keep the head-room
  * obvious. drop-then-renormalize logic uses these absolute values.
  */
-export interface RrfWeights { bm25: number; cosine: number; entity: number }
-export const DEFAULT_RRF_WEIGHTS: RrfWeights = { bm25: 0.4, cosine: 0.6, entity: 0.3 };
+export interface RrfWeights { bm25: number; entity: number }
+// PR-4: same relative magnitudes as before minus the retired cosine leg.
+export const DEFAULT_RRF_WEIGHTS: RrfWeights = { bm25: 0.4, entity: 0.3 };
 
 /** Per-source cap during diversification. agentmemory uses 3 per session. */
 export const MAX_HITS_PER_SOURCE = 3;
 
-export type SearchStrategy = 'fusion' | 'bm25' | 'cosine' | 'entity';
+export type SearchStrategy = 'fusion' | 'bm25' | 'entity';
 
 export interface HybridSearchHit {
   /** Phase 77: id of the chunk row this hit came from. Used by the
@@ -75,7 +77,6 @@ export interface HybridSearchHit {
   score: number;
   /** Per-leg raw scores for debugging / introspection. */
   bm25Score?: number;
-  cosineScore?: number;
   entityScore?: number;
   /**
    * Which legs actually contributed a rank for this chunk. Empty array
@@ -83,14 +84,13 @@ export interface HybridSearchHit {
    * be in the candidate set), but the field is here for the debug
    * surface.
    */
-  contributingLegs: Array<'bm25' | 'cosine' | 'entity'>;
+  contributingLegs: Array<'bm25' | 'entity'>;
 }
 
 export interface HybridSearchInput {
   db: Database.Database;
   roleId: string;
   query: string;
-  embedFn: (text: string) => Promise<Float32Array>;
   topK: number;
   /** Phase 73 kind pre-filter. Applied to all legs before scoring. */
   kind?: KnowledgeChunkKind;
@@ -133,7 +133,6 @@ export async function hybridSearch(
   switch (input.strategy) {
     case 'fusion':  return runFusion(input);
     case 'bm25':    return runBm25Only(input);
-    case 'cosine':  return runCosineOnly(input);
     case 'entity':  return runEntityOnly(input);
     default: {
       // Exhaustiveness — TS will complain on a new strategy.
@@ -146,7 +145,7 @@ export async function hybridSearch(
 // ── Fusion path ──────────────────────────────────────────────────────────
 
 async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
-  const { db, roleId, query, embedFn, topK, kind } = input;
+  const { db, roleId, query, topK, kind } = input;
   const weights = input.weights ?? DEFAULT_RRF_WEIGHTS;
   const k = input.rrfK ?? RRF_K;
   const includeArchived = input.includeArchived ?? false;
@@ -162,26 +161,14 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const bm25Raw = searchChunksByBm25(db, roleId, query, candidateDepth, { includeArchived });
   const bm25Ranks = ranksFromOrderedList(bm25Raw.map((r) => r.chunkId));
 
-  // -- Leg 2: Cosine --------------------------------------------------
-  // For cosine we still need to load the chunks (we need the embedding
-  // blob). Apply kind filter at the SQL layer to avoid loading the
-  // whole table when only a slice is searchable.
+  // Chunk pool for hit enrichment (text / kind / source fields). The
+  // cosine leg used to need this for embeddings; we still load it to
+  // build hits without N point reads.
   const chunkOpts: Parameters<typeof getChunksForRole>[2] = { includeArchived };
   if (kind) chunkOpts.kind = kind;
   const chunks = getChunksForRole(db, roleId, chunkOpts);
-  const queryVec = chunks.length > 0 ? await embedFn(query) : null;
-  const cosineRanked: Array<{ chunkId: string; score: number }> = [];
-  if (queryVec) {
-    for (const c of chunks) {
-      if (!c.embedding) continue;
-      cosineRanked.push({ chunkId: c.id, score: cosineSimilarity(queryVec, c.embedding) });
-    }
-    cosineRanked.sort((a, b) => b.score - a.score);
-  }
-  const cosineTop = cosineRanked.slice(0, candidateDepth);
-  const cosineRanks = ranksFromOrderedList(cosineTop.map((r) => r.chunkId));
 
-  // -- Leg 3: Entity --------------------------------------------------
+  // -- Leg 2: Entity --------------------------------------------------
   const queryEntities = extractEntitiesFromQuery(query);
   const entityRaw = searchChunksByEntity(db, roleId, queryEntities, candidateDepth, { includeArchived });
   const entityRanks = ranksFromOrderedList(entityRaw.map((r) => r.chunkId));
@@ -189,35 +176,31 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   // -- Effective weights — drop empty legs and renormalize -----------
   const effective = computeEffectiveWeights(weights, {
     bm25: bm25Raw.length > 0,
-    cosine: cosineTop.length > 0,
     entity: entityRaw.length > 0,
   });
 
   // No leg returned anything — query has no signal at all.
-  if (effective.bm25 === 0 && effective.cosine === 0 && effective.entity === 0) {
+  if (effective.bm25 === 0 && effective.entity === 0) {
     return [];
   }
 
   // -- Score every chunk that appeared in at least one leg -----------
   const allChunkIds = new Set<string>([
     ...bm25Ranks.keys(),
-    ...cosineRanks.keys(),
     ...entityRanks.keys(),
   ]);
 
   const bm25Scores = new Map(bm25Raw.map((r) => [r.chunkId, r.score]));
-  const cosineScores = new Map(cosineTop.map((r) => [r.chunkId, r.score]));
   const entityScores = new Map(entityRaw.map((r) => [r.chunkId, r.score]));
 
   // Pre-fetch chunks we'll need to enrich into hits. Single bulk read
   // beats N round-trips through the repo.
   const chunkById = new Map<string, KnowledgeChunk>();
-  // If we already loaded chunks for cosine, reuse that pass.
   if (chunks.length > 0) {
     for (const c of chunks) chunkById.set(c.id, c);
   }
   // Pull any chunks the BM25 / entity legs surfaced that weren't in the
-  // cosine pool (post-kind-filter divergence is the realistic case).
+  // kind-filtered pool above.
   const missingIds = Array.from(allChunkIds).filter((id) => !chunkById.has(id));
   if (missingIds.length > 0) {
     // We don't have a getChunkById bulk repo function; fall back to
@@ -241,12 +224,10 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     if (kind && chunk.kind !== kind) continue;
 
     const rBm25 = bm25Ranks.get(chunkId);
-    const rCos  = cosineRanks.get(chunkId);
     const rEnt  = entityRanks.get(chunkId);
 
     const rrfScore =
       (rBm25 != null ? effective.bm25 / (k + rBm25) : 0) +
-      (rCos  != null ? effective.cosine / (k + rCos)  : 0) +
       (rEnt  != null ? effective.entity / (k + rEnt)  : 0);
 
     // Phase 77: decay re-rank. Multiply the RRF score by a (1 + α·decay)
@@ -257,9 +238,8 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     const decayFactor = scoreDecay(chunk.lastAccessedAt, chunk.createdAt, now, decayTau);
     const fusedScore = applyDecayBoost(rrfScore, decayFactor, decayAlpha);
 
-    const contributing: Array<'bm25' | 'cosine' | 'entity'> = [];
+    const contributing: Array<'bm25' | 'entity'> = [];
     if (rBm25 != null) contributing.push('bm25');
-    if (rCos  != null) contributing.push('cosine');
     if (rEnt  != null) contributing.push('entity');
 
     const hit: HybridSearchHit = {
@@ -272,10 +252,8 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     if (chunk.sourceFile !== undefined) hit.sourceFile = chunk.sourceFile;
     if (chunk.sourceId !== undefined) hit.sourceId = chunk.sourceId;
     const bm25Raw_ = bm25Scores.get(chunkId);
-    const cosineRaw_ = cosineScores.get(chunkId);
     const entityRaw_ = entityScores.get(chunkId);
     if (bm25Raw_ !== undefined) hit.bm25Score = bm25Raw_;
-    if (cosineRaw_ !== undefined) hit.cosineScore = cosineRaw_;
     if (entityRaw_ !== undefined) hit.entityScore = entityRaw_;
 
     fused.push({ chunkId, fusedScore, hit });
@@ -316,36 +294,6 @@ async function runBm25Only(input: HybridSearchInput): Promise<HybridSearchHit[]>
     if (chunk.sourceId !== undefined) hit.sourceId = chunk.sourceId;
     hits.push(hit);
   }
-  const diversified = diversifyBySource(hits, topK);
-  scheduleAccessBump(db, diversified, includeArchived);
-  return diversified;
-}
-
-async function runCosineOnly(input: HybridSearchInput): Promise<HybridSearchHit[]> {
-  const { db, roleId, query, embedFn, topK, kind } = input;
-  const includeArchived = input.includeArchived ?? false;
-  const chunkOpts: Parameters<typeof getChunksForRole>[2] = { includeArchived };
-  if (kind) chunkOpts.kind = kind;
-  const chunks = getChunksForRole(db, roleId, chunkOpts);
-  if (chunks.length === 0) return [];
-  const queryVec = await embedFn(query);
-  const scored = chunks
-    .filter((c) => c.embedding != null)
-    .map((c) => ({ chunk: c, score: cosineSimilarity(queryVec, c.embedding!) }))
-    .sort((a, b) => b.score - a.score);
-  const hits: HybridSearchHit[] = scored.map(({ chunk, score }) => {
-    const h: HybridSearchHit = {
-      chunkId: chunk.id,
-      chunkText: chunk.chunkText,
-      kind: chunk.kind,
-      score,
-      cosineScore: score,
-      contributingLegs: ['cosine'],
-    };
-    if (chunk.sourceFile !== undefined) h.sourceFile = chunk.sourceFile;
-    if (chunk.sourceId !== undefined) h.sourceId = chunk.sourceId;
-    return h;
-  });
   const diversified = diversifyBySource(hits, topK);
   scheduleAccessBump(db, diversified, includeArchived);
   return diversified;
@@ -453,16 +401,15 @@ function ranksFromOrderedList(orderedIds: string[]): Map<string, number> {
  */
 export function computeEffectiveWeights(
   base: RrfWeights,
-  hasResults: { bm25: boolean; cosine: boolean; entity: boolean },
+  hasResults: { bm25: boolean; entity: boolean },
 ): RrfWeights {
   const w = {
     bm25:   hasResults.bm25   ? base.bm25   : 0,
-    cosine: hasResults.cosine ? base.cosine : 0,
     entity: hasResults.entity ? base.entity : 0,
   };
-  const total = w.bm25 + w.cosine + w.entity;
+  const total = w.bm25 + w.entity;
   if (total === 0) return w;
-  return { bm25: w.bm25 / total, cosine: w.cosine / total, entity: w.entity / total };
+  return { bm25: w.bm25 / total, entity: w.entity / total };
 }
 
 /**

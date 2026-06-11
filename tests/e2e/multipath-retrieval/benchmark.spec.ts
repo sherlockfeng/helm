@@ -143,7 +143,7 @@ afterEach(async () => {
 
 interface Metric { rAt5: number; mrr: number; coverage: Record<string, number> }
 
-async function evaluate(strategy: 'fusion' | 'bm25' | 'cosine' | 'entity'): Promise<Metric> {
+async function evaluate(strategy: 'fusion' | 'bm25' | 'entity'): Promise<Metric> {
   let hits5 = 0;
   let rrSum = 0;
   const byCategory: Record<string, { hit: number; total: number }> = {};
@@ -181,7 +181,6 @@ describe('multipath retrieval benchmark (Phase 76)', () => {
   it('runs the synthetic benchmark and reports R@5 / MRR per strategy', async () => {
     const fusion  = await evaluate('fusion');
     const bm25    = await evaluate('bm25');
-    const cosine  = await evaluate('cosine');
     const entity  = await evaluate('entity');
 
     // Dump in a stable format so PR reviewers can eyeball trends.
@@ -193,7 +192,7 @@ describe('multipath retrieval benchmark (Phase 76)', () => {
     console.log('│ strategy │  R@5   │  MRR   │ R@5 by category (A/B/C/D)         │');
     console.log('├──────────┼────────┼────────┼───────────────────────────────────┤');
     const rows: Array<[string, Metric]> = [
-      ['fusion', fusion], ['bm25', bm25], ['cosine', cosine], ['entity', entity],
+      ['fusion', fusion], ['bm25', bm25], ['entity', entity],
     ];
     for (const [name, m] of rows) {
       const catStr = ['A', 'B', 'C', 'D']

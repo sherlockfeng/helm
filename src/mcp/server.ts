@@ -460,25 +460,25 @@ export function createMcpServer(
   server.registerTool('search_knowledge', {
     description:
       "RAG search against a role's knowledge base. "
-      + 'Phase 76: defaults to multipath FUSION — BM25 (lexical) + cosine (semantic) + entity-match '
+      + 'Phase 76: defaults to multipath FUSION — BM25 (lexical) + entity-match '
       + '(rule-extracted acronyms / camelCase / URLs / filenames) combined via Reciprocal Rank Fusion. '
       + 'Each leg returns top candidates; the fused ranking surfaces chunks that score well on '
       + 'multiple dimensions while letting any single leg "rescue" a chunk the others missed. '
-      + 'Returned hits include per-leg raw scores (`bm25Score` / `cosineScore` / `entityScore`) for '
+      + 'Returned hits include per-leg raw scores (`bm25Score` / `entityScore`) for '
       + 'introspection. '
       + '\n\n'
       + 'Phase 73: optional `kind` narrows the candidate pool to chunks of a single type '
       + '(spec / example / warning / runbook / glossary / other) BEFORE ranking, in every leg. '
       + '\n\n'
       + 'Override `strategy` only when debugging or benchmarking a single leg — production callers '
-      + 'should leave it at the default. `bm25` / `cosine` / `entity` run just that leg.',
+      + 'should leave it at the default. `bm25` / `entity` run just that leg.',
     inputSchema: {
       roleId: z.string(),
       query: z.string(),
       topK: z.number().min(1).max(20).optional(),
       kind: z.enum(['spec', 'example', 'warning', 'runbook', 'glossary', 'other']).optional(),
-      strategy: z.enum(['fusion', 'bm25', 'cosine', 'entity']).optional().describe(
-        'Retrieval strategy. Default `fusion` runs BM25 + cosine + entity-match and combines via RRF. '
+      strategy: z.enum(['fusion', 'bm25', 'entity']).optional().describe(
+        'Retrieval strategy. Default `fusion` runs BM25 + entity-match and combines via RRF. '
         + 'Single-leg modes are for debug / benchmark comparison.',
       ),
       includeArchived: z.boolean().optional().describe(

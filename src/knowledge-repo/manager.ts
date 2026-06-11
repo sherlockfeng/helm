@@ -316,7 +316,8 @@ export class KnowledgeRepoManager {
       let filesWritten = 0;
       let prUrl = '';
       try {
-        const layout = input.layout ?? defaultLayout;
+        const layout = input.layout
+          ?? (input.profile === 'llm-wiki' ? llmWikiLayout : defaultLayout);
         for (const pid of input.pointIds) {
           const chunk = getChunkById(this.db, pid);
           if (!chunk) continue;
@@ -470,6 +471,21 @@ function defaultLayout(chunk: KnowledgeChunk): string {
   // Mirror the importer's expected layout so a publish-then-import
   // round-trip lands the points in the same files.
   return `roles/${chunk.roleId}/points/${chunk.id}.md`;
+}
+
+function llmWikiLayout(chunk: KnowledgeChunk): string {
+  // llm-wiki convention: top-level dirs ARE the roles (dr-docs/,
+  // doc-lsp-docs/, …), .md files directly inside.
+  //
+  // A sourceFile containing a path separator is treated as a
+  // repo-relative origin (republish lands back in the same file).
+  // The separator guard matters: trainRole-born chunks carry FLAT
+  // doc filenames ("chat-48910a39-turn-3.md") that are NOT repo
+  // paths — without the check they'd publish to the repo root.
+  if (chunk.sourceFile && chunk.sourceFile.includes('/') && chunk.sourceFile.endsWith('.md')) {
+    return chunk.sourceFile;
+  }
+  return `${chunk.roleId}/${chunk.id}.md`;
 }
 
 function hostFromUrl(url: string): string {

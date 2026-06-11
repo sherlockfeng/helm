@@ -13,7 +13,7 @@
  */
 
 import type Database from 'better-sqlite3';
-import { extractEntities } from '../roles/entity-extract.js';
+import { extractEntities, KNOWN_HELM_ENTITIES } from '../roles/entity-extract.js';
 import { listHostEvents } from '../storage/repos/host-event-log.js';
 
 /** Default thresholds. */
@@ -21,6 +21,36 @@ const DEFAULT_MIN_MENTIONS = 3;
 const DEFAULT_MIN_DISTINCT = 1;
 const DEFAULT_TOP_N = 8;
 const DEFAULT_EVENT_LIMIT = 200;
+
+/**
+ * Entities that must NEVER drive a "create a role for this?" prompt.
+ * Live dogfooding produced suggestions like `PR ×72 / CI ×21 /
+ * KNOWLEDGE ×15 / OUT ×13` — generic dev vocabulary and helm's own UI
+ * labels, not domain concepts. Three buckets:
+ *
+ *   1. The extractEntities whitelist (PR / CI / MR / API …) — those are
+ *      deliberately indexed as retrieval anchors, but they appear in
+ *      EVERY coding chat, so as "unknown entity" signals they're pure
+ *      noise.
+ *   2. Generic format / protocol / tooling tokens that pass the 3-caps
+ *      regex but describe the medium, not the domain (JSON, HTML, …).
+ *   3. Ordinary English words that show up ALL-CAPS in UI copy and
+ *      headings (OUT, NEW, KNOWLEDGE, TIMELINE, …) — chats about helm
+ *      itself kept resurfacing helm's own section labels.
+ */
+const STOP_ENTITIES: ReadonlySet<string> = new Set([
+  ...KNOWN_HELM_ENTITIES.map((e) => e.toLowerCase()),
+  // bucket 2 — formats / protocols / file types
+  'json', 'html', 'htm', 'http', 'https', 'url', 'uri', 'xml', 'yaml',
+  'toml', 'csv', 'pdf', 'png', 'jpg', 'jpeg', 'svg', 'gif', 'css',
+  'tsx', 'jsx', 'utf', 'ascii', 'uuid', 'guid',
+  // bucket 3 — caps-cased English words from UI copy / headings
+  'out', 'new', 'all', 'get', 'set', 'put', 'post', 'delete', 'add',
+  'use', 'run', 'end', 'top', 'max', 'min', 'yes', 'not', 'and', 'the',
+  'for', 'with', 'this', 'that', 'note', 'todo', 'readme', 'warning',
+  'error', 'info', 'debug', 'knowledge', 'timeline', 'turn', 'turns',
+  'helm',
+]);
 
 export interface UnknownEntity {
   /** Surface form preserved from the chat — display this. */
@@ -94,8 +124,24 @@ export function unknownEntitiesForChat(
   `).all(...lowerEntities) as Array<{ entity_lower: string }>;
   const knownSet = new Set(knownRows.map((r) => r.entity_lower));
 
-  // Apply thresholds + sort.
+  // Fold URL-ish duplicates into their bare form: `github.com` merges
+  // into `github` when both were extracted, so the user doesn't see two
+  // chips for the same thing.
+  for (const key of Array.from(counts.keys())) {
+    const dot = key.indexOf('.');
+    if (dot <= 0) continue;
+    const bare = key.slice(0, dot);
+    const bareEntry = counts.get(bare);
+    const dotted = counts.get(key);
+    if (bareEntry && dotted) {
+      bareEntry.mentions += dotted.mentions;
+      counts.delete(key);
+    }
+  }
+
+  // Apply stoplist + thresholds + sort.
   const unknowns = Array.from(counts.values())
+    .filter((c) => !STOP_ENTITIES.has(c.entity.toLowerCase()))
     .filter((c) => !knownSet.has(c.entity.toLowerCase()))
     .filter((c) => c.mentions >= minMentions)
     .sort((a, b) => b.mentions - a.mentions)

@@ -10,7 +10,11 @@ import {
   GitCommandError,
   cloneRepo,
   fetchRepo,
+  listChangedFiles,
+  mergeFfOnly,
   revParseHead,
+  showFileAtRef,
+  statusPorcelain,
   type GitRunner,
 } from '../../../src/knowledge-repo/git.js';
 
@@ -175,5 +179,57 @@ describe('revParseHead', () => {
     expect(run.mock.calls[0]![0]).toEqual(['rev-parse', 'HEAD']);
     await revParseHead(run as unknown as GitRunner, '/tmp', 'origin/develop');
     expect(run.mock.calls[1]![0]).toEqual(['rev-parse', 'origin/develop']);
+  });
+});
+
+describe('PR-3 helpers: listChangedFiles / statusPorcelain / showFileAtRef / mergeFfOnly', () => {
+  it('listChangedFiles builds the diff argv and splits non-empty lines', async () => {
+    const run = scriptedRunner([{
+      match: (args) => args[0] === 'diff',
+      result: { stdout: 'a/x.md\n\nchat-captured/u/r/p.md\n' },
+    }]);
+    const files = await listChangedFiles(run, '/repo', 'HEAD', 'origin/main');
+    expect(run.calls[0]!.args).toEqual(['diff', '--name-only', 'HEAD', 'origin/main']);
+    expect(files).toEqual(['a/x.md', 'chat-captured/u/r/p.md']);
+  });
+
+  it('statusPorcelain uses -uall, scopes by pathspec and parses XY codes', async () => {
+    const run = scriptedRunner([{
+      match: (args) => args[0] === 'status',
+      result: { stdout: '?? chat-captured/u/r/new.md\n M chat-captured/u/r/edited.md\n' },
+    }]);
+    const entries = await statusPorcelain(run, '/repo', 'chat-captured');
+    expect(run.calls[0]!.args).toEqual(
+      ['status', '--porcelain', '-uall', '--', 'chat-captured'],
+    );
+    expect(entries).toEqual([
+      { status: '??', path: 'chat-captured/u/r/new.md' },
+      { status: ' M', path: 'chat-captured/u/r/edited.md' },
+    ]);
+  });
+
+  it('showFileAtRef returns content, or null when the ref lacks the path', async () => {
+    const run = scriptedRunner([
+      {
+        match: (args) => args[0] === 'show' && String(args[1]).endsWith('have.md'),
+        result: { stdout: 'file body' },
+      },
+      {
+        match: (args) => args[0] === 'show',
+        result: { exitCode: 128, stderr: 'does not exist' },
+      },
+    ]);
+    expect(await showFileAtRef(run, '/repo', 'origin/main', 'a/have.md')).toBe('file body');
+    expect(await showFileAtRef(run, '/repo', 'origin/main', 'a/missing.md')).toBeNull();
+  });
+
+  it('mergeFfOnly throws GitCommandError on refusal', async () => {
+    const run = scriptedRunner([{
+      match: (args) => args[0] === 'merge',
+      result: { exitCode: 1, stderr: 'untracked working tree files would be overwritten' },
+    }]);
+    await expect(mergeFfOnly(run, '/repo', 'origin/main'))
+      .rejects.toBeInstanceOf(GitCommandError);
+    expect(run.calls[0]!.args).toEqual(['merge', '--ff-only', 'origin/main']);
   });
 });

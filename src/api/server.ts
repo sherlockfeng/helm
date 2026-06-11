@@ -1280,6 +1280,63 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
       }
 
+      // Files-as-truth PR-3: captured-points batch publish.
+      //   GET  /api/knowledge-repos/:id/captured         — list unpublished
+      //   POST /api/knowledge-repos/:id/publish-captured — one MR for all
+      const repoCapturedMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/captured$/);
+      if (repoCapturedMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        try {
+          const files = await deps.knowledgeRepoManager.listUnpublishedCaptured(
+            repoCapturedMatch[1]!,
+          );
+          return send(res, 200, { files });
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 404, { error: 'captured_list_failed', message: err.message });
+          }
+          return internalError(res, err);
+        }
+      }
+      const repoPublishCapturedMatch = url.pathname.match(
+        /^\/api\/knowledge-repos\/([^/]+)\/publish-captured$/,
+      );
+      if (repoPublishCapturedMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: { message?: unknown; anonymous?: unknown } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as typeof body; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        try {
+          const result = await deps.knowledgeRepoManager.publishCaptured({
+            repoId: repoPublishCapturedMatch[1]!,
+            ...(typeof body.message === 'string' && body.message.length > 0
+              ? { message: body.message } : {}),
+            ...(typeof body.anonymous === 'boolean'
+              ? { anonymous: body.anonymous } : {}),
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 409, { error: 'publish_captured_failed', message: err.message });
+          }
+          if (err instanceof Error && err.name === 'PublishError') {
+            const stage = (err as { stage?: string }).stage ?? 'unknown';
+            return send(res, stage === 'precheck' ? 403 : 500, {
+              error: 'publish_failed', stage, message: err.message,
+            });
+          }
+          return internalError(res, err);
+        }
+      }
+
       // PR 5.5b: walk the cloned repo and import its .md files into
       // knowledge_chunks / knowledge_point_alias / knowledge_point_rel.
       //   POST /api/knowledge-repos/:id/import-now  body { profile? }

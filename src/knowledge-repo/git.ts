@@ -180,6 +180,102 @@ export async function removeWorktree(
 }
 
 /**
+ * Files-as-truth PR-3: file paths changed between two refs.
+ * `git diff --name-only <from> <to>` — used to predict which incoming
+ * files would collide with untracked local ones before a merge.
+ */
+export async function listChangedFiles(
+  run: GitRunner,
+  cwd: string,
+  fromRef: string,
+  toRef: string,
+): Promise<string[]> {
+  const r = await run(['diff', '--name-only', fromRef, toRef], cwd);
+  if (r.exitCode !== 0) {
+    throw new GitCommandError(
+      `git diff --name-only failed: ${r.stderr.slice(0, 512)}`,
+      r.stderr, r.exitCode,
+    );
+  }
+  return r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+}
+
+export interface PorcelainEntry {
+  /** Two-char porcelain XY code, e.g. '??' (untracked) or ' M'. */
+  status: string;
+  path: string;
+}
+
+/**
+ * Files-as-truth PR-3: `git status --porcelain -uall [-- pathspec]`.
+ * `-uall` matters: without it a fully-untracked directory collapses to
+ * one `?? dir/` line and individual captured files are invisible.
+ */
+export async function statusPorcelain(
+  run: GitRunner,
+  cwd: string,
+  pathspec?: string,
+): Promise<PorcelainEntry[]> {
+  const args = ['status', '--porcelain', '-uall'];
+  if (pathspec) args.push('--', pathspec);
+  const r = await run(args, cwd);
+  if (r.exitCode !== 0) {
+    throw new GitCommandError(
+      `git status --porcelain failed: ${r.stderr.slice(0, 512)}`,
+      r.stderr, r.exitCode,
+    );
+  }
+  const out: PorcelainEntry[] = [];
+  for (const line of r.stdout.split('\n')) {
+    if (line.length < 4) continue;
+    const status = line.slice(0, 2);
+    let p = line.slice(3);
+    // Porcelain quotes paths with special chars; our slugs never need
+    // it, but unquote defensively so a quoted path doesn't 404 later.
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+    out.push({ status, path: p });
+  }
+  return out;
+}
+
+/**
+ * Files-as-truth PR-3: file content at `<ref>:<path>`. Returns null
+ * when the path doesn't exist at that ref (instead of throwing) so
+ * collision handling can treat "new upstream file" uniformly.
+ */
+export async function showFileAtRef(
+  run: GitRunner,
+  cwd: string,
+  ref: string,
+  relPath: string,
+): Promise<string | null> {
+  const r = await run(['show', `${ref}:${relPath}`], cwd);
+  if (r.exitCode !== 0) return null;
+  return r.stdout;
+}
+
+/**
+ * Files-as-truth PR-3: fast-forward the current branch to `ref`.
+ * The subscribed clone never commits locally (captured files stay
+ * untracked until publish), so ff-only always applies — unless git
+ * refuses because an untracked file would be overwritten, which the
+ * caller must clear beforehand (see KnowledgeRepoManager.fetchNow).
+ */
+export async function mergeFfOnly(
+  run: GitRunner,
+  cwd: string,
+  ref: string,
+): Promise<void> {
+  const r = await run(['merge', '--ff-only', ref], cwd);
+  if (r.exitCode !== 0) {
+    throw new GitCommandError(
+      `git merge --ff-only ${ref} failed: ${r.stderr.slice(0, 512)}`,
+      r.stderr, r.exitCode,
+    );
+  }
+}
+
+/**
  * Read the current HEAD without touching the network. Used by the
  * sync loop to decide whether the local state already matches a
  * previously-recorded `last_fetched_sha`.

@@ -434,6 +434,63 @@ export class KnowledgeRepoManager {
   }
 
   /**
+   * Files-as-truth PR-2: write a promoted chunk into helm's exclusive
+   * zone of the llm-wiki working copy —
+   * `chat-captured/<user>/<role>/<chunkId>.md` — and point the chunk's
+   * source_file at it. The file is untracked until PR-3's batch-MR
+   * publish; the local working copy IS the source of truth, so the
+   * write is what makes the promotion durable.
+   *
+   * Runs under the repo lock so it can't interleave with a concurrent
+   * fetch/import touching the same working copy.
+   */
+  async writeCapturedPoint(input: {
+    repoId: string;
+    chunkId: string;
+    /** Settings-provided wiki username — the <user> path segment. */
+    username: string;
+  }): Promise<{ relPath: string; absPath: string }> {
+    const repo = getKnowledgeRepo(this.db, input.repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${input.repoId}`);
+    }
+    if (repo.profile !== 'llm-wiki') {
+      throw new KnowledgeRepoManagerError(
+        `writeCapturedPoint requires an llm-wiki repo (got profile=${repo.profile})`,
+      );
+    }
+    const chunk = getChunkById(this.db, input.chunkId);
+    if (!chunk) {
+      throw new KnowledgeRepoManagerError(`unknown chunk: ${input.chunkId}`);
+    }
+    const user = sanitizePathSegment(input.username);
+    const role = sanitizePathSegment(chunk.roleId);
+    const file = sanitizePathSegment(chunk.id);
+    if (!user || !role || !file) {
+      throw new KnowledgeRepoManagerError(
+        `cannot build a chat-captured path from username=${JSON.stringify(input.username)} roleId=${JSON.stringify(chunk.roleId)} chunkId=${JSON.stringify(chunk.id)}`,
+      );
+    }
+    const relPath = `chat-captured/${user}/${role}/${file}.md`;
+    return this.withRepoLock(input.repoId, async () => {
+      const text = serializePoint({
+        chunk,
+        aliases: getAliasesForPoint(this.db, chunk.id),
+        rel: getOutgoingRels(this.db, chunk.id),
+        profile: 'llm-wiki',
+      });
+      const absPath = join(repo.localPath, relPath);
+      mkdirSync(dirname(absPath), { recursive: true });
+      writeFileSync(absPath, text, 'utf8');
+      // Same column the importer maintains — publish (llmWikiLayout)
+      // round-trips into this exact file from now on.
+      this.db.prepare(`UPDATE knowledge_chunks SET source_file = ? WHERE id = ?`)
+        .run(relPath, chunk.id);
+      return { relPath, absPath };
+    });
+  }
+
+  /**
    * Scheduled-sync sweep (llm-wiki milestone, pull side). Walks every
    * ACTIVE repo whose `sync_interval_minutes` has elapsed since
    * `last_fetched_at` (or that has never been fetched), fetches it, and
@@ -519,6 +576,21 @@ function defaultReposRoot(): string {
 
 function sha256Short(s: string): string {
   return createHash('sha256').update(s).digest('hex').slice(0, 16);
+}
+
+/**
+ * Make a string safe as ONE path segment under chat-captured/: no
+ * separators, no traversal, and no leading dot (the importer skips
+ * hidden dirs, so a dotted segment would silently vanish from the
+ * index). CJK and other word characters pass through unchanged.
+ */
+function sanitizePathSegment(seg: string): string {
+  return seg
+    .replace(/[\\/]+/g, '-')
+    .replace(/\.\./g, '-')
+    .trim()
+    .replace(/^[.\-]+/, '')
+    .replace(/[\-.]+$/, '');
 }
 
 function safeRemoveDir(path: string): void {

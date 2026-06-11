@@ -296,7 +296,7 @@ export const helmApi = {
     ),
   /** Phase 78 — accept a pending candidate (creates a chunk via updateRole). */
   acceptCandidate: (candidateId: string) =>
-    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number }>(
+    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number; wikiFiles?: string[] }>(
       'POST', `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/accept`,
     ),
   /** Phase 78 — reject a pending candidate (terminal state). */
@@ -306,7 +306,7 @@ export const helmApi = {
     ),
   /** Phase 78 — update candidate text + then accept in one round-trip. */
   editAndAcceptCandidate: (candidateId: string, chunkText: string) =>
-    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number }>(
+    request<{ candidateId: string; status: 'accepted'; flipped: boolean; chunksAdded: number; wikiFiles?: string[] }>(
       'POST',
       `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/edit-and-accept`,
       { chunkText },

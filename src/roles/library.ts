@@ -15,6 +15,7 @@ import {
   getChunksForRole,
   getRole as getRoleRow,
   getSourceByFingerprint,
+  getChunkById,
   insertChunk,
   insertChunkEntity,
   insertSource,
@@ -123,6 +124,16 @@ export interface TrainRoleDocument {
   origin?: string;
   /** Optional human-readable label stamped on the source row. */
   sourceLabel?: string;
+  /**
+   * Files-as-truth PR-2: explicit chunk-id base for the chunks this doc
+   * produces. The first chunk gets `pointIdBase` verbatim, later splits
+   * get `<base>-2`, `<base>-3`, …. Honored by updateRole only (promote
+   * pre-picks a readable slug so the DB id matches the captured file
+   * name + doc-lsp concept id). Falls back to a UUID when the wanted id
+   * already exists — the caller is expected to pre-check, this is the
+   * collision backstop.
+   */
+  pointIdBase?: string;
 }
 
 export interface TrainRoleInput {
@@ -339,7 +350,7 @@ export interface ChunkConflict {
 }
 
 export type UpdateRoleResult =
-  | { status: 'applied'; role: Role; chunksAdded: number }
+  | { status: 'applied'; role: Role; chunksAdded: number; chunkIds: string[] }
   | { status: 'conflicts'; conflicts: ChunkConflict[] };
 
 /**
@@ -430,10 +441,18 @@ export async function updateRole(
   // Append chunks — DO NOT call deleteChunksForRole. That's the entire
   // point: existing knowledge survives.
   let chunksAdded = 0;
+  const chunkIds: string[] = [];
+  const ordinalByDoc = new Map<number, number>();
   for (const c of newChunks) {
     const source = sourceByDocIndex.get(c.docIndex)!;
+    const ordinal = (ordinalByDoc.get(c.docIndex) ?? 0) + 1;
+    ordinalByDoc.set(c.docIndex, ordinal);
+    const base = docs[c.docIndex]!.pointIdBase;
+    const wantedId = base
+      ? (ordinal === 1 ? base : `${base}-${ordinal}`)
+      : undefined;
     const row: KnowledgeChunk = {
-      id: randomUUID(),
+      id: wantedId && !getChunkById(db, wantedId) ? wantedId : randomUUID(),
       roleId: existing.id,
       sourceFile: c.filename,
       chunkText: c.text,
@@ -446,6 +465,7 @@ export async function updateRole(
     // Phase 76: same entity-extraction as trainRole.
     indexEntitiesForChunk(db, row, c.filename, now);
     chunksAdded += 1;
+    chunkIds.push(row.id);
   }
 
   // Phase 80 (PR A): bump the version. updateRole only runs against an
@@ -460,7 +480,7 @@ export async function updateRole(
   if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);
   // Phase 77: post-mutation sweep — see fireLifecycleSweep docstring.
   fireLifecycleSweep(existing.id);
-  return { status: 'applied', role: refreshed, chunksAdded };
+  return { status: 'applied', role: refreshed, chunksAdded, chunkIds };
 }
 
 /**

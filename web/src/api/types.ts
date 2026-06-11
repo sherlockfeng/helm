@@ -164,6 +164,9 @@ export interface HelmConfig {
     /** Phase 77: lifecycle block. Optional on the type so old configs parse;
      * backend supplies defaults. */
     lifecycle?: KnowledgeLifecycleConfig;
+    /** Files-as-truth PR-2: <user> segment for chat-captured/ writes
+     * into a subscribed llm-wiki repo. Empty/absent = DB-only promote. */
+    wikiUsername?: string;
   };
   docFirst: { enforce: boolean };
   cursor: {

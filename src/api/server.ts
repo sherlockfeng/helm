@@ -109,6 +109,7 @@ import {
 } from '../storage/repos/role-mirrors.js';
 import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
+import { slugifyPointId } from '../knowledge-repo/slug.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginRegistry } from '../plugins/index.js';
 import { bundleToBytes, packRole, resolveBundleUploadUrl } from '../roles/bundle.js';
@@ -1504,6 +1505,33 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           }
         }
 
+        // Files-as-truth PR-2: when an active llm-wiki repo is subscribed
+        // AND the user configured their wiki username, the accepted
+        // candidate also lands as chat-captured/<user>/<role>/<slug>.md
+        // in the repo's working copy. The chunk id is pre-picked as a
+        // human-readable slug so the file name, doc-lsp concept id and
+        // DB row all agree.
+        const wikiRepo = deps.knowledgeRepoManager
+          ? listKnowledgeRepos(deps.db, { status: 'active' })
+              .find((r) => r.profile === 'llm-wiki')
+          : undefined;
+        const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+        const captureTarget = wikiRepo && wikiUsername
+          ? { repo: wikiRepo, username: wikiUsername }
+          : undefined;
+        let pointIdBase: string | undefined;
+        if (captureTarget) {
+          const fallbackId = `capture-${candidateId.slice(0, 8)}`;
+          const seed = slugifyPointId(before.gist ?? finalText, fallbackId);
+          pointIdBase = seed;
+          for (let n = 2; getChunkByIdRepo(deps.db, pointIdBase); n += 1) {
+            // Bounded probe; past -9 give up on readability and use the
+            // candidate-derived id (unique because accept is one-shot).
+            if (n > 9) { pointIdBase = fallbackId; break; }
+            pointIdBase = `${seed}-${n}`;
+          }
+        }
+
         // Accept path: run updateRole with the candidate text as a single
         // appended document. Phase 66's conflict detection still applies —
         // if it returns 'conflicts', we leave the candidate pending and
@@ -1518,6 +1546,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               sourceKind: 'inline',
               origin: `capture-${candidateId}`,
               sourceLabel: `Captured from chat ${before.hostSessionId?.slice(0, 8) ?? 'unknown'}`,
+              ...(pointIdBase ? { pointIdBase } : {}),
             }],
             embedFn: makePseudoEmbedFn(),
           });
@@ -1540,6 +1569,27 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               chunksAdded: result.chunksAdded, flipped,
             },
           });
+          // Files-as-truth PR-2: materialize the promoted chunk(s) as
+          // chat-captured files. Best-effort — the chunk is already in
+          // the DB; a failed file write is logged and retried naturally
+          // on the next publish/import cycle, never blocks the accept.
+          const wikiFiles: string[] = [];
+          if (captureTarget) {
+            for (const chunkId of result.chunkIds) {
+              try {
+                const written = await deps.knowledgeRepoManager!.writeCapturedPoint({
+                  repoId: captureTarget.repo.id,
+                  chunkId,
+                  username: captureTarget.username,
+                });
+                wikiFiles.push(written.relPath);
+              } catch (err) {
+                deps.logger?.warn('wiki_capture_write_failed', {
+                  data: { candidateId, chunkId, message: (err as Error).message },
+                });
+              }
+            }
+          }
           // PR 6 (auto-trigger): when a Verification runner is wired,
           // enqueue affected cases so the next time the user looks at
           // the case it reflects the just-accepted knowledge. Done
@@ -1561,6 +1611,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           return send(res, 200, {
             candidateId, status: 'accepted', flipped,
             chunksAdded: result.chunksAdded,
+            ...(wikiFiles.length > 0 ? { wikiFiles } : {}),
           });
         } catch (err) {
           return internalError(res, err);

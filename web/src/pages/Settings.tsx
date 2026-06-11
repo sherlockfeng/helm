@@ -576,6 +576,31 @@ function KnowledgeSection({
 
   return (
     <>
+      <Card>
+        <h3 style={{ marginTop: 0 }}>Wiki identity</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          Username for the chat-captured/&lt;user&gt;/ directory when
+          promoted knowledge is written into a subscribed llm-wiki repo.
+          This name appears in company-repo MRs — use your company
+          account name (e.g. heyunfeng.feng). Leave empty to keep
+          promotions DB-only.
+        </p>
+        <label className="helm-form-row">
+          <div className="muted">Wiki username</div>
+          <input
+            type="text"
+            placeholder="e.g. heyunfeng.feng"
+            value={draft.knowledge.wikiUsername ?? ''}
+            onChange={(e) => update((c) => {
+              const v = e.target.value.trim();
+              if (v) c.knowledge.wikiUsername = v;
+              else delete c.knowledge.wikiUsername;
+            })}
+            style={{ width: 240 }}
+          />
+        </label>
+      </Card>
+
       <Card variant="danger">
         <h3 style={{ marginTop: 0 }}>Lifecycle</h3>
         <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>

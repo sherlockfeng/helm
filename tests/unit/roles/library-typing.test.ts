@@ -148,6 +148,80 @@ describe('updateRole — fingerprint dedup', () => {
   });
 });
 
+describe('updateRole — pointIdBase (files-as-truth PR-2)', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => { db = openDb(); });
+  afterEach(() => { db.close(); });
+
+  it('uses the slug as the chunk id and reports it in chunkIds', async () => {
+    await trainRole(db, {
+      roleId: 'r1', name: 'Role 1',
+      documents: [{ filename: 'seed.md', content: 'seed' }],
+      embedFn: stubEmbed,
+    });
+    const result = await updateRole(db, {
+      roleId: 'r1',
+      appendDocuments: [{
+        filename: 'capture-x', content: 'OG v5 mismatch body',
+        pointIdBase: 'og-v5-mismatch',
+      }],
+      embedFn: stubEmbed,
+      force: true,
+    });
+    expect(result.status).toBe('applied');
+    if (result.status !== 'applied') return;
+    expect(result.chunkIds).toEqual(['og-v5-mismatch']);
+    const row = db.prepare(
+      `SELECT id FROM knowledge_chunks WHERE id = 'og-v5-mismatch'`,
+    ).get();
+    expect(row).toBeDefined();
+  });
+
+  it('falls back to a UUID when the wanted id already exists', async () => {
+    await trainRole(db, {
+      roleId: 'r1', name: 'Role 1',
+      documents: [{ filename: 'seed.md', content: 'seed' }],
+      embedFn: stubEmbed,
+    });
+    const first = await updateRole(db, {
+      roleId: 'r1',
+      appendDocuments: [{ filename: 'a', content: 'body one', pointIdBase: 'dup-id' }],
+      embedFn: stubEmbed, force: true,
+    });
+    const second = await updateRole(db, {
+      roleId: 'r1',
+      appendDocuments: [{ filename: 'b', content: 'body two', pointIdBase: 'dup-id' }],
+      embedFn: stubEmbed, force: true,
+    });
+    expect(first.status).toBe('applied');
+    expect(second.status).toBe('applied');
+    if (first.status !== 'applied' || second.status !== 'applied') return;
+    expect(first.chunkIds).toEqual(['dup-id']);
+    expect(second.chunkIds).toHaveLength(1);
+    expect(second.chunkIds[0]).not.toBe('dup-id');
+    // Backstop produced a UUID-shaped id, not dup-id-2 (the caller owns
+    // readable dedup; the library only guarantees no collision).
+    expect(second.chunkIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('without pointIdBase chunk ids stay UUIDs (legacy path unchanged)', async () => {
+    await trainRole(db, {
+      roleId: 'r1', name: 'Role 1',
+      documents: [{ filename: 'seed.md', content: 'seed' }],
+      embedFn: stubEmbed,
+    });
+    const result = await updateRole(db, {
+      roleId: 'r1',
+      appendDocuments: [{ filename: 'c', content: 'plain append' }],
+      embedFn: stubEmbed, force: true,
+    });
+    expect(result.status).toBe('applied');
+    if (result.status !== 'applied') return;
+    expect(result.chunkIds).toHaveLength(1);
+    expect(result.chunkIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
 describe('searchKnowledge — kind filter', () => {
   let db: BetterSqlite3.Database;
   beforeEach(() => { db = openDb(); });

@@ -61,6 +61,11 @@ const KnowledgeConfigSchema = z.object({
   // read keeps the same null-safety. When the field is present, defaults
   // for individual sub-fields are still filled by the inner schema.
   lifecycle: KnowledgeLifecycleConfigSchema.optional(),
+  // Files-as-truth PR-2: the <user> path segment promote writes under
+  // chat-captured/<user>/<role>/ in the subscribed llm-wiki repo. The
+  // directory name lands in company-repo MRs, so it's user-entered
+  // (Settings → Knowledge), not derived from git config.
+  wikiUsername: z.string().optional(),
 }).strict();
 
 const ServerConfigSchema = z.object({

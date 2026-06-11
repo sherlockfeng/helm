@@ -35,9 +35,10 @@ function makeProvider(conn: TikaMcpConnection, opts: Partial<ConstructorParamete
 }
 
 describe('TikaProvider', () => {
-  it('requires spaceId + serviceKey', () => {
-    expect(() => new TikaProvider({ tikaEnv: 'office', spaceId: '', serviceKey: 'k' }))
-      .toThrow(/spaceId/);
+  it('personal-SSO mode: constructs without spaceId / serviceKey', () => {
+    // SSO mode passes only TIKA_ENV; the Tika MCP server pops browser
+    // authorization on first call. No constructor guard.
+    expect(() => new TikaProvider({ tikaEnv: 'office' })).not.toThrow();
   });
 
   it('search calls the auto-detected tika tool with userQuery and maps text to one snippet', async () => {

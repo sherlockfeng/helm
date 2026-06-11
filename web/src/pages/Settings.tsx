@@ -811,9 +811,9 @@ function KnowledgeSection({
         <h3 style={{ marginTop: 0 }}>Tika provider</h3>
         <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
           TikTok 内部知识平台。通过本地 MCP 进程
-          （npx @tiktok-mcp/tika）查询你的 Tika 空间，结果会出现在
-          query_knowledge 聚合里。需要先在 Tika 平台建空间并拿到
-          tenant_id / service_key；本机需可访问字节内部 npm 源。
+          （npx @tiktok-mcp/tika）查询你的 Tika 空间。个人使用推荐
+          SSO 鉴权：Service key 留空，首次调用会拉起浏览器走
+          ByteCloud SSO 授权。本机需可访问字节内部 npm 源。
         </p>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
@@ -849,7 +849,7 @@ function KnowledgeSection({
           <input
             type="text"
             value={tikaCfg.spaceId ?? ''}
-            placeholder="你的 Tika 空间 tenant_id"
+            placeholder="可选；留空用公共空间"
             onChange={(e) => update((c) => {
               const found = ensureTika(c);
               const cfg = (found.provider.config ?? {}) as TikaConfig;
@@ -859,11 +859,11 @@ function KnowledgeSection({
           />
         </label>
         <label className="helm-form-row">
-          <div className="muted">Service key</div>
+          <div className="muted">Service key（可选）</div>
           <input
             type="password"
             value={tikaCfg.serviceKey ?? ''}
-            placeholder="服务账号 ServiceKey"
+            placeholder="留空 = 个人 SSO 鉴权"
             onChange={(e) => update((c) => {
               const found = ensureTika(c);
               const cfg = (found.provider.config ?? {}) as TikaConfig;

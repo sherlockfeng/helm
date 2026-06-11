@@ -41,10 +41,14 @@ export interface TikaMcpConnection {
 export interface TikaProviderOptions {
   /** Tika environment, e.g. 'office'. Becomes TIKA_ENV. */
   tikaEnv: string;
-  /** Tenant/space id. Becomes TIKA_SPACE_ID. */
-  spaceId: string;
-  /** Service account key. Becomes TIKA_SERVICE_KEY. */
-  serviceKey: string;
+  /** Tenant/space id. Becomes TIKA_SPACE_ID; omitted = Tika public space. */
+  spaceId?: string;
+  /**
+   * Service-account key. Becomes TIKA_SERVICE_KEY. Omitted = personal
+   * SSO mode: the Tika MCP server pops a ByteCloud SSO browser
+   * authorization on the first tool call.
+   */
+  serviceKey?: string;
   /** Launcher command. Default `npx @tiktok-mcp/tika`. */
   command?: string;
   args?: readonly string[];
@@ -79,9 +83,6 @@ export class TikaProvider implements KnowledgeProvider {
   private resolvedToolName: string | null = null;
 
   constructor(options: TikaProviderOptions) {
-    if (!options.spaceId || !options.serviceKey) {
-      throw new Error('TikaProvider requires spaceId + serviceKey');
-    }
     this.opts = options;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.onWarning = options.onWarning ?? (() => {});
@@ -194,8 +195,8 @@ export class TikaProvider implements KnowledgeProvider {
       env: {
         ...process.env as Record<string, string>,
         TIKA_ENV: this.opts.tikaEnv,
-        TIKA_SPACE_ID: this.opts.spaceId,
-        TIKA_SERVICE_KEY: this.opts.serviceKey,
+        ...(this.opts.spaceId ? { TIKA_SPACE_ID: this.opts.spaceId } : {}),
+        ...(this.opts.serviceKey ? { TIKA_SERVICE_KEY: this.opts.serviceKey } : {}),
       },
       stderr: 'ignore',
     });

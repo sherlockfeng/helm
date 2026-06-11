@@ -244,8 +244,14 @@ export type DepscopeProviderConfig = z.infer<typeof DepscopeProviderConfigSchema
  */
 export const TikaProviderConfigSchema = z.object({
   tikaEnv: z.string().default('office'),
-  spaceId: z.string().min(1),
-  serviceKey: z.string().min(1),
+  /** Optional — Tika falls back to the public space when omitted. */
+  spaceId: z.string().optional(),
+  /**
+   * Optional — personal-SSO mode (recommended for local use) needs no
+   * service key: the first tool call pops a ByteCloud SSO browser
+   * authorization. Set only for service-account integrations.
+   */
+  serviceKey: z.string().optional(),
   /** Launcher override; default `npx -y @tiktok-mcp/tika`. */
   command: z.string().optional(),
   args: z.array(z.string()).optional(),

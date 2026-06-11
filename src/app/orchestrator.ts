@@ -1339,6 +1339,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       mcpFactory,
       ...(effectiveVerificationRunner ? { verificationRunner: effectiveVerificationRunner } : {}),
       knowledgeRepoManager,
+      // Tika T2: the renderer's knowledge-lookup endpoint queries the
+      // same registry the MCP tools use (Tika / depscope / local roles).
+      knowledge,
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {
@@ -1872,8 +1875,8 @@ function buildConfiguredProviders(
       }
       providers.push(new TikaProvider({
         tikaEnv: parsed.data.tikaEnv,
-        spaceId: parsed.data.spaceId,
-        serviceKey: parsed.data.serviceKey,
+        ...(parsed.data.spaceId ? { spaceId: parsed.data.spaceId } : {}),
+        ...(parsed.data.serviceKey ? { serviceKey: parsed.data.serviceKey } : {}),
         ...(parsed.data.command ? { command: parsed.data.command } : {}),
         ...(parsed.data.args ? { args: parsed.data.args } : {}),
         ...(parsed.data.toolName ? { toolName: parsed.data.toolName } : {}),

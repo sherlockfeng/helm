@@ -228,16 +228,19 @@ describe('searchKnowledge — kind filter', () => {
   afterEach(() => { db.close(); });
 
   it('omitting kind returns hits across every chunk type', async () => {
+    // PR-4: retrieval is BM25 + entity — fixtures need a lexically
+    // matchable shared token (the old ones leaned on the cosine leg
+    // matching any text).
     await trainRole(db, {
       roleId: 'r1', name: 'Role 1',
       documents: [
-        { filename: 'a.md', content: 'sa', kind: 'spec' },
-        { filename: 'b.md', content: 'eb', kind: 'example' },
-        { filename: 'c.md', content: 'wc', kind: 'warning' },
+        { filename: 'a.md', content: 'alpha spec body', kind: 'spec' },
+        { filename: 'b.md', content: 'alpha example body', kind: 'example' },
+        { filename: 'c.md', content: 'alpha warning body', kind: 'warning' },
       ],
       embedFn: stubEmbed,
     });
-    const all = await searchKnowledge(db, 'r1', 'query', stubEmbed, { topK: 10 });
+    const all = await searchKnowledge(db, 'r1', 'alpha', stubEmbed, { topK: 10 });
     expect(all).toHaveLength(3);
     expect(new Set(all.map((h) => h.kind))).toEqual(new Set(['spec', 'example', 'warning']));
   });
@@ -246,13 +249,13 @@ describe('searchKnowledge — kind filter', () => {
     await trainRole(db, {
       roleId: 'r1', name: 'Role 1',
       documents: [
-        { filename: 'spec.md', content: 'sa', kind: 'spec' },
-        { filename: 'ex.md', content: 'eb', kind: 'example' },
-        { filename: 'run.md', content: 'rc', kind: 'runbook' },
+        { filename: 'spec.md', content: 'alpha spec body', kind: 'spec' },
+        { filename: 'ex.md', content: 'alpha example body', kind: 'example' },
+        { filename: 'run.md', content: 'alpha runbook body', kind: 'runbook' },
       ],
       embedFn: stubEmbed,
     });
-    const onlyRunbook = await searchKnowledge(db, 'r1', 'query', stubEmbed, {
+    const onlyRunbook = await searchKnowledge(db, 'r1', 'alpha', stubEmbed, {
       kind: 'runbook', topK: 10,
     });
     expect(onlyRunbook.map((h) => h.kind)).toEqual(['runbook']);
@@ -262,22 +265,22 @@ describe('searchKnowledge — kind filter', () => {
     await trainRole(db, {
       roleId: 'r1', name: 'Role 1',
       documents: [
-        { filename: 'a.md', content: 'sa', kind: 'spec' },
-        { filename: 'b.md', content: 'eb', kind: 'spec' },
+        { filename: 'a.md', content: 'alpha first body', kind: 'spec' },
+        { filename: 'b.md', content: 'alpha second body', kind: 'spec' },
       ],
       embedFn: stubEmbed,
     });
-    const hits = await searchKnowledge(db, 'r1', 'query', stubEmbed, 1);
+    const hits = await searchKnowledge(db, 'r1', 'alpha', stubEmbed, 1);
     expect(hits).toHaveLength(1);
   });
 
   it('every returned hit carries kind + sourceId (provenance round-trip)', async () => {
     await trainRole(db, {
       roleId: 'r1', name: 'Role 1',
-      documents: [{ filename: 'spec.md', content: 'spec', kind: 'spec' }],
+      documents: [{ filename: 'spec.md', content: 'alpha spec body', kind: 'spec' }],
       embedFn: stubEmbed,
     });
-    const hits = await searchKnowledge(db, 'r1', 'q', stubEmbed);
+    const hits = await searchKnowledge(db, 'r1', 'alpha', stubEmbed);
     expect(hits[0]?.kind).toBe('spec');
     expect(typeof hits[0]?.sourceId).toBe('string');
     expect((hits[0]?.sourceId ?? '').length).toBeGreaterThan(0);

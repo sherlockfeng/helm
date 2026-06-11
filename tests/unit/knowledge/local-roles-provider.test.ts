@@ -173,12 +173,12 @@ describe('LocalRolesProvider — search', () => {
     }
   });
 
-  it('embedFn errors do not crash the search', async () => {
+  it('a throwing embedFn cannot crash the search (cosine leg retired, PR-4)', async () => {
+    // Retrieval no longer calls the embedder at all — pin the new
+    // contract: search resolves and the embedFn is never invoked.
     const errEmbedFn = vi.fn(async () => { throw new Error('embed boom'); });
     const p = new LocalRolesProvider({ db, embedFn: errEmbedFn });
-    await expect(p.search('foo')).rejects.toThrow(/embed boom/);
-    // Documents the current behavior: the provider doesn't catch embed errors
-    // — that's the aggregator's job. This test pins the contract so changes
-    // are intentional.
+    await expect(p.search('foo')).resolves.toBeDefined();
+    expect(errEmbedFn).not.toHaveBeenCalled();
   });
 });

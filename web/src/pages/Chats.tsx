@@ -387,6 +387,7 @@ function ConversationDetailPane({
           was exactly how the user missed them. */}
       <UnknownEntitiesSection
         unknownEntities={data?.unknownEntities ?? []}
+        turns={data?.turns ?? []}
         hostSessionId={chat.id}
         onSpawned={() => reload()}
       />
@@ -402,7 +403,6 @@ function ConversationDetailPane({
           → candidates reads as one continuous flow. */}
       <KnowledgeOutSection
         candidates={candidates}
-        loading={loading && !data}
         onDecided={() => reload()}
       />
 
@@ -460,10 +460,23 @@ function KnowledgeInSection({
   const visiblePoints = expanded ? allPoints : allPoints.slice(0, 3);
   const overflow = allPoints.length - visiblePoints.length;
 
+  const isEmpty = boundRoles.length === 0 && allPoints.length === 0;
+
   return (
-    <div className="helm-conv-section">
+    <div className={`helm-conv-section${isEmpty ? ' helm-conv-section-compact' : ''}`}>
       <div className="helm-conv-section-header">
-        <span className="helm-conv-section-label">Knowledge in</span>
+        <span
+          className="helm-conv-section-label"
+          title="绑定的 role 会在会话开始时把它的知识注入给 agent"
+        >
+          注入的知识
+        </span>
+        {/* Empty state lives inline in the header — a one-line section
+            instead of header + explanatory paragraph. The user called
+            the old two-line version "很难理解，而且浪费空间". */}
+        {isEmpty && (
+          <span className="helm-conv-section-meta">未绑定 role</span>
+        )}
         {addable.length > 0 && (
           <Combobox
             value=""
@@ -480,9 +493,7 @@ function KnowledgeInSection({
         )}
       </div>
 
-      {boundRoles.length === 0 && allPoints.length === 0 ? (
-        <p className="helm-conv-empty">No role bound — agent runs on base prompt only.</p>
-      ) : (
+      {!isEmpty && (
         <>
           {boundRoles.length > 0 && (
             <div className="helm-conv-role-chips">
@@ -544,17 +555,54 @@ function KnowledgeInSection({
 
 // ── Unknown entities (Path B — spawn role from chat) ────────────────────
 
+/**
+ * Where in this chat does an entity appear? Pure client-side scan over
+ * the already-fetched turns — no extra round-trip. Returns up to
+ * `cap` snippets with ±60 chars of context around the first occurrence
+ * per message.
+ */
+function findEntityMentions(
+  turns: readonly ConversationDetailTurn[],
+  entity: string,
+  cap = 4,
+): Array<{ turnIndex: number; who: 'you' | 'AI'; snippet: string }> {
+  const needle = entity.toLowerCase();
+  const out: Array<{ turnIndex: number; who: 'you' | 'AI'; snippet: string }> = [];
+  for (const t of turns) {
+    const sources: Array<['you' | 'AI', string]> = [['you', t.userPrompt.text]];
+    if (t.assistantResponse) sources.push(['AI', t.assistantResponse.text]);
+    for (const [who, text] of sources) {
+      const idx = text.toLowerCase().indexOf(needle);
+      if (idx === -1) continue;
+      const start = Math.max(0, idx - 60);
+      const end = Math.min(text.length, idx + needle.length + 60);
+      out.push({
+        turnIndex: t.index,
+        who,
+        snippet: `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ')}${end < text.length ? '…' : ''}`,
+      });
+      if (out.length >= cap) return out;
+    }
+  }
+  return out;
+}
+
 function UnknownEntitiesSection({
   unknownEntities,
+  turns,
   hostSessionId,
   onSpawned,
 }: {
   unknownEntities: UnknownEntity[];
+  turns: ConversationDetailTurn[];
   hostSessionId: string;
   onSpawned: () => void;
 }): ReactElement | null {
   const [showModal, setShowModal] = useState(false);
+  // Which entity's provenance is expanded; null = none.
+  const [inspecting, setInspecting] = useState<string | null>(null);
   if (unknownEntities.length === 0) return null;
+  const mentions = inspecting ? findEntityMentions(turns, inspecting) : [];
   return (
     <>
       <div className="helm-conv-section">
@@ -569,11 +617,34 @@ function UnknownEntitiesSection({
         </p>
         <div className="helm-conv-unknown-chips">
           {unknownEntities.map((e) => (
-            <span key={e.entity} className="helm-conv-unknown-chip" title={`${e.mentions} mentions`}>
+            <button
+              key={e.entity}
+              type="button"
+              className={`helm-conv-unknown-chip is-amber${inspecting === e.entity ? ' is-selected' : ''}`}
+              title="点击查看它在对话里出现的位置"
+              aria-expanded={inspecting === e.entity}
+              onClick={() => setInspecting((cur) => (cur === e.entity ? null : e.entity))}
+            >
               {e.entity} <span className="helm-conv-unknown-chip-count">×{e.mentions}</span>
-            </span>
+            </button>
           ))}
         </div>
+        {inspecting && (
+          <div className="helm-conv-mentions">
+            {mentions.length === 0 ? (
+              <div className="helm-conv-mention-row muted">
+                出现在更早的 turn 里（timeline 截断了）
+              </div>
+            ) : (
+              mentions.map((m, i) => (
+                <div key={i} className="helm-conv-mention-row">
+                  <span className="helm-conv-mention-loc">Turn {m.turnIndex} · {m.who}</span>
+                  <span className="helm-conv-mention-snippet">{m.snippet}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         <div style={{ marginTop: 10 }}>
           <button
             type="button"
@@ -831,42 +902,37 @@ function RoleSuggestionRow({
 
 function KnowledgeOutSection({
   candidates,
-  loading,
   onDecided,
 }: {
   candidates: ConversationDetailCandidate[];
-  loading: boolean;
   onDecided: () => void;
-}): ReactElement {
+}): ReactElement | null {
   // PR-B: split by whether the candidate refines an existing chunk
   // (UPDATE) or proposes new knowledge (NEW). Different visual
   // affordances — updates carry a reference to the chunk they replace.
   const updates = candidates.filter((c) => c.targetChunkId);
   const news = candidates.filter((c) => !c.targetChunkId);
 
+  // No candidates → no section. The extract affordance already lives on
+  // the suggestion rows above; an empty section with a how-to sentence
+  // was pure noise ("浪费空间" per user feedback).
+  if (candidates.length === 0) return null;
+
   return (
     <div className="helm-conv-section">
       <div className="helm-conv-section-header">
-        <span className="helm-conv-section-label">Knowledge out</span>
+        <span
+          className="helm-conv-section-label"
+          title="从这条对话里提取出来的知识候选 — promote 后进入 role 的知识库"
+        >
+          提取的知识
+        </span>
         <span className="helm-conv-section-meta">
-          {candidates.length === 0
-            ? (loading ? 'loading…' : '0 candidates')
-            : (
-              <>
-                {updates.length > 0 && `${updates.length} update${updates.length === 1 ? '' : 's'}`}
-                {updates.length > 0 && news.length > 0 && ' · '}
-                {news.length > 0 && `${news.length} new`}
-              </>
-            )}
+          {updates.length > 0 && `${updates.length} update${updates.length === 1 ? '' : 's'}`}
+          {updates.length > 0 && news.length > 0 && ' · '}
+          {news.length > 0 && `${news.length} new`}
         </span>
       </div>
-
-      {candidates.length === 0 && !loading && (
-        <p className="helm-conv-empty">
-          <span className="helm-conv-pulse-dot" aria-hidden /> Click ↗ extract on a role
-          {' '}above to mine knowledge from this chat.
-        </p>
-      )}
 
       {updates.length > 0 && (
         <div className="helm-conv-out-group">

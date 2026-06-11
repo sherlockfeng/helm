@@ -1920,6 +1920,53 @@ button.helm-conv-unknown-chip.is-selected {
   font-size: 10px;
   opacity: 0.7;
 }
+/* Section variant — keeps the amber identity even though the chip is
+   now a clickable provenance toggle (modal chips stay gray-until-picked). */
+button.helm-conv-unknown-chip.is-amber {
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+button.helm-conv-unknown-chip.is-amber.is-selected {
+  background: rgba(245, 158, 11, 0.30);
+  font-weight: 600;
+}
+
+/* Provenance snippets shown when an unknown-entity chip is clicked */
+.helm-conv-mentions {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 2px solid rgba(245, 158, 11, 0.4);
+  padding-left: 10px;
+}
+.helm-conv-mention-row {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  align-items: baseline;
+  min-width: 0;
+}
+.helm-conv-mention-loc {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  white-space: nowrap;
+}
+.helm-conv-mention-snippet {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* One-line section variant (e.g. 注入的知识 with nothing bound) */
+.helm-conv-section-compact { padding-top: 8px; padding-bottom: 8px; }
+.helm-conv-section-compact .helm-conv-section-header { margin-bottom: 0; }
 
 /* Knowledge OUT — candidate excerpts with hover triage actions */
 .helm-conv-candidates {

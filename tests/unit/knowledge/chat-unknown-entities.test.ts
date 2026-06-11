@@ -95,4 +95,32 @@ describe('unknownEntitiesForChat', () => {
     appendPrompt(db, 's1', 'XYZ XYZ XYZ'); // only 1 unknown
     expect(unknownEntitiesForChat(db, 's1', { minDistinct: 2 })).toEqual([]);
   });
+
+  it('stoplists generic dev vocabulary — PR / CI / JSON / OUT never suggest a role', () => {
+    seedSession(db);
+    seedKnownEntities(db, []);
+    // The exact noise observed in live dogfooding: whitelist acronyms
+    // (PR, CI), format tokens (JSON, HTML), caps English words from UI
+    // copy (KNOWLEDGE, OUT). A real domain term (DECC) rides along and
+    // must be the ONLY survivor.
+    appendPrompt(db, 's1',
+      'PR PR PR PR CI CI CI JSON JSON JSON HTML HTML HTML '
+      + 'KNOWLEDGE KNOWLEDGE KNOWLEDGE OUT OUT OUT DECC DECC DECC');
+    const out = unknownEntitiesForChat(db, 's1');
+    expect(out.map((u) => u.entity)).toEqual(['DECC']);
+  });
+
+  it('folds URL-form duplicates into the bare entity (github.com → github)', () => {
+    seedSession(db);
+    seedKnownEntities(db, []);
+    // Tier-4 URL extraction yields the host (github.com); the bare word
+    // also appears as text. Both qualify separately — the fold merges
+    // the dotted form's mentions into the bare one.
+    appendPrompt(db, 's1',
+      'gitee gitee gitee 看下 https://gitee.com/x/y 和 https://gitee.com/a/b 还有 https://gitee.com/c/d');
+    const out = unknownEntitiesForChat(db, 's1', { minMentions: 1 });
+    const entities = out.map((u) => u.entity.toLowerCase());
+    expect(entities).toContain('gitee');
+    expect(entities.some((e) => e === 'gitee.com')).toBe(false);
+  });
 });

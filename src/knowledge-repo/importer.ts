@@ -40,6 +40,7 @@ import {
   insertChunkEntity,
   upsertRole,
   getChunkById,
+  getRole,
 } from '../storage/repos/roles.js';
 import { extractEntities } from '../roles/entity-extract.js';
 import { insertMergeConflict } from '../storage/repos/knowledge-merge-conflict.js';
@@ -115,19 +116,37 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
   const roleBuckets = enumerateRolesForProfile(fs, input.localPath, input.profile);
   if (roleBuckets.length === 0) return summary;
 
+  // chat-captured/<user>/<role>/ produces one bucket per (user, role)
+  // pair — several buckets can legitimately share a roleId. Count
+  // unique roles, not buckets.
+  const seenRoles = new Set<string>();
   for (const bucket of roleBuckets) {
     const now = new Date().toISOString();
+    // Preserve an existing role's prompt + identity: ON CONFLICT in
+    // upsertRole overwrites system_prompt, so a bucket without
+    // briefing text (llm-wiki dirs never carry one) would wipe a
+    // trained prompt on every re-import.
+    const existingRole = getRole(input.db, bucket.roleId);
     upsertRole(input.db, {
       id: bucket.roleId,
       name: bucket.roleName,
-      systemPrompt: bucket.briefingText ?? '',
-      isBuiltin: false,
-      createdAt: now,
+      systemPrompt: bucket.briefingText
+        ?? existingRole?.systemPrompt
+        ?? '',
+      isBuiltin: existingRole?.isBuiltin ?? false,
+      createdAt: existingRole?.createdAt ?? now,
     });
-    summary.rolesImported += 1;
+    if (!seenRoles.has(bucket.roleId)) {
+      seenRoles.add(bucket.roleId);
+      summary.rolesImported += 1;
+    }
 
     for (const file of bucket.pointFiles) {
       const relPath = relative(bucket.roleDir, file).split(sep).join('/');
+      // Repo-root-relative path — persisted as the chunk's source_file
+      // so publish round-trips into the same file (llmWikiLayout) and
+      // the UI can show real provenance.
+      const repoRelPath = relative(input.localPath, file).split(sep).join('/');
       try {
         const raw = fs.readFileSync(file, 'utf8');
         const parsed = parsePointFile({
@@ -135,6 +154,7 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         });
         const detected = upsertPoint(input.db, bucket.roleId, parsed, {
           sourceRef: input.sourceRef,
+          repoRelPath,
           ...(input.repoId        ? { repoId:         input.repoId } : {}),
           ...(input.remoteRevision ? { remoteRevision: input.remoteRevision } : {}),
         });
@@ -217,6 +237,14 @@ function enumerateHelmNative(fs: WalkerFs, localPath: string): RoleBucket[] {
  * Skip-list: anything starting with `.`, plus a curated set of dirs
  * that aren't knowledge content (workflow/automation/CI metadata).
  */
+/**
+ * Files-as-truth: the directory helm owns inside an llm-wiki repo.
+ * Layout is chat-captured/<user>/<role>/<slug>.md — the role is the
+ * THIRD path segment, not the top-level dir. See
+ * memory design_files_as_truth.md for the locked convention.
+ */
+const CHAT_CAPTURED_DIR = 'chat-captured';
+
 function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
   if (!fs.existsSync(localPath)) return [];
   const SKIP_DIRS = new Set([
@@ -232,6 +260,12 @@ function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
   const out: RoleBucket[] = [];
   for (const slug of slugs) {
     const roleDir = join(localPath, slug);
+    if (slug === CHAT_CAPTURED_DIR) {
+      // helm's own zone: one bucket per (user, role) pair so a role's
+      // captured knowledge merges with the role regardless of author.
+      out.push(...enumerateChatCaptured(fs, roleDir));
+      continue;
+    }
     const pointFiles = walkMarkdownFiles(fs, roleDir);
     if (pointFiles.length === 0) continue; // skip dirs with no .md
     out.push({
@@ -240,6 +274,40 @@ function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
       roleDir,
       pointFiles,
     });
+  }
+  return out;
+}
+
+function enumerateChatCaptured(fs: WalkerFs, capturedRoot: string): RoleBucket[] {
+  const out: RoleBucket[] = [];
+  let users: string[];
+  try {
+    users = fs.readdirSync(capturedRoot).filter((name) => {
+      if (name.startsWith('.')) return false;
+      try { return fs.statSync(join(capturedRoot, name)).isDirectory(); }
+      catch { return false; }
+    });
+  } catch {
+    return out;
+  }
+  for (const user of users) {
+    const userDir = join(capturedRoot, user);
+    let roleDirs: string[];
+    try {
+      roleDirs = fs.readdirSync(userDir).filter((name) => {
+        if (name.startsWith('.')) return false;
+        try { return fs.statSync(join(userDir, name)).isDirectory(); }
+        catch { return false; }
+      });
+    } catch {
+      continue;
+    }
+    for (const role of roleDirs) {
+      const roleDir = join(userDir, role);
+      const pointFiles = walkMarkdownFiles(fs, roleDir);
+      if (pointFiles.length === 0) continue;
+      out.push({ roleId: role, roleName: role, roleDir, pointFiles });
+    }
   }
   return out;
 }
@@ -370,7 +438,15 @@ function upsertPoint(
   db: Database.Database,
   roleId: string,
   parsed: ParsedPoint,
-  opts: { sourceRef?: string; repoId?: string; remoteRevision?: string },
+  opts: {
+    sourceRef?: string;
+    repoId?: string;
+    remoteRevision?: string;
+    /** Repo-root-relative path of the .md this point came from.
+     *  Persisted to chunk.source_file — files-as-truth provenance +
+     *  llmWikiLayout publish round-trip. */
+    repoRelPath?: string;
+  },
 ): 'inserted' | 'updated' | 'conflict' {
   const now = new Date().toISOString();
   const existing = getChunkById(db, parsed.id);
@@ -382,6 +458,7 @@ function upsertPoint(
       id: parsed.id, roleId,
       chunkText: parsed.body, kind: parsed.kind,
       createdAt: now,
+      ...(opts.repoRelPath ? { sourceFile: opts.repoRelPath } : {}),
     });
     // R-11: round-trip visibility + source out-of-band from insertChunk
     // (the legacy signature doesn't take them). Same row, single UPDATE.
@@ -410,7 +487,9 @@ function upsertPoint(
     });
     // Sync the aux tables (aliases / rel / role attach) to the remote
     // shape anyway — metadata sync is safe; only the body waits on the
-    // user's resolution.
+    // user's resolution. source_file is metadata too (the file may have
+    // moved even while the body conflicts).
+    applySourceFile(db, parsed.id, opts.repoRelPath);
     attachRoleToPoint(db, parsed.id, roleId);
     syncAuxTables(db, parsed);
     return 'conflict';
@@ -421,10 +500,18 @@ function upsertPoint(
   db.prepare(`
     UPDATE knowledge_chunks SET chunk_text = ?, kind = ? WHERE id = ?
   `).run(parsed.body, parsed.kind, parsed.id);
+  applySourceFile(db, parsed.id, opts.repoRelPath);
   applyRoundTripFields(db, parsed);
   attachRoleToPoint(db, parsed.id, roleId);
   syncAuxTables(db, parsed);
   return 'updated';
+}
+
+/** Persist the repo-root-relative origin path. No-op when absent. */
+function applySourceFile(db: Database.Database, pointId: string, repoRelPath?: string): void {
+  if (!repoRelPath) return;
+  db.prepare(`UPDATE knowledge_chunks SET source_file = ? WHERE id = ?`)
+    .run(repoRelPath, pointId);
 }
 
 /**

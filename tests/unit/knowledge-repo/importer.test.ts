@@ -8,7 +8,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import { importRepoIntoLibrary } from '../../../src/knowledge-repo/importer.js';
-import { getRole } from '../../../src/storage/repos/roles.js';
+import { getRole, upsertRole } from '../../../src/storage/repos/roles.js';
 import { getAliasesForPoint } from '../../../src/storage/repos/knowledge-point-alias.js';
 import { getOutgoingRels } from '../../../src/storage/repos/knowledge-point-rel.js';
 import { getRolesForPoint } from '../../../src/storage/repos/knowledge-point-roles.js';
@@ -255,5 +255,82 @@ describe('importRepoIntoLibrary', () => {
     expect(summary.pointsUpserted).toBe(1);
     expect(Object.keys(summary.errors)).toHaveLength(1);
     expect(Object.values(summary.errors)[0]).toMatch(/disk failed/);
+  });
+
+  it('llm-wiki: chat-captured/<user>/<role> uses the third path segment as role', () => {
+    const fs = makeFs({
+      '/repo/dr-docs/index.md': '# DR\nbody',
+      // doc-lsp shape (what promote will write in PR-2): concept fence
+      // carries the explicit id.
+      '/repo/chat-captured/hyf/dr-docs/og-v5.md':
+        '# OG v5\n\n```concept\nid: cap-og-v5\n```\n\nbody',
+      // Plain markdown — id falls back to the file basename.
+      '/repo/chat-captured/hyf/argos/alerts.md': '# Alerts\nbody',
+      '/repo/chat-captured/zhang/dr-docs/cdn.md': '# CDN\nbody',
+      // Hidden user dir — skipped entirely.
+      '/repo/chat-captured/.tmp/dr-docs/x.md': '# hidden',
+      // Role dir with no .md — no bucket, no role.
+      '/repo/chat-captured/hyf/empty-role/notes.txt': 'no markdown',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs,
+    });
+    // Unique roles: dr-docs (shared by the ETL dir + two captured
+    // users) and argos. chat-captured itself must NOT become a role.
+    expect(summary.rolesImported).toBe(2);
+    expect(getRole(db, 'chat-captured')).toBeUndefined();
+    expect(getRole(db, 'empty-role')).toBeUndefined();
+    expect(getRole(db, '.tmp')).toBeUndefined();
+    expect(getRole(db, 'argos')?.name).toBe('argos');
+    expect(summary.pointsUpserted).toBe(4);
+    expect(getRolesForPoint(db, 'cap-og-v5')).toEqual(['dr-docs']);
+    expect(getRolesForPoint(db, 'cdn')).toEqual(['dr-docs']);
+    expect(getRolesForPoint(db, 'alerts')).toEqual(['argos']);
+  });
+
+  it('persists source_file repo-root-relative on insert and refreshes it on update', () => {
+    // Plain markdown under llm-wiki: id falls back to the basename ('og'),
+    // which stays stable when the file moves between dirs below.
+    const v1 = makeFs({
+      '/repo/chat-captured/hyf/dr/og.md': '# OG\nv1 body',
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v1 });
+    const read = (): string => (db.prepare(
+      `SELECT source_file FROM knowledge_chunks WHERE id = 'og'`,
+    ).get() as { source_file: string }).source_file;
+    expect(read()).toBe('chat-captured/hyf/dr/og.md');
+    // Same point id moved to a regular wiki dir — the update path must
+    // refresh source_file so publish round-trips into the new location.
+    const v2 = makeFs({
+      '/repo/dr/og.md': '# OG\nv2 body',
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v2 });
+    expect(read()).toBe('dr/og.md');
+  });
+
+  it('helm-native: source_file keeps the roles/<slug>/points/ prefix', () => {
+    const fs = makeFs({
+      '/repo/roles/dr/points/p.md': '---\nid: sf-native\n---\n# P\nbody',
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'helm-native', fs });
+    const row = db.prepare(
+      `SELECT source_file FROM knowledge_chunks WHERE id = 'sf-native'`,
+    ).get() as { source_file: string };
+    expect(row.source_file).toBe('roles/dr/points/p.md');
+  });
+
+  it('re-import without briefing preserves a trained systemPrompt + createdAt', () => {
+    upsertRole(db, {
+      id: 'dr-docs', name: 'dr-docs',
+      systemPrompt: 'trained prompt — do not clobber',
+      isBuiltin: false, createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    const fs = makeFs({
+      '/repo/dr-docs/index.md': '# X\nbody',
+    });
+    importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs });
+    const role = getRole(db, 'dr-docs');
+    expect(role?.systemPrompt).toBe('trained prompt — do not clobber');
+    expect(role?.createdAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });

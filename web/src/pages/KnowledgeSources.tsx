@@ -282,29 +282,56 @@ function RepoRow({
 }
 
 /**
- * v28: import-directory whitelist. Every top-level dir used to become a
- * role mechanically (scripts/, raw/, …) — now the user ticks which
- * directories carry knowledge. Empty selection = import everything
- * (legacy). chat-captured/ is always imported and not listed.
+ * v28 + 树状选择: import whitelist with two levels. Entries are either
+ * a whole top dir ('wiki') or a `top/sub` path ('domains/stability').
+ * 全不勾 = import everything; chat-captured/ is always imported.
  */
 function ImportDirsPanel({
   repo, onSaved,
 }: { repo: KnowledgeRepo; onSaved: () => void }): ReactElement | null {
   const dirsQuery = useApi(() => helmApi.getRepoDirs(repo.id), [repo.id]);
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [saving, setSaving] = useState(false);
 
   if (dirsQuery.loading || dirsQuery.error) return null;
-  const dirs = dirsQuery.data?.dirs ?? [];
-  if (dirs.length === 0) return null;
+  const tree = dirsQuery.data?.tree ?? (dirsQuery.data?.dirs ?? []).map((name) => ({ name, children: [] as string[] }));
+  if (tree.length === 0) return null;
   const saved = dirsQuery.data?.importDirs ?? null;
   const current = selected ?? new Set(saved ?? []);
   const whitelistActive = saved !== null && saved.length > 0;
 
-  const toggle = (d: string): void => {
+  const topState = (name: string, children: string[]): 'all' | 'partial' | 'none' => {
+    if (current.has(name)) return 'all';
+    return children.some((c) => current.has(`${name}/${c}`)) ? 'partial' : 'none';
+  };
+
+  const toggleTop = (name: string, children: string[]): void => {
     const next = new Set(current);
-    if (next.has(d)) next.delete(d); else next.add(d);
+    const state = topState(name, children);
+    // any state → flip between "whole dir" and "nothing"
+    next.delete(name);
+    for (const c of children) next.delete(`${name}/${c}`);
+    if (state !== 'all') next.add(name);
+    setSelected(next);
+  };
+
+  const toggleChild = (top: string, child: string, children: string[]): void => {
+    const next = new Set(current);
+    if (next.has(top)) {
+      // whole-dir → partial: everything except this child
+      next.delete(top);
+      for (const c of children) if (c !== child) next.add(`${top}/${c}`);
+    } else {
+      const key = `${top}/${child}`;
+      if (next.has(key)) next.delete(key); else next.add(key);
+      // all children individually selected → collapse to whole dir
+      if (children.length > 0 && children.every((c) => next.has(`${top}/${c}`))) {
+        for (const c of children) next.delete(`${top}/${c}`);
+        next.add(top);
+      }
+    }
     setSelected(next);
   };
 
@@ -314,7 +341,7 @@ function ImportDirsPanel({
       const dirsToSave = current.size > 0 ? [...current].sort() : null;
       await helmApi.setRepoImportDirs(repo.id, dirsToSave);
       toast.success(dirsToSave
-        ? `已保存白名单（${dirsToSave.length} 个目录）。重新 Import 生效。`
+        ? `已保存白名单（${dirsToSave.length} 条）。重新 Import 生效。`
         : '已清除白名单：导入全部目录。重新 Import 生效。');
       dirsQuery.reload();
       setSelected(null);
@@ -327,7 +354,7 @@ function ImportDirsPanel({
   return (
     <div style={{ marginTop: 4 }}>
       <button onClick={() => setOpen((p) => !p)} style={{ fontSize: 12 }}>
-        导入目录：{whitelistActive ? `${saved!.length} 个白名单` : '全部'} {open ? '▴' : '▾'}
+        导入目录：{whitelistActive ? `${saved!.length} 条白名单` : '全部'} {open ? '▴' : '▾'}
       </button>
       {open && (
         <div style={{
@@ -335,22 +362,60 @@ function ImportDirsPanel({
           border: '1px solid var(--border)',
         }}>
           <p className="muted" style={{ margin: '0 0 6px', fontSize: 11 }}>
-            勾选要导入为知识的顶层目录；全不勾 = 导入全部。
-            chat-captured/ 永远导入，不在列表中。改动后需手动 Import 重建索引；
-            已导入的旧目录数据不会自动清除。
+            勾选要导入为知识的目录，支持展开选子层级（如 domains/stability）；
+            全不勾 = 导入全部。chat-captured/ 永远导入，不在列表中。
+            改动后需手动 Import 重建索引；已导入的旧目录数据不会自动清除。
           </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
-            {dirs.map((d) => (
-              <label key={d} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={current.has(d)}
-                  onChange={() => toggle(d)}
-                />
-                <code>{d}/</code>
-              </label>
-            ))}
-          </div>
+          {tree.map(({ name, children }) => {
+            const state = topState(name, children);
+            const isOpen = expanded.has(name);
+            return (
+              <div key={name} style={{ marginBottom: 2 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {children.length > 0 ? (
+                    <button
+                      onClick={() => setExpanded((prev) => {
+                        const n = new Set(prev);
+                        if (n.has(name)) n.delete(name); else n.add(name);
+                        return n;
+                      })}
+                      style={{ fontSize: 10, width: 18, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                      aria-label={`expand ${name}`}
+                    >
+                      {isOpen ? '▾' : '▸'}
+                    </button>
+                  ) : <span style={{ width: 18, display: 'inline-block' }} />}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={state === 'all'}
+                      ref={(el) => { if (el) el.indeterminate = state === 'partial'; }}
+                      onChange={() => toggleTop(name, children)}
+                    />
+                    <code>{name}/</code>
+                    {state === 'partial' && (
+                      <span className="muted" style={{ fontSize: 10 }}>
+                        （{children.filter((c) => current.has(`${name}/${c}`)).length}/{children.length} 子目录）
+                      </span>
+                    )}
+                  </label>
+                </div>
+                {isOpen && children.map((c) => (
+                  <label key={c} style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    fontSize: 12, marginLeft: 40,
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={current.has(name) || current.has(`${name}/${c}`)}
+                      onChange={() => toggleChild(name, c, children)}
+                    />
+                    <code>{name}/{c}/</code>
+                  </label>
+                ))}
+              </div>
+            );
+          })}
           <div style={{ marginTop: 8 }}>
             <Button disabled={saving || selected === null} aria-busy={saving}
               onClick={() => { void save(); }}>

@@ -749,6 +749,18 @@ export class KnowledgeRepoManager {
    * whitelist can select from. chat-captured/ is excluded — it's
    * always imported, so listing it as a checkbox would mislead.
    */
+  /**
+   * Tree view for the import-dirs picker: top-level dirs with their
+   * immediate sub-dirs (one level — deep nesting stays a whole-dir
+   * choice). chat-captured/ excluded as always.
+   */
+  listRepoDirTree(repoId: string): Array<{ name: string; children: string[] }> {
+    return this.listRepoTopDirs(repoId).map((name) => ({
+      name,
+      children: this.listRepoTopDirs(repoId, name),
+    }));
+  }
+
   listRepoTopDirs(repoId: string, parent?: string): string[] {
     const repo = getKnowledgeRepo(this.db, repoId);
     if (!repo) {

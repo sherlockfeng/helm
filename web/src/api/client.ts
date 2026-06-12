@@ -692,7 +692,12 @@ export const helmApi = {
     }>('POST', '/api/knowledge-lookup', { query, ...(providers ? { providers } : {}) }),
   // v28: import-directory whitelist (+PR-γ: parent= lists sub-dirs).
   getRepoDirs: (repoId: string, parent?: string) =>
-    request<{ dirs: string[]; importDirs: string[] | null }>(
+    request<{
+      dirs: string[];
+      /** Tree-select picker: top dirs + one level of children. Absent when parent= given. */
+      tree?: Array<{ name: string; children: string[] }>;
+      importDirs: string[] | null;
+    }>(
       'GET', `/api/knowledge-repos/${encodeURIComponent(repoId)}/dirs${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`,
     ),
   // PR-γ: 升格 — consolidated personal knowledge → domains/ MR.

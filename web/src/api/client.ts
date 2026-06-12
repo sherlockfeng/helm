@@ -689,7 +689,7 @@ export const helmApi = {
     request<{ branch: string; prUrl: string; filesWritten: number }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
     ),
-  // Tika T2: ad-hoc external-knowledge lookup (Tika 对照 button).
+  // Ad-hoc external-knowledge lookup (外部知识对照 button).
   lookupKnowledge: (query: string, providers?: string[]) =>
     request<{
       snippets: Array<{ source: string; title: string; body: string; score?: number; citation?: string }>;

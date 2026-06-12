@@ -1,24 +1,24 @@
 /**
- * Unit tests for TikaProvider (MCP-stdio bridge to the Tika knowledge
- * platform). The real transport spawns `npx @tiktok-mcp/tika`; tests
- * inject a fake connection via the `connectFactory` seam — no
- * subprocess, no network.
+ * Unit tests for McpStdioProvider — the generic config-driven bridge to
+ * any MCP stdio knowledge server. The real transport spawns the
+ * configured command; tests inject a fake connection via the
+ * `connectFactory` seam — no subprocess, no network.
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { TikaProvider, type TikaMcpConnection } from '../../../src/knowledge/tika-provider.js';
+import { McpStdioProvider, type McpBridgeConnection } from '../../../src/knowledge/mcp-provider.js';
 
-function fakeConnection(overrides: Partial<TikaMcpConnection> = {}): TikaMcpConnection & {
+function fakeConnection(overrides: Partial<McpBridgeConnection> = {}): McpBridgeConnection & {
   calls: Array<{ name: string; arguments: Record<string, unknown> }>;
   closed: () => boolean;
 } {
   const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
   let closed = false;
   const conn = {
-    listTools: async () => ({ tools: [{ name: 'tika' }, { name: 'agent_chat' }] }),
+    listTools: async () => ({ tools: [{ name: 'kb' }, { name: 'agent_chat' }] }),
     callTool: async (input: { name: string; arguments: Record<string, unknown> }) => {
       calls.push(input);
-      return { content: [{ type: 'text', text: 'OG v5 已有结论：schema 不匹配时回退 v4。' }] };
+      return { content: [{ type: 'text', text: '已有结论：schema 不匹配时回退 v4。' }] };
     },
     close: async () => { closed = true; },
     ...overrides,
@@ -26,48 +26,54 @@ function fakeConnection(overrides: Partial<TikaMcpConnection> = {}): TikaMcpConn
   return Object.assign(conn, { calls, closed: () => closed });
 }
 
-function makeProvider(conn: TikaMcpConnection, opts: Partial<ConstructorParameters<typeof TikaProvider>[0]> = {}): TikaProvider {
-  return new TikaProvider({
-    tikaEnv: 'office', spaceId: 'space-1', serviceKey: 'sk-1',
+function makeProvider(conn: McpBridgeConnection, opts: Partial<ConstructorParameters<typeof McpStdioProvider>[0]> = {}): McpStdioProvider {
+  return new McpStdioProvider({
+    id: 'kb', command: 'npx',
     connectFactory: async () => conn,
     ...opts,
   });
 }
 
-describe('TikaProvider', () => {
-  it('personal-SSO mode: constructs without spaceId / serviceKey', () => {
-    // SSO mode passes only TIKA_ENV; the Tika MCP server pops browser
-    // authorization on first call. No constructor guard.
-    expect(() => new TikaProvider({ tikaEnv: 'office' })).not.toThrow();
+describe('McpStdioProvider', () => {
+  it('requires id + command', () => {
+    expect(() => new McpStdioProvider({ id: '', command: 'npx' })).toThrow(/id \+ command/);
+    expect(() => new McpStdioProvider({ id: 'kb', command: '' })).toThrow(/id \+ command/);
   });
 
-  it('search calls the auto-detected tika tool with userQuery and maps text to one snippet', async () => {
+  it('search calls the id-matching tool with the default userQuery param', async () => {
     const conn = fakeConnection();
     const p = makeProvider(conn);
     const snippets = await p.search('OG v5 schema');
-    expect(conn.calls).toEqual([{ name: 'tika', arguments: { userQuery: 'OG v5 schema' } }]);
+    expect(conn.calls).toEqual([{ name: 'kb', arguments: { userQuery: 'OG v5 schema' } }]);
     expect(snippets).toHaveLength(1);
     expect(snippets[0]).toMatchObject({
-      source: 'tika',
-      body: expect.stringContaining('OG v5 已有结论'),
+      source: 'kb',
+      body: expect.stringContaining('已有结论'),
     });
   });
 
-  it('honors an explicit toolName override without listing tools', async () => {
+  it('falls back to a search-named tool when no tool matches the id', async () => {
+    const conn = fakeConnection({
+      listTools: async () => ({ tools: [{ name: 'do_other' }, { name: 'kb_search' }] }),
+    });
+    const p = makeProvider(conn);
+    await p.search('q');
+    expect(conn.calls[0]?.name).toBe('kb_search');
+  });
+
+  it('honors an explicit toolName + queryParam without listing tools', async () => {
     const listTools = vi.fn();
     const conn = fakeConnection({ listTools });
-    const p = makeProvider(conn, { toolName: 'custom_search' });
-    await p.search('q');
+    const p = makeProvider(conn, { toolName: 'custom_search', queryParam: 'q' });
+    await p.search('hello');
     expect(listTools).not.toHaveBeenCalled();
-    expect(conn.calls[0]?.name).toBe('custom_search');
+    expect(conn.calls[0]).toEqual({ name: 'custom_search', arguments: { q: 'hello' } });
   });
 
   it('reuses one connection across queries (single connect)', async () => {
     const conn = fakeConnection();
     const factory = vi.fn(async () => conn);
-    const p = new TikaProvider({
-      tikaEnv: 'office', spaceId: 's', serviceKey: 'k', connectFactory: factory,
-    });
+    const p = new McpStdioProvider({ id: 'kb', command: 'npx', connectFactory: factory });
     await p.search('one');
     await p.search('two');
     expect(factory).toHaveBeenCalledTimes(1);
@@ -75,9 +81,7 @@ describe('TikaProvider', () => {
 
   it('empty / whitespace query short-circuits to [] without connecting', async () => {
     const factory = vi.fn();
-    const p = new TikaProvider({
-      tikaEnv: 'office', spaceId: 's', serviceKey: 'k', connectFactory: factory,
-    });
+    const p = new McpStdioProvider({ id: 'kb', command: 'npx', connectFactory: factory });
     expect(await p.search('   ')).toEqual([]);
     expect(factory).not.toHaveBeenCalled();
   });
@@ -97,9 +101,7 @@ describe('TikaProvider', () => {
       callTool: async () => { throw new Error('broken pipe'); },
     });
     const factory = vi.fn(async () => (attempt++ === 0 ? bad : good));
-    const p = new TikaProvider({
-      tikaEnv: 'office', spaceId: 's', serviceKey: 'k', connectFactory: factory,
-    });
+    const p = new McpStdioProvider({ id: 'kb', command: 'npx', connectFactory: factory });
     expect(await p.search('q1')).toEqual([]);
     expect(bad.closed()).toBe(true);
     const second = await p.search('q2');
@@ -117,15 +119,15 @@ describe('TikaProvider', () => {
 
   it('healthcheck reports ok with the resolved tool, unhealthy on connect failure', async () => {
     const p = makeProvider(fakeConnection());
-    expect(await p.healthcheck()).toEqual({ ok: true, reason: 'connected; tool=tika' });
+    expect(await p.healthcheck()).toEqual({ ok: true, reason: 'connected; tool=kb' });
 
-    const failing = new TikaProvider({
-      tikaEnv: 'office', spaceId: 's', serviceKey: 'k',
-      connectFactory: async () => { throw new Error('npx not found'); },
+    const failing = new McpStdioProvider({
+      id: 'kb', command: 'npx',
+      connectFactory: async () => { throw new Error('command not found'); },
     });
     const health = await failing.healthcheck();
     expect(health.ok).toBe(false);
-    expect(health.reason).toMatch(/npx not found/);
+    expect(health.reason).toMatch(/command not found/);
   });
 
   it('canHandle is unconditional and getSessionContext is null (query-driven only)', async () => {

@@ -203,9 +203,30 @@ function PromoteModal({ roleId, roleName, onClose }: {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const [result, setResult] = useState<{ prUrl: string; branch: string; relPath: string } | null>(null);
 
   const chunks = detail.data?.chunks ?? [];
+
+  // PR-γ2: AI 整理 — LLM merges the selected fragments into a polished
+  // draft, pulling the external knowledge sources in as reference.
+  const aiDraft = async (): Promise<void> => {
+    if (!wikiRepo) { toast.error('没有订阅 llm-wiki 仓库'); return; }
+    const fragments = chunks.filter((c) => selected.has(c.id)).map((c) => c.chunkText);
+    if (fragments.length === 0) { toast.error('先勾选要整理的碎片'); return; }
+    setDrafting(true);
+    try {
+      const r = await helmApi.promoteDraft(wikiRepo.id, {
+        fragments,
+        ...(domain.trim() ? { domain: domain.trim() } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
+      });
+      setBody(r.draft);
+      toast.success(r.usedExternalContext ? 'AI 草稿已生成（含外部参考）' : 'AI 草稿已生成');
+    } catch (err) {
+      toast.error(`AI 整理失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setDrafting(false); }
+  };
 
   const toggle = (id: string, text: string): void => {
     setSelected((prev) => {
@@ -293,10 +314,21 @@ function PromoteModal({ roleId, roleName, onClose }: {
                   <input type="text" value={title} placeholder="OG 标签接入与回退约定"
                     onChange={(e) => setTitle(e.target.value)} />
                 </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>合并稿（可编辑）</span>
+                  <button
+                    disabled={drafting || selected.size === 0}
+                    onClick={() => { void aiDraft(); }}
+                    title="LLM 把勾选的碎片整理成成熟文档草稿，自动引入外部知识源做参考印证"
+                    style={{ fontSize: 12 }}
+                  >
+                    {drafting ? 'AI 整理中…' : '✨ AI 整理'}
+                  </button>
+                </div>
                 <textarea
                   value={body}
                   rows={10}
-                  placeholder="勾选左侧碎片自动合并到这里，可自由编辑成一篇成熟文档"
+                  placeholder="勾选左侧碎片自动合并到这里；点 ✨AI 整理 生成润色稿；可自由编辑"
                   style={{ width: '100%', fontFamily: 'inherit', fontSize: 12 }}
                   onChange={(e) => setBody(e.target.value)}
                 />

@@ -720,6 +720,11 @@ export const helmApi = {
     request<{ branch: string; prUrl: string; filesWritten: number; relPath: string }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/promote`, input,
     ),
+  // PR-γ2: AI 整理 — LLM polishes fragments into a draft (external refs included).
+  promoteDraft: (repoId: string, input: { fragments: string[]; domain?: string; title?: string }) =>
+    request<{ draft: string; usedExternalContext: boolean }>(
+      'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/promote-draft`, input,
+    ),
   setRepoImportDirs: (repoId: string, importDirs: string[] | null) =>
     request<{ repo: KnowledgeRepo }>(
       'PATCH', `/api/knowledge-repos/${encodeURIComponent(repoId)}`, { importDirs },

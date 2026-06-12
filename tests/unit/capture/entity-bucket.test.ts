@@ -9,6 +9,7 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import {
   captureToEntityBuckets,
   entityBucketId,
+  isBucketableEntity,
 } from '../../../src/capture/entity-bucket.js';
 import { getRole, upsertRole, insertChunk, insertChunkEntity } from '../../../src/storage/repos/roles.js';
 
@@ -129,6 +130,63 @@ describe('captureToEntityBuckets', () => {
     });
     expect(r.candidatesCreated).toBe(0);
     expect(r.byRole).toEqual([]);
+  });
+});
+
+describe('isBucketableEntity (降噪)', () => {
+  it('rejects artifact-shaped tokens; keeps topic-shaped ones', () => {
+    // Artifacts: hosts, path/file segments, PR/issue ids, plain words.
+    expect(isBucketableEntity('github.com')).toBe(false);
+    expect(isBucketableEntity('heyunfeng.feng')).toBe(false);
+    expect(isBucketableEntity('165')).toBe(false);
+    expect(isBucketableEntity('github')).toBe(false);
+    // Topics: acronyms + camelCase identifiers.
+    expect(isBucketableEntity('DECC')).toBe(true);
+    expect(isBucketableEntity('OG')).toBe(true);
+    expect(isBucketableEntity('gatewayHandler')).toBe(true);
+  });
+});
+
+describe('captureToEntityBuckets — 降噪回归', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => { db = openDb(); seedSession(db, 's1'); });
+  afterEach(() => { db.close(); });
+
+  it('URL hosts / path ids never create buckets (the github/165 junk)', () => {
+    const text =
+      '相关讨论都在 https://github.com/org/repo/pull/165 这条 PR 里，'
+      + '另一个参考是 https://github.com/org/repo/pull/165 的评论区，'
+      + '路径在 chat-captured/heyunfeng.feng/og/ 下面，注意保留原始目录结构不要随意移动。';
+    const r = captureToEntityBuckets({ db, hostSessionId: 's1', responseText: text });
+    const buckets = r.byRole.map((b) => b.roleId);
+    expect(buckets.some((b) => b.includes('github'))).toBe(false);
+    expect(buckets.some((b) => b.includes('165'))).toBe(false);
+    expect(buckets.some((b) => b.includes('heyunfeng'))).toBe(false);
+  });
+
+  it('2-char dev-chat noise (AI/TL/DR) stays stopped at any frequency', () => {
+    const text =
+      'AI 的事情 AI 再说，AI 模型选型继续观望；TL 的反馈 TL 已经同步，TL 那边没有新意见；'
+      + 'DR 演练 DR 计划 DR 复盘都排到下个季度了，今天先把手头的发布流程走完再说。';
+    const r = captureToEntityBuckets({ db, hostSessionId: 's1', responseText: text });
+    expect(r.byRole).toEqual([]);
+  });
+
+  it('known-entity check is case-insensitive', () => {
+    upsertRole(db, {
+      id: 'infra', name: 'Infra', systemPrompt: 'p',
+      isBuiltin: false, createdAt: new Date().toISOString(),
+    });
+    insertChunk(db, {
+      id: 'c-low', roleId: 'infra', chunkText: 'decc 知识',
+      kind: 'other', createdAt: new Date().toISOString(),
+    });
+    insertChunkEntity(db, {
+      chunkId: 'c-low', roleId: 'infra', entity: 'decc',
+      createdAt: new Date().toISOString(),
+    });
+    const r = captureToEntityBuckets({ db, hostSessionId: 's1', responseText: DECC_PARA });
+    expect(r.candidatesCreated).toBe(0);
   });
 });
 

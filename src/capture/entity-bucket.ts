@@ -54,7 +54,23 @@ const TWO_CHAR_STOP: ReadonlySet<string> = new Set([
   'an', 'as', 'at', 'be', 'by', 'do', 'go', 'he', 'if', 'in', 'is', 'it',
   'me', 'my', 'no', 'of', 'ok', 'on', 'or', 'so', 'to', 'up', 'us', 'we',
   'id', 'ui', 'ux', 'ip', 'io',
+  // Dev-chat noise observed in practice (created junk buckets): generic
+  // abbreviations that are *about* the work, not domain knowledge.
+  'ai', 'tl', 'dr', 'pr', 'mr', 'ci', 'qa',
 ]);
+
+/**
+ * Bucket-topic eligibility. Buckets name KNOWLEDGE TOPICS, so only the
+ * acronym / camelCase extraction tiers qualify — URL hosts, path
+ * segments and file names ('github.com', 'heyunfeng.feng', '165' from
+ * pull/165) describe artifacts, not topics, and produced junk buckets.
+ */
+export function isBucketableEntity(entity: string): boolean {
+  if (/[./\\:@#]/.test(entity)) return false;          // hosts / paths / files
+  if (!/[A-Za-z]/.test(entity)) return false;            // digits-only (PR ids)
+  if (/^[a-z]+$/.test(entity)) return false;             // plain lowercase words
+  return true;
+}
 const TWO_CHAR_ACRONYM_RE = /\b[A-Z]{2}\d{0,2}\b/g;
 /** 2-char tokens need to be clearly recurring, not incidental. */
 const TWO_CHAR_MIN_MENTIONS = 3;
@@ -99,7 +115,8 @@ export function captureToEntityBuckets(
   // Entity universe of the response, minus UI noise. extractEntities
   // dedups internally; the filename arg only feeds Tier-5 context.
   const standard = extractEntities(responseText, 'agent-response')
-    .map((e) => ({ entity: e.entity, minMentions }));
+    .map((e) => ({ entity: e.entity, minMentions }))
+    .filter((e) => isBucketableEntity(e.entity));
   // 2-char acronym supplement ('OG') at a stricter mention bar.
   const twoChar = [...new Set(responseText.match(TWO_CHAR_ACRONYM_RE) ?? [])]
     .filter((e) => !TWO_CHAR_STOP.has(e.toLowerCase()))
@@ -111,7 +128,7 @@ export function captureToEntityBuckets(
   ].filter((e) => !STOP_ENTITIES.has(e.entity.toLowerCase()));
 
   const knownStmt = db.prepare(
-    `SELECT 1 FROM knowledge_chunk_entities WHERE entity = ? LIMIT 1`,
+    `SELECT 1 FROM knowledge_chunk_entities WHERE entity = ? COLLATE NOCASE LIMIT 1`,
   );
   const qualifying: Array<{ entity: string; bucketId: string; mentions: number }> = [];
   for (const { entity, minMentions: bar } of entities) {

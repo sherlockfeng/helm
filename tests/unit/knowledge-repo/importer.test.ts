@@ -347,9 +347,11 @@ describe('importRepoIntoLibrary', () => {
     // Before the path-slug fallback, wiki/index.md and domains/index.md
     // both got id 'index' and overwrote each other (role stuck on
     // whichever imported first).
+    // (domains/ now imports per sub-domain, so the second同名 file
+    // lives in another plain top-level dir.)
     const fs = makeFs({
       '/repo/wiki/index.md': '# Wiki home\nwiki body',
-      '/repo/domains/index.md': '# Domains home\ndomains body',
+      '/repo/benchmark/index.md': '# Benchmark home\nbenchmark body',
     });
     const summary = importRepoIntoLibrary({
       db, localPath: '/repo', profile: 'llm-wiki', fs,
@@ -359,7 +361,7 @@ describe('importRepoIntoLibrary', () => {
       `SELECT id, role_id FROM knowledge_chunks ORDER BY id`,
     ).all() as Array<{ id: string; role_id: string }>;
     expect(rows).toEqual([
-      { id: 'domains-index', role_id: 'domains' },
+      { id: 'benchmark-index', role_id: 'benchmark' },
       { id: 'wiki-index', role_id: 'wiki' },
     ]);
   });
@@ -381,6 +383,25 @@ describe('importRepoIntoLibrary', () => {
     expect(getRole(db, 'scripts')).toBeUndefined();
     expect(getRole(db, 'raw')).toBeUndefined();
     expect(getRolesForPoint(db, 'chat-captured-hyf-dr-docs-cap')).toEqual(['dr-docs']);
+  });
+
+  it('domains/ imports at sub-domain granularity (domains itself is no collection)', () => {
+    const fs = makeFs({
+      '/repo/domains/stability/dr-plan.md': '# DR plan\n切流预案正文',
+      '/repo/domains/stability/tlb.md': '# TLB\nTLB 配置正文',
+      '/repo/domains/quality/lint.md': '# Lint\n质量门禁正文',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs, importDirs: ['domains'],
+    });
+    expect(summary.rolesImported).toBe(2);
+    expect(summary.pointsUpserted).toBe(3);
+    expect(getRole(db, 'domains')).toBeUndefined();
+    expect(getRole(db, 'stability')?.name).toBe('stability');
+    expect(getRole(db, 'stability')?.bindable).toBe(false);
+    expect(getRole(db, 'quality')?.name).toBe('quality');
+    // Path-slug ids keep the full provenance.
+    expect(getRolesForPoint(db, 'domains-stability-dr-plan')).toEqual(['stability']);
   });
 
   it('v28: empty importDirs behaves like no whitelist (import everything)', () => {

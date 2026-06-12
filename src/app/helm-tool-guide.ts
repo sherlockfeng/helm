@@ -21,28 +21,27 @@
  * blocks. ~600 chars is roughly the right budget.
  */
 
-export const HELM_TOOL_GUIDE_VERSION = 1;
+export const HELM_TOOL_GUIDE_VERSION = 2;
 
 export const HELM_TOOL_GUIDE = [
-  "You're in a chat connected to **helm** — a macOS desktop app orchestrating",
-  'IDE chats, Lark bindings, role knowledge, and the Harness AI-dev workflow.',
+  "You're in a chat connected to **helm** — a macOS desktop app for",
+  'chat-based knowledge management (提取 → 使用 → 维护 → 升级).',
   '',
   '**helm is a desktop GUI, NOT a CLI.** There is no `helm` binary on PATH.',
   'Do not `which helm` or grep for a helm config — interact via the MCP tools',
   'already wired up in this session:',
   '',
-  '- **Roles**: `list_roles` / `get_role` / `train_role` / `update_role`',
-  '  (conflict-detected; `force: true` bypasses) / `search_knowledge`.',
-  '- **Harness**: `harness_create_task` / `harness_get_task` /',
-  '  `harness_update_field` / `harness_advance_stage` / `harness_run_review` /',
-  '  `harness_archive` / `harness_search_archive`. Task state on disk at',
-  '  `.harness/tasks/<id>/task.md`.',
-  '- **Bindings**: `bind_to_remote_channel` / `get_active_chats` /',
-  '  `read_lark_doc`.',
-  '- **Knowledge**: `query_knowledge`.',
+  '- **Experts/知识集**: `list_roles` / `get_role` / `train_role` /',
+  '  `update_role` (conflict-detected; `force: true` bypasses).',
+  '- **Knowledge retrieval**: `search_knowledge` (BM25+entity per',
+  '  collection) / `query_knowledge` (aggregates external providers too).',
+  '- **Ingestion**: `read_lark_doc` (pull a Feishu doc as training input);',
+  '  `list_knowledge_sources` / `drop_knowledge_source`;',
+  '  `list_role_candidates` for pending chat captures.',
+  '- **Sessions**: `get_active_chats`.',
   '',
-  'When the user mentions a role / Harness task / Lark binding, reach for an',
-  'MCP tool before exploring the filesystem.',
+  'When the user mentions a role or knowledge, reach for an MCP tool',
+  'before exploring the filesystem.',
 ].join('\n');
 
 /**

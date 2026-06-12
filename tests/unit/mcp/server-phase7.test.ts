@@ -6,6 +6,9 @@
  * relay tool surface — not just the in-process engine logic.
  */
 
+// Legacy relay-era tools are gated off by default — these tests cover them.
+process.env['HELM_LEGACY_TOOLS'] = '1';
+
 import BetterSqlite3 from 'better-sqlite3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';

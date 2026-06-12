@@ -11,6 +11,9 @@
  *     shape the host_prompt_submit handler relies on
  */
 
+// Legacy relay-era tools are gated off by default — these tests cover them.
+process.env['HELM_LEGACY_TOOLS'] = '1';
+
 import { describe, expect, it } from 'vitest';
 import {
   HELM_TOOL_GUIDE,
@@ -28,17 +31,16 @@ describe('HELM_TOOL_GUIDE constant', () => {
   });
 
   it('names every major MCP tool namespace so the agent can route requests', () => {
-    // Each line is a category the agent might be asked about. If we add
-    // a tool family later (e.g. cycle / requirements), bump this list AND
-    // update HELM_TOOL_GUIDE_VERSION so existing chats receive the new
-    // text via the prompt-submit fallback.
+    // Each line is a category the agent might be asked about. Legacy
+    // relay-era families (harness / bindings) left the guide when their
+    // tools were gated off — the guide must only advertise what is
+    // actually registered (HELM_TOOL_GUIDE_VERSION bumped to 2).
     for (const tool of [
       'list_roles', 'update_role', 'train_role', 'search_knowledge',
-      'harness_create_task', 'harness_advance_stage', 'harness_run_review',
-      'harness_search_archive',
-      'bind_to_remote_channel', 'get_active_chats',
+      'get_active_chats',
       'read_lark_doc',
       'query_knowledge',
+      'list_knowledge_sources', 'list_role_candidates',
     ]) {
       expect(HELM_TOOL_GUIDE).toContain(tool);
     }

@@ -347,9 +347,11 @@ describe('importRepoIntoLibrary', () => {
     // Before the path-slug fallback, wiki/index.md and domains/index.md
     // both got id 'index' and overwrote each other (role stuck on
     // whichever imported first).
+    // (domains/ now imports per sub-domain, so the second同名 file
+    // lives in another plain top-level dir.)
     const fs = makeFs({
       '/repo/wiki/index.md': '# Wiki home\nwiki body',
-      '/repo/domains/index.md': '# Domains home\ndomains body',
+      '/repo/benchmark/index.md': '# Benchmark home\nbenchmark body',
     });
     const summary = importRepoIntoLibrary({
       db, localPath: '/repo', profile: 'llm-wiki', fs,
@@ -359,7 +361,7 @@ describe('importRepoIntoLibrary', () => {
       `SELECT id, role_id FROM knowledge_chunks ORDER BY id`,
     ).all() as Array<{ id: string; role_id: string }>;
     expect(rows).toEqual([
-      { id: 'domains-index', role_id: 'domains' },
+      { id: 'benchmark-index', role_id: 'benchmark' },
       { id: 'wiki-index', role_id: 'wiki' },
     ]);
   });

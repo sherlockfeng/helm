@@ -1050,6 +1050,21 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 31,
+    description:
+      'roles.bindable (knowledge tiers PR-δ) — splits the collection'
+      + ' layer: bindable=1 is an Expert (prompt, chat binding, session'
+      + ' injection); bindable=0 is a pure knowledge Collection (imported'
+      + ' dirs like wiki/, entity buckets like og). Retrieval treats both'
+      + ' the same; only the binding/persona surface differs. Backfill:'
+      + ' non-builtin roles with an empty prompt are collections.',
+    up: `
+      ALTER TABLE roles ADD COLUMN bindable INTEGER NOT NULL DEFAULT 1;
+      UPDATE roles SET bindable = 0
+       WHERE is_builtin = 0 AND TRIM(COALESCE(system_prompt, '')) = '';
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

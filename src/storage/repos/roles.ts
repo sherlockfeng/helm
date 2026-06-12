@@ -21,6 +21,7 @@ function rowToRole(row: Record<string, unknown>): Role {
     // helm install that for some reason runs against a DB at v16; the
     // ALTER TABLE in v17 fills NULLs with 1 via the column default.
     version: row['version'] != null ? Number(row['version']) : 1,
+    bindable: row['bindable'] != null ? Boolean(Number(row['bindable'])) : true,
   };
 }
 
@@ -45,18 +46,35 @@ function rowToAgentSession(row: Record<string, unknown>): AgentSession {
  * built-in role re-seeding at boot doesn't accidentally bump every
  * restart.
  */
-export function upsertRole(db: Database.Database, r: Omit<Role, 'version'>): void {
+export function upsertRole(
+  db: Database.Database,
+  r: Omit<Role, 'version' | 'bindable'> & {
+    /** Applied on INSERT only; conflicts never flip an existing row's
+     *  Expert/Collection status. Default true (Expert) — namespace
+     *  creators (importer, entity buckets) pass false explicitly. */
+    bindable?: boolean;
+  },
+): void {
   db.prepare(`
-    INSERT INTO roles (id, name, system_prompt, doc_path, is_builtin, created_at)
-    VALUES (@id, @name, @system_prompt, @doc_path, @is_builtin, @created_at)
+    INSERT INTO roles (id, name, system_prompt, doc_path, is_builtin, bindable, created_at)
+    VALUES (@id, @name, @system_prompt, @doc_path, @is_builtin, @bindable, @created_at)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       system_prompt = excluded.system_prompt,
       doc_path = excluded.doc_path
   `).run({
     id: r.id, name: r.name, system_prompt: r.systemPrompt,
-    doc_path: r.docPath ?? null, is_builtin: r.isBuiltin ? 1 : 0, created_at: r.createdAt,
+    doc_path: r.docPath ?? null, is_builtin: r.isBuiltin ? 1 : 0,
+    bindable: r.bindable === false ? 0 : 1,
+    created_at: r.createdAt,
   });
+}
+
+/** PR-δ: flip Expert (true) / Collection (false). Not a content change — no version bump. */
+export function setRoleBindable(db: Database.Database, id: string, bindable: boolean): boolean {
+  const info = db.prepare(`UPDATE roles SET bindable = ? WHERE id = ?`)
+    .run(bindable ? 1 : 0, id);
+  return info.changes > 0;
 }
 
 /**

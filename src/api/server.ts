@@ -82,6 +82,7 @@ import { pendingCountsByHostSession as candidateCountsByHostSession } from '../s
 import {
   deleteSource,
   getChunkById as getChunkByIdRepo,
+  setRoleBindable,
   getChunksForRole,
   getRole as getRoleRow,
   getSource,
@@ -811,6 +812,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           pendingCandidateCount: pendingByRole.get(r.id) ?? 0,
         }));
         return send(res, 200, { roles });
+      }
+      // PR-δ: flip Expert / Collection.
+      //   PATCH /api/roles/:id/bindable  body { bindable: boolean }
+      const roleBindableMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/bindable$/);
+      if (roleBindableMatch) {
+        if (req.method !== 'PATCH') return methodNotAllowed(res);
+        let body: { bindable?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body.bindable !== 'boolean') {
+          return badRequest(res, 'bindable must be a boolean');
+        }
+        const ok = setRoleBindable(deps.db, roleBindableMatch[1]!, body.bindable);
+        if (!ok) return notFound(res);
+        return send(res, 200, { roleId: roleBindableMatch[1]!, bindable: body.bindable });
       }
       const roleTrainMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/train$/);
       if (roleTrainMatch) {

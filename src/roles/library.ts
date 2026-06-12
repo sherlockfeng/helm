@@ -83,7 +83,7 @@ export function fireLifecycleSweep(roleId: string): void {
   }
 }
 
-const BUILTIN_ROLES: Omit<Role, 'createdAt' | 'version'>[] = [
+const BUILTIN_ROLES: Omit<Role, 'createdAt' | 'version' | 'bindable'>[] = [
   { id: 'product', name: 'Product Agent', systemPrompt: PRODUCT_SYSTEM_PROMPT, docPath: 'docs/roles/product.md', isBuiltin: true },
   { id: 'developer', name: 'Developer Agent', systemPrompt: DEVELOPER_SYSTEM_PROMPT, docPath: 'docs/roles/developer.md', isBuiltin: true },
   { id: 'tester', name: 'Test Agent', systemPrompt: TESTER_SYSTEM_PROMPT, docPath: 'docs/roles/tester.md', isBuiltin: true },

@@ -47,8 +47,10 @@ describe('captureToEntityBuckets', () => {
     expect(cand.roleId).toBe('decc');
     expect(cand.scoreEntity).toBeGreaterThanOrEqual(2);
     expect(cand.scoreCosine).toBe(0);
-    // Namespace collection materialized with the entity's display name.
+    // Namespace collection materialized with the entity's display name —
+    // as a Collection, not a bindable Expert (PR-δ).
     expect(getRole(db, 'decc')?.name).toBe('DECC');
+    expect(getRole(db, 'decc')?.bindable).toBe(false);
   });
 
   it('skips entities some role already knows (they belong to that flow)', () => {

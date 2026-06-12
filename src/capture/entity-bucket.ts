@@ -137,6 +137,7 @@ export function captureToEntityBuckets(
         name: entity,
         systemPrompt: '',
         isBuiltin: false,
+        bindable: false, // PR-δ: buckets are Collections, not Experts
         createdAt: now,
       });
     }

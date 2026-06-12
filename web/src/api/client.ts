@@ -690,6 +690,11 @@ export const helmApi = {
     request<{ branch: string; prUrl: string; filesWritten: number }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
     ),
+  // PR-δ: flip Expert / Collection.
+  setRoleBindable: (roleId: string, bindable: boolean) =>
+    request<{ roleId: string; bindable: boolean }>(
+      'PATCH', `/api/roles/${encodeURIComponent(roleId)}/bindable`, { bindable },
+    ),
   // PR-β: candidate external-context cache.
   getCandidateContexts: (candidateIds: string[]) =>
     request<{ contexts: Record<string, CandidateExternalContext> }>(

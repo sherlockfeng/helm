@@ -105,6 +105,8 @@ describe('importRepoIntoLibrary', () => {
     const role = getRole(db, 'tiktok-web-dr');
     expect(role?.name).toBe('TikTok Web 容灾专家');
     expect(role?.systemPrompt).toBe('How to use this collection of DR knowledge.');
+    // helm-native repos publish role-shaped collections — stay Experts.
+    expect(role?.bindable).toBe(true);
 
     expect(getAliasesForPoint(db, 'dr-overview').map((a) => a.alias).sort())
       .toEqual(['DR', '容灾']);
@@ -140,6 +142,8 @@ describe('importRepoIntoLibrary', () => {
     });
     expect(summary.rolesImported).toBe(2);
     expect(getRole(db, 'dr-docs')?.name).toBe('dr-docs');
+    // PR-δ: imported top-level dirs are Collections, not Experts.
+    expect(getRole(db, 'dr-docs')?.bindable).toBe(false);
     expect(getRole(db, 'doc-lsp-docs')?.name).toBe('doc-lsp-docs');
     expect(getRole(db, '.github')).toBeUndefined();
     expect(getRole(db, 'node_modules')).toBeUndefined();
@@ -335,6 +339,8 @@ describe('importRepoIntoLibrary', () => {
     const role = getRole(db, 'dr-docs');
     expect(role?.systemPrompt).toBe('trained prompt — do not clobber');
     expect(role?.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    // PR-δ: re-import must not demote an existing Expert to Collection.
+    expect(role?.bindable).toBe(true);
   });
 
   it('v28 regression: same-named files in different dirs stay distinct chunks', () => {

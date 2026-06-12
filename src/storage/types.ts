@@ -57,6 +57,10 @@ export interface Role {
    *  PR C will gate pull-apply by comparing it to the bundle's
    *  `roleVersion`. Fresh roles + back-migrated rows start at 1. */
   version: number;
+  /** PR-δ: Expert (true — prompt + chat binding + session injection)
+   *  vs pure knowledge Collection (false — imported dirs, entity
+   *  buckets). Retrieval ignores this; only the persona surface cares. */
+  bindable: boolean;
 }
 
 /**

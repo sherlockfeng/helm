@@ -127,6 +127,8 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         ?? existingRole?.systemPrompt
         ?? '',
       isBuiltin: existingRole?.isBuiltin ?? false,
+      // Only consulted on INSERT — conflicts never flip an existing row.
+      ...(bucket.bindable !== undefined ? { bindable: bucket.bindable } : {}),
       createdAt: existingRole?.createdAt ?? now,
     });
     if (!seenRoles.has(bucket.roleId)) {
@@ -167,6 +169,10 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
 interface RoleBucket {
   roleId: string;
   roleName: string;
+  /** PR-δ: false = pure knowledge Collection (llm-wiki dirs, captured
+   *  buckets, generic imports). Applied on role CREATION only — an
+   *  existing Expert sharing the id is never demoted. */
+  bindable?: boolean;
   briefingText?: string;
   /** The dir paths under this bucket are walked recursively for .md files. */
   roleDir: string;
@@ -272,6 +278,7 @@ function enumerateLlmWiki(
     out.push({
       roleId: slug,
       roleName: slug,
+      bindable: false,
       roleDir,
       pointFiles,
     });
@@ -307,7 +314,7 @@ function enumerateChatCaptured(fs: WalkerFs, capturedRoot: string): RoleBucket[]
       const roleDir = join(userDir, role);
       const pointFiles = walkMarkdownFiles(fs, roleDir);
       if (pointFiles.length === 0) continue;
-      out.push({ roleId: role, roleName: role, roleDir, pointFiles });
+      out.push({ roleId: role, roleName: role, bindable: false, roleDir, pointFiles });
     }
   }
   return out;
@@ -344,6 +351,7 @@ function enumerateGeneric(fs: WalkerFs, localPath: string): RoleBucket[] {
   return [{
     roleId: 'imported',
     roleName: 'Imported',
+    bindable: false,
     roleDir: localPath,
     pointFiles,
   }];

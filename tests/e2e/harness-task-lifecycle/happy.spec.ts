@@ -9,6 +9,9 @@
  * spec (`review.spec.ts`) covers the reviewer-isolation contract.
  */
 
+// Legacy relay-era tools are gated off by default — this suite exercises them.
+process.env['HELM_LEGACY_TOOLS'] = '1';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';

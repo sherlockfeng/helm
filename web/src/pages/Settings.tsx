@@ -30,7 +30,6 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { Link } from 'react-router-dom';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { CopyButton } from '../components/CopyButton.js';
@@ -140,9 +139,11 @@ function partsToCommandLine(cfg: McpProviderUiConfig): string {
 
 // ── Section identifiers ──────────────────────────────────────────────
 
+// B 类隐藏（知识生命周期之外的 relay 遗留）：Integrations(Lark)、
+// Workflow(Doc-first/Harness)、Advanced(Approvals/Harness 入口) 区块
+// 不再暴露；后端与 config 键保持不变，路由仍可直达。
 const SECTIONS = [
-  'general', 'engines', 'knowledge', 'integrations',
-  'workflow', 'advanced', 'diagnostics',
+  'general', 'engines', 'knowledge', 'diagnostics',
 ] as const;
 type SectionId = typeof SECTIONS[number];
 const ENGINE_TABS = ['cursor', 'claude-code', 'codex'] as const;
@@ -289,13 +290,6 @@ export function SettingsPage(): ReactElement | null {
           {activeSection === 'knowledge' && (
             <KnowledgeSection draft={draft} update={update} />
           )}
-          {activeSection === 'integrations' && (
-            <IntegrationsSection draft={draft} update={update} />
-          )}
-          {activeSection === 'workflow' && (
-            <WorkflowSection draft={draft} update={update} />
-          )}
-          {activeSection === 'advanced' && <AdvancedSection />}
           {activeSection === 'diagnostics' && <DiagnosticsSection />}
 
           {/* Pinned Save/Revert footer — every section that mutates
@@ -355,9 +349,6 @@ const LABEL_FOR: Record<SectionId, string> = {
   general: 'General',
   engines: 'Engines',
   knowledge: 'Knowledge',
-  integrations: 'Integrations',
-  workflow: 'Workflow',
-  advanced: 'Advanced',
   diagnostics: 'Diagnostics',
 };
 
@@ -920,117 +911,6 @@ function KnowledgeSection({
             });
           })}
         >+ 添加 provider</Button>
-      </Card>
-    </>
-  );
-}
-
-// ── Integrations section ─────────────────────────────────────────────
-
-function IntegrationsSection({
-  draft, update,
-}: { draft: HelmConfig; update: (m: (c: HelmConfig) => void) => void }): ReactElement {
-  return (
-    <>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Lark integration</h3>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={draft.lark.enabled}
-            onChange={(e) => update((c) => { c.lark.enabled = e.target.checked; })}
-          />
-          Enable Lark channel
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">lark-cli command</div>
-          <input
-            type="text"
-            value={draft.lark.cliCommand ?? ''}
-            placeholder="auto (uses LARK_CLI_COMMAND env or bundled binary)"
-            onChange={(e) => update((c) => { c.lark.cliCommand = e.target.value || undefined; })}
-          />
-        </label>
-      </Card>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Lark bindings</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          Per-chat Lark channel binding management lives on a dedicated
-          page — too much detail (queue depth, expiry, manual rebind)
-          for a Settings card.
-        </p>
-        <Link to="/bindings"><Button>Open Lark bindings ↗</Button></Link>
-      </Card>
-    </>
-  );
-}
-
-// ── Workflow section ─────────────────────────────────────────────────
-
-function WorkflowSection({
-  draft, update,
-}: { draft: HelmConfig; update: (m: (c: HelmConfig) => void) => void }): ReactElement {
-  return (
-    <>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Doc-first enforcement</h3>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={draft.docFirst.enforce}
-            onChange={(e) => update((c) => { c.docFirst.enforce = e.target.checked; })}
-          />
-          Require <code>update_doc_first</code> before completing dev tasks
-        </label>
-        <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>
-          When on, dev tasks need a fresh docAuditToken to complete.
-          Disable for casual / one-off sessions where the doc-first
-          cadence isn't worth the friction.
-        </p>
-      </Card>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Harness conventions</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          Injected into every Harness review subprocess. The reviewer
-          sees this text alongside Intent, Structure, and the diff —
-          but never the implementer's Decisions or Stage Log.
-        </p>
-        <textarea
-          value={draft.harness?.conventions ?? ''}
-          placeholder={'e.g.\n- All new SQL tables must include created_at/updated_at TEXT NOT NULL.\n- HTTP handlers go through `send(res, ...)`; never `res.write` directly.'}
-          rows={8}
-          style={{ width: '100%', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}
-          onChange={(e) => update((c) => {
-            if (!c.harness) c.harness = { conventions: '' };
-            c.harness.conventions = e.target.value;
-          })}
-        />
-      </Card>
-    </>
-  );
-}
-
-// ── Advanced section (replaces /settings/advanced) ───────────────────
-
-function AdvancedSection(): ReactElement {
-  return (
-    <>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Approvals queue</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          Tool-use approval queue for Cursor hooks. Lives behind its own
-          page because it's a real-time interactive surface.
-        </p>
-        <Link to="/approvals"><Button>Open Approvals ↗</Button></Link>
-      </Card>
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Harness</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          Multi-stage feature-development workflow. Most users won't
-          touch this; it's here as an opt-in surface for teams running
-          the Harness loop.
-        </p>
-        <Link to="/harness"><Button>Open Harness ↗</Button></Link>
       </Card>
     </>
   );

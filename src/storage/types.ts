@@ -324,35 +324,8 @@ export interface KnowledgeCandidate {
  * applying would clobber local edits. User resolves via the
  * `/resolve-conflict` endpoint (use_remote / keep_local).
  */
-export type SubscriptionStatus = 'active' | 'paused' | 'error' | 'conflict';
 
-export interface RoleSubscription {
-  id: string;
-  roleId: string;
-  sourceType: string;
-  sourceUrl: string;
-  /** Storage-backend opaque change-detection token (etag for HTTP-style;
-   * content hash for fs-style). Compared on each sync to decide whether
-   * to GET the full bundle. */
-  lastEtag?: string;
-  /** sha256(canonical JSON of last successfully-unpacked bundle's chunks).
-   * Defense-in-depth: even if the backend's etag is misleading or absent,
-   * a matching content hash means "no change". */
-  lastContentHash?: string;
-  lastSyncAt?: string;
-  /** Populated when status === 'error' OR 'conflict'; cleared on next
-   *  successful sync / on explicit conflict-resolution. */
-  lastError?: string;
-  syncIntervalMinutes: number;
-  autoApply: boolean;
-  status: SubscriptionStatus;
-  /** Phase 80 (PR C): bundle's `roleVersion` at the moment of the last
-   *  successful apply. NULL = never pulled (first sync skips the
-   *  4-case conflict gate). Compared with local `role.version` +
-   *  remote `bundle.roleVersion` to detect divergent edits. */
-  lastPulledVersion?: number;
-  createdAt: string;
-}
+// RoleSubscription removed with the .helmrole bundle ecosystem (v33).
 
 // RoleMirror (Phase 80 PR B) removed — superseded by files-as-truth:
 // knowledge syncs through the llm-wiki repo (MR flows), not .helmrole

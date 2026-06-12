@@ -14,6 +14,7 @@
  * subsequent prompts in the same chat skip the path.
  */
 
+import { HELM_TOOL_GUIDE_VERSION } from '../../../src/app/helm-tool-guide.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootE2e, runHookViaBridge, type E2eHarness } from '../_helpers/setup.js';
 import { setLastInjectedGuideVersion, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
@@ -33,8 +34,8 @@ describe('helm-tool-guide injection (Phase 71)', () => {
     expect(r.additional_context).toBeDefined();
     expect(r.additional_context).toContain('helm is a desktop GUI');
     expect(r.additional_context).toContain('list_roles');
-    expect(r.additional_context).toContain('harness_create_task');
-    expect(r.additional_context).toContain('bind_to_remote_channel');
+    expect(r.additional_context).toContain('search_knowledge');
+    expect(r.additional_context).toContain('query_knowledge');
   });
 
   it('sessionStart bumps last_injected_guide_version to the current constant', async () => {
@@ -45,7 +46,7 @@ describe('helm-tool-guide injection (Phase 71)', () => {
     const row = harness.db.prepare(
       `SELECT last_injected_guide_version FROM host_sessions WHERE id = ?`,
     ).get('sess_g2') as { last_injected_guide_version: number };
-    expect(row.last_injected_guide_version).toBe(1);
+    expect(row.last_injected_guide_version).toBe(HELM_TOOL_GUIDE_VERSION);
   });
 
   it('prompt-submit injects the guide as <helm:tool-guide> prefix when version is stale', async () => {
@@ -72,7 +73,7 @@ describe('helm-tool-guide injection (Phase 71)', () => {
       id: 'sess_g4', host: 'cursor', cwd: '/proj',
       status: 'active', firstSeenAt: now, lastSeenAt: now,
     });
-    setLastInjectedGuideVersion(harness.db, 'sess_g4', 1);
+    setLastInjectedGuideVersion(harness.db, 'sess_g4', HELM_TOOL_GUIDE_VERSION);
 
     const r = await runHookViaBridge(harness, {
       event: 'beforeSubmitPrompt',

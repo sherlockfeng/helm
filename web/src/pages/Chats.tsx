@@ -248,6 +248,19 @@ function ConversationDetailPane({
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [savingTitle, setSavingTitle] = useState(false);
 
+  // v34: per-chat capture mute — helm-dev chats about helm itself were
+  // producing meta-noise buckets.
+  async function toggleCapture(): Promise<void> {
+    const next = data?.session.captureDisabled === true; // disabled → enable
+    try {
+      await helmApi.setChatCapture(chat.id, next);
+      toast.success(next ? '已恢复此对话的知识捕获' : '已暂停此对话的知识捕获');
+      reload();
+    } catch (err) {
+      toast.error(`切换失败: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    }
+  }
+
   async function addRole(roleId: string): Promise<void> {
     setSavingRole(true);
     try {
@@ -328,6 +341,8 @@ function ConversationDetailPane({
         <OverflowMenu
           onRename={() => setEditingTitle(true)}
           onCopyId={() => { void copySessionId(); }}
+          captureDisabled={data?.session.captureDisabled === true}
+          onToggleCapture={() => { void toggleCapture(); }}
           onDelete={() => setDeleteConfirm(true)}
         />
       </div>
@@ -1285,10 +1300,14 @@ function PromptPreview({ text }: { text: string }): ReactElement {
 function OverflowMenu({
   onRename,
   onCopyId,
+  captureDisabled,
+  onToggleCapture,
   onDelete,
 }: {
   onRename: () => void;
   onCopyId: () => void;
+  captureDisabled: boolean;
+  onToggleCapture: () => void;
   onDelete: () => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -1322,6 +1341,9 @@ function OverflowMenu({
           </button>
           <button type="button" role="menuitem" onClick={() => { onCopyId(); setOpen(false); }}>
             Copy session id
+          </button>
+          <button type="button" role="menuitem" onClick={() => { onToggleCapture(); setOpen(false); }}>
+            {captureDisabled ? '🔔 恢复知识捕获' : '🔕 暂停知识捕获'}
           </button>
           <div className="helm-conv-overflow-divider" role="separator" />
           <button

@@ -142,6 +142,18 @@ export const helmApi = {
     );
   },
 
+  // v34: per-chat capture mute toggle.
+  setChatCapture: (hostSessionId: string, enabled: boolean) =>
+    request<{ hostSessionId: string; captureEnabled: boolean }>(
+      'PUT',
+      `/api/active-chats/${encodeURIComponent(hostSessionId)}/capture`,
+      { enabled },
+    ),
+  // Topics cleanup: delete a non-builtin collection/expert (chunks cascade).
+  deleteRole: (roleId: string) =>
+    request<{ roleId: string; deleted: true }>(
+      'DELETE', `/api/roles/${encodeURIComponent(roleId)}`,
+    ),
   // Phase 55: rename / clear the user-facing chat label. Pass null or empty
   // string to clear back to the firstPrompt-based fallback.
   setChatLabel: (hostSessionId: string, label: string | null) =>

@@ -123,7 +123,7 @@ export function KnowledgePromotePage(): ReactElement {
               <div style={{ flex: 1 }}>
                 <strong>{r.name}</strong>
                 <span className="muted" style={{ fontSize: 12 }}>
-                  {' '}· {r.bindable === false ? '知识集' : '专家'} · {r.chunkCount} 条知识点
+                  {' '}· {r.bindable === false ? 'topic' : 'expert'} · {r.chunkCount} 条知识点
                 </span>
               </div>
               <Button onClick={() => setPromoteTarget({ roleId: r.id, name: r.name })}>

@@ -30,6 +30,7 @@ import {
   removeHostSessionRole,
   setHostSessionDisplayName,
   setHostSessionRole,
+  setSessionCaptureDisabled,
   updateHostSession,
 } from '../storage/repos/host-sessions.js';
 import { getConversationDetail } from './conversation-detail.js';
@@ -80,6 +81,7 @@ import {
 import { promptCountsByHostSession } from '../storage/repos/host-event-log.js';
 import { pendingCountsByHostSession as candidateCountsByHostSession } from '../storage/repos/knowledge-candidates.js';
 import {
+  deleteRole as deleteRoleRepo,
   deleteSource,
   getChunkById as getChunkByIdRepo,
   setRoleBindable,
@@ -646,6 +648,23 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // Phase 55: rename the user-facing chat label.
       //   PUT /api/active-chats/:id/label   { label: string | null }
       // Empty / null clears back to the firstPrompt-based fallback.
+      // v34: per-chat capture mute toggle.
+      //   PUT /api/active-chats/:id/capture  body { enabled: boolean }
+      const chatCaptureMatch = url.pathname.match(
+        /^\/api\/active-chats\/([^/]+)\/capture$/,
+      );
+      if (chatCaptureMatch) {
+        if (req.method !== 'PUT') return methodNotAllowed(res);
+        let body: { enabled?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body.enabled !== 'boolean') {
+          return badRequest(res, 'enabled must be a boolean');
+        }
+        const ok = setSessionCaptureDisabled(deps.db, chatCaptureMatch[1]!, !body.enabled);
+        if (!ok) return notFound(res);
+        return send(res, 200, { hostSessionId: chatCaptureMatch[1]!, captureEnabled: body.enabled });
+      }
       const chatLabelMatch = url.pathname.match(/^\/api\/active-chats\/([^/]+)\/label$/);
       if (chatLabelMatch) {
         if (req.method !== 'PUT') return methodNotAllowed(res);
@@ -759,6 +778,19 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           pendingCandidateCount: pendingByRole.get(r.id) ?? 0,
         }));
         return send(res, 200, { roles });
+      }
+      // Topics cleanup: DELETE /api/roles/:id — remove a non-builtin
+      // collection/expert with everything attached (chunks cascade via
+      // FK). Guarded: built-ins are seeded from src and must stay.
+      const roleDeleteMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
+      if (roleDeleteMatch && req.method === 'DELETE') {
+        const role = getRoleRow(deps.db, roleDeleteMatch[1]!);
+        if (!role) return notFound(res);
+        if (role.isBuiltin) {
+          return send(res, 403, { error: 'builtin', message: 'Built-in roles cannot be deleted.' });
+        }
+        deleteRoleRepo(deps.db, role.id);
+        return send(res, 200, { roleId: role.id, deleted: true });
       }
       // PR-δ: flip Expert / Collection.
       //   PATCH /api/roles/:id/bindable  body { bindable: boolean }

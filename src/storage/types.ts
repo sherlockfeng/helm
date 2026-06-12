@@ -503,6 +503,9 @@ export interface HostSession {
    * chats that pre-existed the guide (or that were live when we bumped
    * the version) pick up the freshened text on their next interaction. */
   lastInjectedGuideVersion?: number;
+  /** v34: when true, capture (role-scoped AND entity buckets) skips
+   *  this chat entirely — per-chat mute for meta/noisy conversations. */
+  captureDisabled?: boolean;
   status: 'active' | 'closed';
   firstSeenAt: string;
   lastSeenAt: string;

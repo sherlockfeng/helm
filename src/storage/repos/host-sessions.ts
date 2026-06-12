@@ -22,6 +22,8 @@ function rowToHostSession(row: Record<string, unknown>, roleIds: readonly string
     lastInjectedGuideVersion: row['last_injected_guide_version'] != null
       ? Number(row['last_injected_guide_version'])
       : undefined,
+    ...(row['capture_disabled'] != null && Number(row['capture_disabled']) === 1
+      ? { captureDisabled: true } : {}),
     status: row['status'] as HostSession['status'],
     firstSeenAt: String(row['first_seen_at']),
     lastSeenAt: String(row['last_seen_at']),
@@ -364,4 +366,16 @@ export function setLastInjectedGuideVersion(
 ): void {
   db.prepare(`UPDATE host_sessions SET last_injected_guide_version = ? WHERE id = ?`)
     .run(version, id);
+}
+
+/** v34: per-chat capture mute. Returns false when the session doesn't exist. */
+export function setSessionCaptureDisabled(
+  db: Database.Database,
+  sessionId: string,
+  disabled: boolean,
+): boolean {
+  const info = db.prepare(
+    `UPDATE host_sessions SET capture_disabled = ? WHERE id = ?`,
+  ).run(disabled ? 1 : 0, sessionId);
+  return info.changes > 0;
 }

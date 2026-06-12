@@ -73,6 +73,7 @@ import { WorkflowEngine } from '../workflow/engine.js';
 import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
+import { curateChatEntities } from '../knowledge/entity-curation.js';
 import { generateCandidateGist } from '../summarizer/candidate-gist.js';
 import { runCurationForRole } from '../summarizer/curation.js';
 import {
@@ -970,6 +971,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     // must never propagate an engine-availability error to the bridge.
     try {
       void generateChatTldr(deps.db, req.host_session_id, {
+        llm: engineRouter.current().summarize,
+        model: liveConfig.cursor.model,
+      }).catch(() => { /* swallow async rejections too */ });
+    } catch { /* engine unavailable — skip the LLM pass */ }
+    // Agent-curated suggestion strip: same cadence + engine as the
+    // TL;DR. Skips itself when the entity list hasn't changed.
+    try {
+      void curateChatEntities(deps.db, req.host_session_id, {
         llm: engineRouter.current().summarize,
         model: liveConfig.cursor.model,
       }).catch(() => { /* swallow async rejections too */ });

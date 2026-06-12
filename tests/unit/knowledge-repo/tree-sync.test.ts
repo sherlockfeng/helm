@@ -256,4 +256,67 @@ describe('files-as-truth PR-3', () => {
         .rejects.toBeInstanceOf(KnowledgeRepoManagerError);
     });
   });
+
+  describe('promoteToDomain (知识阶梯 PR-γ)', () => {
+    it('writes the consolidated doc into the publish worktree and pushes a promote branch', async () => {
+      const repoId = makeRepo('repo-promote');
+      let worktreePath: string | null = null;
+      let pushedContent: string | null = null;
+      const calls: Array<readonly string[]> = [];
+      const run: GitRunner = async (args) => {
+        calls.push(args);
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          worktreePath = String(args[4]);
+          mkdirSync(worktreePath, { recursive: true });
+        }
+        if (args[0] === 'push' && worktreePath) {
+          // The worktree is reaped after publish — capture the file now.
+          pushedContent = readFileSync(
+            join(worktreePath, 'domains/stability/og-fallback-convention.md'), 'utf8',
+          );
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      };
+      const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot });
+      const r = await mgr.promoteToDomain({
+        repoId, domain: 'stability',
+        title: 'OG fallback convention',
+        body: 'OG 数据 schema 不匹配时回退 v4。',
+      });
+      expect(r.relPath).toBe('domains/stability/og-fallback-convention.md');
+      expect(r.branch).toMatch(/^helm\/promote\/stability-/);
+      expect(r.filesWritten).toBe(1);
+      expect(pushedContent).toContain('# OG fallback convention');
+      expect(pushedContent).toContain('回退 v4');
+    });
+
+    it('sanitizes the domain segment (no traversal)', async () => {
+      const repoId = makeRepo('repo-promote-2');
+      let captured: string | null = null;
+      const run: GitRunner = async (args) => {
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          mkdirSync(String(args[4]), { recursive: true });
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      };
+      const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot });
+      const r = await mgr.promoteToDomain({
+        repoId, domain: '../evil', title: 'Some doc title', body: 'body',
+      });
+      captured = r.relPath;
+      expect(captured).toBe('domains/evil/some-doc-title.md');
+    });
+
+    it('rejects empty fields and non-llm-wiki repos', async () => {
+      const repoId = makeRepo('repo-promote-3');
+      const mgr = new KnowledgeRepoManager({
+        db, git: async () => ({ stdout: '', stderr: '', exitCode: 0 }), reposRoot,
+      });
+      await expect(mgr.promoteToDomain({ repoId, domain: '', title: 't', body: 'b' }))
+        .rejects.toBeInstanceOf(KnowledgeRepoManagerError);
+      db.prepare(`UPDATE knowledge_repo SET profile = 'helm-native' WHERE id = ?`).run(repoId);
+      await expect(mgr.promoteToDomain({ repoId, domain: 'd', title: 't', body: 'b' }))
+        .rejects.toBeInstanceOf(KnowledgeRepoManagerError);
+    });
+  });
 });

@@ -48,6 +48,7 @@ import {
   parseGitUrl,
 } from './url.js';
 import { LLM_WIKI_SKIP_DIRS, importRepoIntoLibrary, type ImportSummary } from './importer.js';
+import { slugifyPointId } from './slug.js';
 import type { KnowledgeRepoProfile } from './profiles.js';
 import {
   serializePoint,
@@ -99,8 +100,14 @@ export interface KnowledgeRepoManagerOptions {
 
 export interface PublishInput {
   repoId: string;
-  /** Points to write out. Must be a non-empty subset of the local DB. */
+  /** Points to write out. May be empty when `extraFiles` is provided. */
   pointIds: readonly string[];
+  /**
+   * PR-γ: literal files to include in the publish commit alongside (or
+   * instead of) serialized points — e.g. a consolidated promotion doc
+   * for domains/<域>/. Paths are repo-root-relative.
+   */
+  extraFiles?: ReadonlyArray<{ relPath: string; content: string }>;
   /** New branch name. Defaults to `helm/publish/<repoId>-<yyyymmdd>`. */
   branchName?: string;
   /** Commit + PR message. */
@@ -355,8 +362,8 @@ export class KnowledgeRepoManager {
       if (!repo) {
         throw new PublishError(`unknown repo: ${input.repoId}`, 'precheck');
       }
-      if (input.pointIds.length === 0) {
-        throw new PublishError('pointIds is empty', 'precheck');
+      if (input.pointIds.length === 0 && (input.extraFiles?.length ?? 0) === 0) {
+        throw new PublishError('nothing to publish: no pointIds and no extraFiles', 'precheck');
       }
 
       // R-0 precheck: when the target repo is public, refuse to push
@@ -419,6 +426,12 @@ export class KnowledgeRepoManager {
           const absPath = join(worktreePath, layout(chunk));
           mkdirSync(dirname(absPath), { recursive: true });
           writeFileSync(absPath, text, 'utf8');
+          filesWritten += 1;
+        }
+        for (const f of input.extraFiles ?? []) {
+          const absPath = join(worktreePath, f.relPath);
+          mkdirSync(dirname(absPath), { recursive: true });
+          writeFileSync(absPath, f.content, 'utf8');
           filesWritten += 1;
         }
 
@@ -623,6 +636,58 @@ export class KnowledgeRepoManager {
   }
 
   /**
+   * 知识阶梯 PR-γ: 升格 — push a consolidated personal-knowledge doc
+   * into the team tier (domains/<域>/) as an MR. The user picks
+   * fragments in the UI, edits the merged body, and helm opens one MR;
+   * after review + merge + pull the content comes back as team
+   * knowledge. Personal fragments are NOT auto-deleted — the MR may be
+   * rejected; cleanup is a manual follow-up once it lands.
+   */
+  async promoteToDomain(input: {
+    repoId: string;
+    /** Target sub-domain under domains/, e.g. 'stability'. */
+    domain: string;
+    title: string;
+    /** Consolidated markdown body (user-edited in the modal). */
+    body: string;
+    /** Anonymous publisher mode (passes through to publish). */
+    anonymous?: boolean;
+  }): Promise<PublishResult & { relPath: string }> {
+    const repo = getKnowledgeRepo(this.db, input.repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${input.repoId}`);
+    }
+    if (repo.profile !== 'llm-wiki') {
+      throw new KnowledgeRepoManagerError(
+        `promoteToDomain requires an llm-wiki repo (got profile=${repo.profile})`,
+      );
+    }
+    const domain = sanitizePathSegment(input.domain);
+    const title = input.title.trim();
+    const body = input.body.trim();
+    if (!domain || !title || !body) {
+      throw new KnowledgeRepoManagerError('promoteToDomain requires domain + title + body');
+    }
+    const slug = slugifyPointId(title, `promoted-${sha256Short(title + body).slice(0, 8)}`);
+    const relPath = `domains/${domain}/${slug}.md`;
+    const content = `# ${title}\n\n${body}\n`;
+    const date = new Date().toISOString().slice(0, 10);
+    const result = await this.publish({
+      repoId: input.repoId,
+      pointIds: [],
+      extraFiles: [{ relPath, content }],
+      message: [
+        `feat(${domain}): promote chat-captured knowledge — ${title}`,
+        '',
+        `个人层碎片整理升格；来源 chat-captured（helm 知识阶梯）。`,
+      ].join('\n'),
+      branchName: `helm/promote/${domain}-${date}-${slug.slice(0, 24)}`,
+      ...(input.anonymous !== undefined ? { anonymous: input.anonymous } : {}),
+    });
+    return { ...result, relPath };
+  }
+
+  /**
    * Files-as-truth PR-2: write a promoted chunk into helm's exclusive
    * zone of the llm-wiki working copy —
    * `chat-captured/<user>/<role>/<chunkId>.md` — and point the chunk's
@@ -684,17 +749,20 @@ export class KnowledgeRepoManager {
    * whitelist can select from. chat-captured/ is excluded — it's
    * always imported, so listing it as a checkbox would mislead.
    */
-  listRepoTopDirs(repoId: string): string[] {
+  listRepoTopDirs(repoId: string, parent?: string): string[] {
     const repo = getKnowledgeRepo(this.db, repoId);
     if (!repo) {
       throw new KnowledgeRepoManagerError(`unknown repo: ${repoId}`);
     }
-    if (!existsSync(repo.localPath)) return [];
-    return readdirSync(repo.localPath)
+    const root = parent
+      ? join(repo.localPath, sanitizePathSegment(parent))
+      : repo.localPath;
+    if (!existsSync(root)) return [];
+    return readdirSync(root)
       .filter((name) => !name.startsWith('.') && !LLM_WIKI_SKIP_DIRS.has(name)
         && name !== 'chat-captured')
       .filter((name) => {
-        try { return statSync(join(repo.localPath, name)).isDirectory(); }
+        try { return statSync(join(root, name)).isDirectory(); }
         catch { return false; }
       })
       .sort();

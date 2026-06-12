@@ -178,6 +178,148 @@ function summarizePrompt(text: string, max = 140): string {
   return flat.length <= max ? flat : flat.slice(0, max - 1) + '…';
 }
 
+/**
+ * 知识阶梯 PR-γ: 升格弹窗 — 选这个集合里的碎片 → 合并成一篇可编辑的
+ * 文档 → MR 进 llm-wiki 的 domains/<域>/。合入并 pull 后内容回到团队
+ * 成熟层。原碎片不自动删除（MR 可能被拒），合入后手动清理。
+ */
+function PromoteModal({ roleId, roleName, onClose }: {
+  roleId: string;
+  roleName: string;
+  onClose: () => void;
+}) {
+  const detail = useApi(() => helmApi.role(roleId), [roleId]);
+  const repos = useApi(() => helmApi.listKnowledgeRepos('active'), []);
+  const wikiRepo = (repos.data?.repos ?? []).find((r) => r.profile === 'llm-wiki');
+  const domains = useApi(
+    () => wikiRepo
+      ? helmApi.getRepoDirs(wikiRepo.id, 'domains')
+      : Promise.resolve({ dirs: [], importDirs: null }),
+    [wikiRepo?.id],
+  );
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [domain, setDomain] = useState('');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ prUrl: string; branch: string; relPath: string } | null>(null);
+
+  const chunks = detail.data?.chunks ?? [];
+
+  const toggle = (id: string, text: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      // Re-derive the editable body from the new selection — but only
+      // while the user hasn't started hand-editing a divergent draft.
+      const merged = chunks
+        .filter((c) => next.has(c.id))
+        .map((c) => c.chunkText.trim())
+        .join('\n\n');
+      setBody((prevBody) => {
+        const prevMerged = chunks
+          .filter((c) => prev.has(c.id))
+          .map((c) => c.chunkText.trim())
+          .join('\n\n');
+        return prevBody === prevMerged ? merged : prevBody;
+      });
+      void text;
+      return next;
+    });
+  };
+
+  const submit = async (): Promise<void> => {
+    if (!wikiRepo) { toast.error('没有订阅 llm-wiki 仓库'); return; }
+    setBusy(true);
+    try {
+      const r = await helmApi.promoteToDomain(wikiRepo.id, { domain, title, body });
+      setResult({ prUrl: r.prUrl, branch: r.branch, relPath: r.relPath });
+      toast.success(r.prUrl ? `升格 MR 已创建` : `分支已推送：${r.branch}（请手动开 MR）`);
+    } catch (err) {
+      toast.error(`升格失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent title={`升格到 domains/ — ${roleName}`} width={720}>
+        {!wikiRepo && <p className="muted">未订阅 llm-wiki 仓库，无法升格。</p>}
+        {result ? (
+          <div>
+            <p>✅ 已写入 <code>{result.relPath}</code> 并推送分支 <code>{result.branch}</code>。</p>
+            {result.prUrl
+              ? <p><a href={result.prUrl} target="_blank" rel="noreferrer">{result.prUrl}</a></p>
+              : <p className="muted">未检测到 MR CLI，请用上面的分支手动创建 MR。</p>}
+            <Button onClick={onClose}>关闭</Button>
+          </div>
+        ) : (
+          <>
+            <p className="muted" style={{ fontSize: 12 }}>
+              勾选要升格的碎片 → 右侧合并稿可自由编辑 → 提交后开一个
+              MR 到 domains/&lt;域&gt;/。评审合入后即成为团队成熟知识。
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                {chunks.length === 0 && <p className="muted">这个集合还没有知识点。</p>}
+                {chunks.map((c) => (
+                  <label key={c.id} style={{ display: 'flex', gap: 6, marginBottom: 8, fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(c.id)}
+                      onChange={() => toggle(c.id, c.chunkText)}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span style={{ whiteSpace: 'pre-wrap' }}>{c.chunkText.slice(0, 200)}{c.chunkText.length > 200 ? '…' : ''}</span>
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label className="helm-form-row">
+                  <div className="muted">目标域（domains/ 下）</div>
+                  <input
+                    type="text"
+                    list="promote-domains"
+                    value={domain}
+                    placeholder={domains.data?.dirs[0] ?? 'stability'}
+                    onChange={(e) => setDomain(e.target.value)}
+                  />
+                  <datalist id="promote-domains">
+                    {(domains.data?.dirs ?? []).map((d) => <option key={d} value={d} />)}
+                  </datalist>
+                </label>
+                <label className="helm-form-row">
+                  <div className="muted">文档标题</div>
+                  <input type="text" value={title} placeholder="OG 标签接入与回退约定"
+                    onChange={(e) => setTitle(e.target.value)} />
+                </label>
+                <textarea
+                  value={body}
+                  rows={10}
+                  placeholder="勾选左侧碎片自动合并到这里，可自由编辑成一篇成熟文档"
+                  style={{ width: '100%', fontFamily: 'inherit', fontSize: 12 }}
+                  onChange={(e) => setBody(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <Button
+                variant="primary"
+                disabled={busy || !wikiRepo || !domain.trim() || !title.trim() || !body.trim()}
+                aria-busy={busy}
+                onClick={() => { void submit(); }}
+              >
+                {busy ? '开 MR 中…' : '提交升格 MR'}
+              </Button>
+              <button onClick={onClose}>取消</button>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => void }) {
   const detail = useApi(() => helmApi.role(roleId), [roleId]);
   const [training, setTraining] = useState(false);
@@ -759,6 +901,7 @@ function RoleCard({
   onUpdateViaChat,
   onTrained,
   onToggleBindable,
+  onPromote,
 }: {
   role: RoleSummary;
   expanded: boolean;
@@ -768,6 +911,8 @@ function RoleCard({
   onTrained: () => void;
   /** PR-δ: flip Expert / Collection. */
   onToggleBindable: () => void;
+  /** PR-γ: open the promote-to-domains modal. */
+  onPromote: () => void;
 }) {
   return (
     <Card>
@@ -824,6 +969,14 @@ function RoleCard({
           )}
           {!role.isBuiltin && (
             <button
+              onClick={onPromote}
+              title="挑选碎片合并成一篇文档，开 MR 升格到 llm-wiki 的 domains/<域>/"
+            >
+              升格到 domains
+            </button>
+          )}
+          {!role.isBuiltin && (
+            <button
               onClick={onToggleBindable}
               title={role.bindable === false
                 ? '升格为专家：可绑定到对话、配置 system prompt、开场注入知识'
@@ -853,6 +1006,8 @@ export function RolesPage() {
     | { mode: 'create' }
     | { mode: 'update'; roleId: string; name: string }
   >(null);
+  // PR-γ: promote modal target.
+  const [promoteTarget, setPromoteTarget] = useState<{ roleId: string; name: string } | null>(null);
 
   // helm-design PR 9: load errors → toast.
   useEffect(() => {
@@ -926,6 +1081,7 @@ export function RolesPage() {
           onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
           onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
           onToggleBindable={() => { void toggleBindable(r); }}
+          onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onTrained={() => reload()}
         />
       ))}
@@ -945,10 +1101,19 @@ export function RolesPage() {
               onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
               onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
               onToggleBindable={() => { void toggleBindable(r); }}
+              onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
               onTrained={() => reload()}
             />
           ))}
         </>
+      )}
+
+      {promoteTarget && (
+        <PromoteModal
+          roleId={promoteTarget.roleId}
+          roleName={promoteTarget.name}
+          onClose={() => setPromoteTarget(null)}
+        />
       )}
 
       {chatTarget && (

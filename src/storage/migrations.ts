@@ -1000,6 +1000,18 @@ export const MIGRATIONS: Migration[] = [
       DROP TABLE IF EXISTS knowledge_merge_conflict;
     `,
   },
+  {
+    version: 28,
+    description:
+      'knowledge_repo.import_dirs — JSON array of top-level directories'
+      + ' the llm-wiki importer reads (whitelist). NULL/absent = all'
+      + ' directories (legacy behaviour). chat-captured/ is always'
+      + ' imported regardless. Motivation: mechanically mapping every'
+      + ' top-level dir to a role pulled in scripts/, raw/, etc.',
+    up: `
+      ALTER TABLE knowledge_repo ADD COLUMN import_dirs TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

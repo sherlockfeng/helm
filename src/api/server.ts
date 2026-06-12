@@ -51,6 +51,7 @@ import {
   deleteKnowledgeRepo,
   getKnowledgeRepo,
   listKnowledgeRepos,
+  setRepoImportDirs,
 } from '../storage/repos/knowledge-repo.js';
 import { GitUrlError } from '../knowledge-repo/url.js';
 import {
@@ -1389,12 +1390,48 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
       }
 
+      // v28: import-directory whitelist.
+      //   GET   /api/knowledge-repos/:id/dirs   — selectable top-level dirs
+      //   PATCH /api/knowledge-repos/:id        — body { importDirs: string[] | null }
+      const repoDirsMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)\/dirs$/);
+      if (repoDirsMatch) {
+        if (req.method !== 'GET') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        try {
+          const repo = getKnowledgeRepo(deps.db, repoDirsMatch[1]!);
+          if (!repo) return notFound(res);
+          const dirs = deps.knowledgeRepoManager.listRepoTopDirs(repo.id);
+          return send(res, 200, { dirs, importDirs: repo.importDirs ?? null });
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 404, { error: 'dirs_failed', message: err.message });
+          }
+          return internalError(res, err);
+        }
+      }
       const repoIdMatch = url.pathname.match(/^\/api\/knowledge-repos\/([^/]+)$/);
       if (repoIdMatch) {
         if (req.method === 'GET') {
           const repo = getKnowledgeRepo(deps.db, repoIdMatch[1]!);
           if (!repo) return notFound(res);
           return send(res, 200, { repo });
+        }
+        if (req.method === 'PATCH') {
+          const repo = getKnowledgeRepo(deps.db, repoIdMatch[1]!);
+          if (!repo) return notFound(res);
+          let body: { importDirs?: unknown };
+          try { body = JSON.parse(ctx.body) as typeof body; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+          if (body.importDirs !== null
+              && !(Array.isArray(body.importDirs)
+                && body.importDirs.every((d): d is string => typeof d === 'string'))) {
+            return badRequest(res, 'importDirs must be a string array or null');
+          }
+          setRepoImportDirs(deps.db, repo.id, body.importDirs as string[] | null);
+          const updated = getKnowledgeRepo(deps.db, repo.id)!;
+          return send(res, 200, { repo: updated });
         }
         if (req.method === 'DELETE') {
           const removeData = url.searchParams.get('removeData') === 'true';

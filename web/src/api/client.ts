@@ -695,6 +695,15 @@ export const helmApi = {
       snippets: Array<{ source: string; title: string; body: string; score?: number; citation?: string }>;
       diagnostics: Array<{ provider: string; status: 'ok' | 'skipped' | 'error' | 'timeout'; snippetCount: number; reason?: string }>;
     }>('POST', '/api/knowledge-lookup', { query, ...(providers ? { providers } : {}) }),
+  // v28: import-directory whitelist.
+  getRepoDirs: (repoId: string) =>
+    request<{ dirs: string[]; importDirs: string[] | null }>(
+      'GET', `/api/knowledge-repos/${encodeURIComponent(repoId)}/dirs`,
+    ),
+  setRepoImportDirs: (repoId: string, importDirs: string[] | null) =>
+    request<{ repo: KnowledgeRepo }>(
+      'PATCH', `/api/knowledge-repos/${encodeURIComponent(repoId)}`, { importDirs },
+    ),
   // Files-as-truth PR-3: captured-points batch publish.
   listCapturedUnpublished: (repoId: string) =>
     request<{ files: UnpublishedCapturedFile[] }>(

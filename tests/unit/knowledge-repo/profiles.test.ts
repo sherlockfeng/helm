@@ -92,7 +92,10 @@ describe('llm-wiki profile', () => {
       relativePath: 'wiki/free-form.md',
       text: '# Just a doc\n\nbody',
     });
-    expect(p.id).toBe('free-form');
+    // v28 collision fix: fallback id = full path slug, not basename —
+    // every dir has a README.md / index.md and they all used to
+    // collapse into one chunk.
+    expect(p.id).toBe('wiki-free-form');
     expect(p.title).toBe('Just a doc');
     expect(p.aliases).toEqual([]);
     expect(p.rel).toEqual([]);
@@ -100,14 +103,34 @@ describe('llm-wiki profile', () => {
 });
 
 describe('generic profile', () => {
-  it('uses the file basename as id and the first h1 as title', () => {
+  it('uses the path slug as id and the first h1 as title', () => {
     const p = parsePointFile({
       profile: 'generic',
       relativePath: 'foo/bar/runbook.md',
       text: '# Rollback runbook\n\n1. step\n2. step',
     });
-    expect(p.id).toBe('runbook');
+    expect(p.id).toBe('foo-bar-runbook');
     expect(p.title).toBe('Rollback runbook');
     expect(p.body).toContain('1. step');
+  });
+
+  it('prefers repoRelativePath for the fallback id when provided', () => {
+    // The importer passes bucket-relative relativePath (for entity
+    // context) + repo-root-relative repoRelativePath (for identity).
+    const p = parsePointFile({
+      profile: 'llm-wiki',
+      relativePath: 'index.md',
+      repoRelativePath: 'wiki/index.md',
+      text: '# Wiki index\n\nbody',
+    });
+    expect(p.id).toBe('wiki-index');
+    const q = parsePointFile({
+      profile: 'llm-wiki',
+      relativePath: 'index.md',
+      repoRelativePath: 'domains/index.md',
+      text: '# Domains index\n\nbody',
+    });
+    expect(q.id).toBe('domains-index');
+    expect(p.id).not.toBe(q.id);
   });
 });

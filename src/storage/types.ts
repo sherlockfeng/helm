@@ -878,6 +878,8 @@ export interface KnowledgeRepo {
    * knowledge-repo imports.
    */
   profile: 'helm-native' | 'llm-wiki' | 'generic';
+  /** v28 — llm-wiki import whitelist (top-level dirs). Absent = all. */
+  importDirs?: string[];
 }
 
 // KnowledgeMergeConflict (PR 5.5c / migration v23) retired in

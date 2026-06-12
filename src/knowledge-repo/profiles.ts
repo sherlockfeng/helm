@@ -45,17 +45,26 @@ export interface ParsedPoint {
 
 export interface ParseFileInput {
   text: string;
-  /** File path within the cloned repo, used as the fallback id. */
+  /** Path relative to the role bucket — used for entity-extraction context. */
   relativePath: string;
+  /**
+   * Repo-root-relative path. Used as the fallback-id source for the
+   * llm-wiki / generic profiles: bucket-relative names collide across
+   * directories (every dir has a README.md / index.md, and they all
+   * collapsed into ONE chunk overwriting each other), the full path is
+   * unique by construction. Falls back to relativePath when absent.
+   */
+  repoRelativePath?: string;
   profile: KnowledgeRepoProfile;
 }
 
 /** Top-level dispatch. The importer does not care which profile ran. */
 export function parsePointFile(input: ParseFileInput): ParsedPoint {
+  const idPath = input.repoRelativePath ?? input.relativePath;
   switch (input.profile) {
     case 'helm-native': return parseHelmNative(input.text, input.relativePath);
-    case 'llm-wiki':    return parseLlmWiki(input.text, input.relativePath);
-    case 'generic':     return parseGeneric(input.text, input.relativePath);
+    case 'llm-wiki':    return parseLlmWiki(input.text, idPath);
+    case 'generic':     return parseGeneric(input.text, idPath);
   }
 }
 
@@ -135,16 +144,16 @@ const LLM_WIKI_REL_TRANSLATIONS: Record<string, ParsedPointRelKind> = {
   'supersedes': 'supersedes',
 };
 
-function parseLlmWiki(text: string, relativePath: string): ParsedPoint {
+function parseLlmWiki(text: string, idPath: string): ParsedPoint {
   const { body: afterFrontmatter } = parseMarkdownWithFrontmatter(text);
   const conceptMatch = afterFrontmatter.match(/```concept\s*\n([\s\S]*?)\n```/);
   if (!conceptMatch) {
-    return parseGeneric(text, relativePath);
+    return parseGeneric(text, idPath);
   }
   // Reparse the concept block as YAML using our subset parser.
   const wrapped = `---\n${conceptMatch[1]}\n---\n`;
   const { data } = parseMarkdownWithFrontmatter(wrapped);
-  const id = stringValue(data['id']) ?? basenameNoExt(relativePath);
+  const id = stringValue(data['id']) ?? pathIdNoExt(idPath);
   const aliases = arrayOfString(data['aliases']);
   const rel = parseLlmWikiRel(data['rel']);
   const body = afterFrontmatter.replace(/```concept\s*\n[\s\S]*?\n```/, '').trim();
@@ -173,10 +182,10 @@ function parseLlmWikiRel(raw: FrontmatterValue | undefined): ParsedPoint['rel'] 
 
 // ── generic ────────────────────────────────────────────────────────────────
 
-function parseGeneric(text: string, relativePath: string): ParsedPoint {
+function parseGeneric(text: string, idPath: string): ParsedPoint {
   const { body } = parseMarkdownWithFrontmatter(text);
   const point: ParsedPoint = {
-    id: basenameNoExt(relativePath),
+    id: pathIdNoExt(idPath),
     body, kind: 'other', aliases: [], rel: [],
   };
   const title = extractFirstH1(body);
@@ -216,6 +225,16 @@ function basenameNoExt(p: string): string {
   const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   const last = slash >= 0 ? p.slice(slash + 1) : p;
   return last.replace(/\.md$/i, '');
+}
+
+/**
+ * Collision-free fallback id: the whole path with separators folded to
+ * dashes ('wiki/index.md' → 'wiki-index'). basenameNoExt is kept for
+ * helm-native (flat points/ dir, ids ~always explicit; renaming its
+ * fallback would churn existing repos for no gain).
+ */
+function pathIdNoExt(p: string): string {
+  return p.replace(/\.md$/i, '').split(/[\\/]+/).filter(Boolean).join('-');
 }
 
 function extractFirstH1(body: string): string | undefined {

@@ -498,6 +498,8 @@ export interface KnowledgeRepo {
   createdAt: number;
   /** v26 — layout/serialization profile pinned at subscribe time. */
   profile: 'helm-native' | 'llm-wiki' | 'generic';
+  /** v28 — llm-wiki import whitelist (top-level dirs). Absent = all. */
+  importDirs?: string[];
 }
 
 /** Files-as-truth PR-3 — a captured file not yet on the remote. */

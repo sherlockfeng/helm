@@ -61,6 +61,12 @@ export interface ImporterInput {
   profile: KnowledgeRepoProfile;
   /** Mark every imported point with this source ref (e.g. repoId). */
   sourceRef?: string;
+  /**
+   * v28 (llm-wiki only): whitelist of top-level directories to import.
+   * Empty/absent = every directory (legacy). chat-captured/ — helm's
+   * own write zone — is ALWAYS imported regardless of the whitelist.
+   */
+  importDirs?: readonly string[];
   /** Override fs functions for tests. */
   fs?: {
     readdirSync?: typeof readdirSync;
@@ -98,7 +104,9 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
   // (whose real layout is dr-docs/, doc-lsp-docs/, ... at the repo
   // root). Each profile now produces a list of (roleId, roleDir,
   // pointFiles) triples for the import loop to upsert.
-  const roleBuckets = enumerateRolesForProfile(fs, input.localPath, input.profile);
+  const roleBuckets = enumerateRolesForProfile(
+    fs, input.localPath, input.profile, input.importDirs,
+  );
   if (roleBuckets.length === 0) return summary;
 
   // chat-captured/<user>/<role>/ produces one bucket per (user, role)
@@ -135,7 +143,8 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
       try {
         const raw = fs.readFileSync(file, 'utf8');
         const parsed = parsePointFile({
-          text: raw, relativePath: relPath, profile: input.profile,
+          text: raw, relativePath: relPath, repoRelativePath: repoRelPath,
+          profile: input.profile,
         });
         upsertPoint(input.db, bucket.roleId, parsed, {
           sourceRef: input.sourceRef,
@@ -176,9 +185,10 @@ function enumerateRolesForProfile(
   fs: WalkerFs,
   localPath: string,
   profile: KnowledgeRepoProfile,
+  importDirs?: readonly string[],
 ): RoleBucket[] {
   if (profile === 'helm-native') return enumerateHelmNative(fs, localPath);
-  if (profile === 'llm-wiki')    return enumerateLlmWiki(fs, localPath);
+  if (profile === 'llm-wiki')    return enumerateLlmWiki(fs, localPath, importDirs);
   return enumerateGeneric(fs, localPath);
 }
 
@@ -227,14 +237,21 @@ function enumerateHelmNative(fs: WalkerFs, localPath: string): RoleBucket[] {
  */
 const CHAT_CAPTURED_DIR = 'chat-captured';
 
-function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
+/** Dirs that are never knowledge content (CI/tooling metadata). */
+export const LLM_WIKI_SKIP_DIRS: ReadonlySet<string> = new Set([
+  'node_modules', '.codebase', '.context', '.cursor',
+  '.doc-lsp', '.doc-lsp-references', '.git', '.github', '.skills',
+]);
+
+function enumerateLlmWiki(
+  fs: WalkerFs,
+  localPath: string,
+  importDirs?: readonly string[],
+): RoleBucket[] {
   if (!fs.existsSync(localPath)) return [];
-  const SKIP_DIRS = new Set([
-    'node_modules', '.codebase', '.context', '.cursor',
-    '.doc-lsp', '.doc-lsp-references', '.git', '.github', '.skills',
-  ]);
+  const allow = importDirs && importDirs.length > 0 ? new Set(importDirs) : null;
   const slugs = fs.readdirSync(localPath)
-    .filter((name) => !name.startsWith('.') && !SKIP_DIRS.has(name))
+    .filter((name) => !name.startsWith('.') && !LLM_WIKI_SKIP_DIRS.has(name))
     .filter((name) => {
       try { return fs.statSync(join(localPath, name)).isDirectory(); }
       catch { return false; }
@@ -245,9 +262,11 @@ function enumerateLlmWiki(fs: WalkerFs, localPath: string): RoleBucket[] {
     if (slug === CHAT_CAPTURED_DIR) {
       // helm's own zone: one bucket per (user, role) pair so a role's
       // captured knowledge merges with the role regardless of author.
+      // Exempt from the whitelist — promote wrote these on purpose.
       out.push(...enumerateChatCaptured(fs, roleDir));
       continue;
     }
+    if (allow && !allow.has(slug)) continue;
     const pointFiles = walkMarkdownFiles(fs, roleDir);
     if (pointFiles.length === 0) continue; // skip dirs with no .md
     out.push({

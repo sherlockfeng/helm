@@ -284,15 +284,18 @@ describe('importRepoIntoLibrary', () => {
     expect(getRole(db, 'argos')?.name).toBe('argos');
     expect(summary.pointsUpserted).toBe(4);
     expect(getRolesForPoint(db, 'cap-og-v5')).toEqual(['dr-docs']);
-    expect(getRolesForPoint(db, 'cdn')).toEqual(['dr-docs']);
-    expect(getRolesForPoint(db, 'alerts')).toEqual(['argos']);
+    // v28: plain-markdown fallback ids are full path slugs (collision-free).
+    expect(getRolesForPoint(db, 'chat-captured-zhang-dr-docs-cdn')).toEqual(['dr-docs']);
+    expect(getRolesForPoint(db, 'chat-captured-hyf-argos-alerts')).toEqual(['argos']);
   });
 
   it('persists source_file repo-root-relative on insert and refreshes it on update', () => {
-    // Plain markdown under llm-wiki: id falls back to the basename ('og'),
-    // which stays stable when the file moves between dirs below.
+    // Concept id keeps the point's identity stable across a file move
+    // (v28: plain-markdown fallback ids are path-derived, so they change
+    // with the path by design).
+    const doc = '# OG\n\n```concept\nid: og\n```\n\nbody';
     const v1 = makeFs({
-      '/repo/chat-captured/hyf/dr/og.md': '# OG\nv1 body',
+      '/repo/chat-captured/hyf/dr/og.md': doc,
     });
     importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v1 });
     const read = (): string => (db.prepare(
@@ -302,7 +305,7 @@ describe('importRepoIntoLibrary', () => {
     // Same point id moved to a regular wiki dir — the update path must
     // refresh source_file so publish round-trips into the new location.
     const v2 = makeFs({
-      '/repo/dr/og.md': '# OG\nv2 body',
+      '/repo/dr/og.md': doc,
     });
     importRepoIntoLibrary({ db, localPath: '/repo', profile: 'llm-wiki', fs: v2 });
     expect(read()).toBe('dr/og.md');
@@ -332,5 +335,56 @@ describe('importRepoIntoLibrary', () => {
     const role = getRole(db, 'dr-docs');
     expect(role?.systemPrompt).toBe('trained prompt — do not clobber');
     expect(role?.createdAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('v28 regression: same-named files in different dirs stay distinct chunks', () => {
+    // Before the path-slug fallback, wiki/index.md and domains/index.md
+    // both got id 'index' and overwrote each other (role stuck on
+    // whichever imported first).
+    const fs = makeFs({
+      '/repo/wiki/index.md': '# Wiki home\nwiki body',
+      '/repo/domains/index.md': '# Domains home\ndomains body',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs,
+    });
+    expect(summary.pointsUpserted).toBe(2);
+    const rows = db.prepare(
+      `SELECT id, role_id FROM knowledge_chunks ORDER BY id`,
+    ).all() as Array<{ id: string; role_id: string }>;
+    expect(rows).toEqual([
+      { id: 'domains-index', role_id: 'domains' },
+      { id: 'wiki-index', role_id: 'wiki' },
+    ]);
+  });
+
+  it('v28: importDirs whitelist filters top-level dirs; chat-captured is exempt', () => {
+    const fs = makeFs({
+      '/repo/dr-docs/a.md': '# A\nbody',
+      '/repo/scripts/README.md': '# build scripts\nnot knowledge',
+      '/repo/raw/dump.md': '# raw dump\nnoise',
+      '/repo/chat-captured/hyf/dr-docs/cap.md': '# Cap\ncaptured body',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs,
+      importDirs: ['dr-docs'],
+    });
+    // dr-docs (whitelisted) + captured bucket merge into ONE role.
+    expect(summary.rolesImported).toBe(1);
+    expect(summary.pointsUpserted).toBe(2);
+    expect(getRole(db, 'scripts')).toBeUndefined();
+    expect(getRole(db, 'raw')).toBeUndefined();
+    expect(getRolesForPoint(db, 'chat-captured-hyf-dr-docs-cap')).toEqual(['dr-docs']);
+  });
+
+  it('v28: empty importDirs behaves like no whitelist (import everything)', () => {
+    const fs = makeFs({
+      '/repo/dr-docs/a.md': '# A\nbody',
+      '/repo/raw/dump.md': '# raw\nnoise',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs, importDirs: [],
+    });
+    expect(summary.rolesImported).toBe(2);
   });
 });

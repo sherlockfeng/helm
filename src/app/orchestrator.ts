@@ -712,6 +712,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const captureLog = deps.loggers.module('knowledge.capture');
   function scheduleCaptureFromResponse(hostSessionId: string, responseText: string): void {
     const session = getHostSession(deps.db, hostSessionId);
+    // v34: per-chat capture mute (e.g. helm-dev chats about helm itself
+    // producing meta-noise buckets). UI toggle in conversation detail.
+    if (session?.captureDisabled) return;
     const roleIds = session?.roleIds ?? [];
     void (async () => {
       try {

@@ -1088,6 +1088,19 @@ export const MIGRATIONS: Migration[] = [
       DROP TABLE IF EXISTS role_subscriptions;
     `,
   },
+  {
+    version: 34,
+    description:
+      'host_sessions.capture_disabled — per-chat knowledge-capture'
+      + ' opt-out. helm-development chats about helm itself produced'
+      + ' meta-noise buckets (the LLM bucket capturing a feature-audit'
+      + ' table); the user can now mute capture for a chat from the'
+      + ' conversation detail pane.',
+    up: `
+      ALTER TABLE host_sessions
+        ADD COLUMN capture_disabled INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

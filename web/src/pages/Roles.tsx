@@ -931,6 +931,7 @@ function RoleCard({
   onTrained,
   onToggleBindable,
   onPromote,
+  onDelete,
 }: {
   role: RoleSummary;
   expanded: boolean;
@@ -942,13 +943,15 @@ function RoleCard({
   onToggleBindable: () => void;
   /** PR-γ: open the promote-to-domains modal. */
   onPromote: () => void;
+  /** Topics cleanup: delete this collection (confirm handled by page). */
+  onDelete: () => void;
 }) {
   return (
     <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">
-            {role.isBuiltin ? 'built-in' : role.bindable === false ? '知识集' : '专家'}
+            {role.isBuiltin ? 'built-in' : role.bindable === false ? 'topic' : 'expert'}
             {' · '}<code title={role.id}>{shortId(role.id)}</code>
             {/* helm-design PR A: role version. Hidden when v1 (the
                 initial state — visually noisy on every brand-new
@@ -1006,12 +1009,21 @@ function RoleCard({
           )}
           {!role.isBuiltin && (
             <button
+              onClick={onDelete}
+              title="删除这个集合及其全部知识点（不可恢复）"
+              style={{ color: 'var(--danger)' }}
+            >
+              删除
+            </button>
+          )}
+          {!role.isBuiltin && (
+            <button
               onClick={onToggleBindable}
               title={role.bindable === false
                 ? '设为专家：可绑定到对话、配置 system prompt、开场注入知识'
-                : '设为知识集：仅作为知识命名空间，检索不受影响，不再出现在绑定列表'}
+                : '设为 Topic：仅作为知识主题容器，检索不受影响，不再出现在绑定列表'}
             >
-              {role.bindable === false ? '设为专家' : '设为知识集'}
+              {role.bindable === false ? '设为专家' : '设为 Topic'}
             </button>
           )}
           <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
@@ -1037,6 +1049,19 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
   >(null);
   // PR-γ: promote modal target.
   const [promoteTarget, setPromoteTarget] = useState<{ roleId: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ roleId: string; name: string } | null>(null);
+
+  const doDelete = async (): Promise<void> => {
+    if (!deleteTarget) return;
+    try {
+      await helmApi.deleteRole(deleteTarget.roleId);
+      toast.success(`已删除：${deleteTarget.name}`);
+      setDeleteTarget(null);
+      reload();
+    } catch (err) {
+      toast.error(`删除失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    }
+  };
 
   // helm-design PR 9: load errors → toast.
   useEffect(() => {
@@ -1058,7 +1083,7 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
   const toggleBindable = async (r: RoleSummary): Promise<void> => {
     try {
       await helmApi.setRoleBindable(r.id, r.bindable === false);
-      toast.success(r.bindable === false ? `已设为专家：${r.name}` : `已设为知识集：${r.name}`);
+      toast.success(r.bindable === false ? `已设为专家：${r.name}` : `已设为 Topic：${r.name}`);
       reload();
     } catch (err) {
       toast.error(`切换失败: ${err instanceof ApiError ? err.message : String(err)}`);
@@ -1073,18 +1098,18 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
     return (
       <>
         <PageHeader
-          title="知识集"
-          subtitle={<>维护层：知识命名空间（导入目录）与对话捕获的实体碎片桶。检索照常覆盖这里的每个知识点；它们没有"人格"，不出现在对话绑定列表。</>}
+          title="Topics"
+          subtitle={<>维护层：知识主题——对话捕获的实体桶（如 og）与导入的主题域（如 stability）。检索照常覆盖这里的每个知识点；它们没有"人格"，不出现在对话绑定列表。</>}
           stats={<>
-            <StatTile label="知识集" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
+            <StatTile label="Topics" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
             <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
           </>}
         />
         {loading && <CardSkeletonList n={4} />}
         {data && collections.length === 0 && (
           <EmptyState
-            title="还没有知识集。"
-            hint={<>订阅 llm-wiki 仓库（Sources）或在未绑定 role 的对话里聊出新实体，知识集会自动出现。</>}
+            title="还没有 Topic。"
+            hint={<>订阅 llm-wiki 仓库（Sources）或在未绑定 role 的对话里聊出新实体，Topic 会自动出现。</>}
           />
         )}
         {data && collections.map((r) => (
@@ -1096,9 +1121,20 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
             onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
             onToggleBindable={() => { void toggleBindable(r); }}
             onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
+            onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
             onTrained={() => reload()}
           />
         ))}
+        {deleteTarget && (
+          <ConfirmDialog
+            open
+            onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
+            title={`删除 ${deleteTarget.name}？`}
+            description="Topic 及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
+            confirmLabel="删除"
+            onConfirm={() => { void doDelete(); }}
+          />
+        )}
         {promoteTarget && (
           <PromoteModal
             roleId={promoteTarget.roleId}
@@ -1121,7 +1157,7 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
     <>
       <PageHeader
         title="Experts"
-        subtitle={<>使用层：可绑定到对话的专家人格。绑定后开场注入 system prompt + 知识摘录，回复按其作用域产生候选。<code>query_knowledge</code> 的检索范围不止于此——知识集同样参与。</>}
+        subtitle={<>使用层：可绑定到对话的专家人格。绑定后开场注入 system prompt + 知识摘录，回复按其作用域产生候选。<code>query_knowledge</code> 的检索范围不止于此——Topics 同样参与。</>}
         stats={<>
           <StatTile label="Yours" value={userRoles} tone={userRoles > 0 ? 'live' : 'muted'} />
           <StatTile label="Built-in" value={builtInRoles} tone="muted" />
@@ -1159,9 +1195,21 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
           onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
           onToggleBindable={() => { void toggleBindable(r); }}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
+          onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
           onTrained={() => reload()}
         />
       ))}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          open
+          onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
+          title={`删除 ${deleteTarget.name}？`}
+          description="集合及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
+          confirmLabel="删除"
+          onConfirm={() => { void doDelete(); }}
+        />
+      )}
 
       {promoteTarget && (
         <PromoteModal
@@ -1516,8 +1564,8 @@ export function ExpertsPage() {
   return <RolesPageBase mode="experts" />;
 }
 
-/** 维护层：知识命名空间 + 实体碎片桶。 */
-export function CollectionsPage() {
+/** 维护层：知识主题（实体桶 + 导入主题域）。 */
+export function TopicsPage() {
   return <RolesPageBase mode="collections" />;
 }
 

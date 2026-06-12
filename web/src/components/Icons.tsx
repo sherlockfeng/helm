@@ -21,8 +21,8 @@ export {
   // PR 1 (conversations-knowledge IA):
   MessagesSquare,    // Conversations (was Active Chats)
   BookOpen,          // Knowledge › Experts (使用)
-  Layers,            // Knowledge › 知识集 (维护)
-  ArrowUpToLine,     // Knowledge › 升格 (升级)
+  Layers,            // Knowledge › Topics (维护)
+  ArrowUpToLine,     // Knowledge › Contribute (升级)
   Inbox,             // Knowledge › Review (candidates)
   Cloud,             // Knowledge › Sources (subscriptions + mirrors)
   ListChecks,        // Verification › Cases

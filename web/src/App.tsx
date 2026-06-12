@@ -21,7 +21,7 @@ import { useProposalBootToast } from './lib/proposal-notifications.js';
 
 // Primary surfaces (new IA)
 import { ConversationsPage } from './pages/Conversations.js';
-import { ExpertsPage, CollectionsPage } from './pages/Roles.js';
+import { ExpertsPage, TopicsPage } from './pages/Roles.js';
 import { KnowledgePromotePage } from './pages/KnowledgePromote.js';
 import { KnowledgeSourcesPage } from './pages/KnowledgeSources.js';
 import { VerificationCasesPage } from './pages/VerificationCases.js';
@@ -63,10 +63,11 @@ export default function App() {
           <Route path="/conversations" element={<ConversationsPage />} />
           <Route path="/knowledge" element={<Navigate to="/knowledge/experts" replace />} />
           <Route path="/knowledge/experts" element={<ExpertsPage />} />
-          <Route path="/knowledge/collections" element={<CollectionsPage />} />
+          <Route path="/knowledge/topics" element={<TopicsPage />} />
+          <Route path="/knowledge/collections" element={<Navigate to="/knowledge/topics" replace />} />
           <Route path="/knowledge/promote" element={<KnowledgePromotePage />} />
           <Route path="/knowledge/sources" element={<KnowledgeSourcesPage />} />
-          {/* Back-compat: Library split into Experts/知识集; Review folded
+          {/* Back-compat: Library split into Experts/Topics; Review folded
               into the Conversations detail (提取的知识 section). */}
           <Route path="/knowledge/library" element={<Navigate to="/knowledge/experts" replace />} />
           <Route path="/knowledge/review" element={<Navigate to="/conversations" replace />} />

@@ -311,6 +311,8 @@ export interface ConversationDetailSession {
   agentKind?: string;
   /** PR3: LLM-generated TL;DR shown at the top of the detail pane. */
   summary?: string;
+  /** v34: per-chat knowledge-capture mute. */
+  captureDisabled?: boolean;
   summaryGeneratedAt?: string;
 }
 

@@ -52,6 +52,7 @@ import {
 import { setHybridSearchLogger } from '../roles/hybrid-search.js';
 import { runArchivalSweep } from '../roles/lifecycle.js';
 import { captureFromAgentResponse } from '../capture/index.js';
+import { captureToEntityBuckets } from '../capture/entity-bucket.js';
 import {
   fileStoragePlugin,
   loadPlugins,
@@ -812,16 +813,25 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   function scheduleCaptureFromResponse(hostSessionId: string, responseText: string): void {
     const session = getHostSession(deps.db, hostSessionId);
     const roleIds = session?.roleIds ?? [];
-    if (roleIds.length === 0) return;
     void (async () => {
       try {
-        const result = await captureFromAgentResponse({
-          db: deps.db,
-          hostSessionId,
-          roleIds,
-          responseText,
-          embedFn: makePseudoEmbedFn(),
-        });
+        // Knowledge tiers PR-α: unbound chats capture into entity
+        // buckets (chat-captured/<user>/<entity>/ on accept) instead of
+        // being silently dropped — "对话提到 og 的一小部分知识" now has
+        // a home without spawning a whole role.
+        const result = roleIds.length > 0
+          ? await captureFromAgentResponse({
+            db: deps.db,
+            hostSessionId,
+            roleIds,
+            responseText,
+            embedFn: makePseudoEmbedFn(),
+          })
+          : captureToEntityBuckets({
+            db: deps.db,
+            hostSessionId,
+            responseText,
+          });
         // Emit one event per actually-inserted candidate so the renderer
         // can increment the Roles "Candidates (N)" badge precisely.
         for (const candidate of result.inserted) {

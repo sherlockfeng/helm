@@ -38,7 +38,7 @@ const DEFAULT_EVENT_LIMIT = 200;
  *      headings (OUT, NEW, KNOWLEDGE, TIMELINE, …) — chats about helm
  *      itself kept resurfacing helm's own section labels.
  */
-const STOP_ENTITIES: ReadonlySet<string> = new Set([
+export const STOP_ENTITIES: ReadonlySet<string> = new Set([
   ...KNOWN_HELM_ENTITIES.map((e) => e.toLowerCase()),
   // bucket 2 — formats / protocols / file types
   'json', 'html', 'htm', 'http', 'https', 'url', 'uri', 'xml', 'yaml',

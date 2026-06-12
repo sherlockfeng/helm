@@ -139,8 +139,11 @@ export function unknownEntitiesForChat(
     }
   }
 
-  // Apply stoplist + thresholds + sort.
+  // Apply stoplist + thresholds + sort. Digits-only tokens (PR / issue
+  // numbers like "152" surfaced by the URL last-segment tier) are never
+  // knowledge entities.
   const unknowns = Array.from(counts.values())
+    .filter((c) => !/^\d+$/.test(c.entity))
     .filter((c) => !STOP_ENTITIES.has(c.entity.toLowerCase()))
     .filter((c) => !knownSet.has(c.entity.toLowerCase()))
     .filter((c) => c.mentions >= minMentions)

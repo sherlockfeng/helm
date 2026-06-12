@@ -502,6 +502,14 @@ export interface KnowledgeRepo {
   importDirs?: string[];
 }
 
+/** PR-β — cached org-side context for one knowledge candidate. */
+export interface CandidateExternalContext {
+  candidateId: string;
+  providers: string[];
+  body: string;
+  fetchedAt: number;
+}
+
 /** Files-as-truth PR-3 — a captured file not yet on the remote. */
 export interface UnpublishedCapturedFile {
   relPath: string;

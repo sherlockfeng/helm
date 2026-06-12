@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
+import { useCandidateContexts } from '../hooks/useCandidateContexts.js';
+import { ExternalContextBox } from '../components/ExternalContextBox.js';
 import { useApi } from '../hooks/useApi.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
@@ -46,6 +48,8 @@ export function KnowledgeReviewPage() {
   }, [data]);
 
   const candidates = useMemo(() => data?.candidates ?? [], [data]);
+  const candidateIds = useMemo(() => candidates.map((c) => c.id), [candidates]);
+  const { contexts, refreshing, refresh } = useCandidateContexts(candidateIds);
   const selectedCount = selected.size;
 
   if (error) {
@@ -106,6 +110,9 @@ export function KnowledgeReviewPage() {
         <CandidateCard
           key={c.id}
           candidate={c}
+          externalContext={contexts[c.id]}
+          contextRefreshing={refreshing.has(c.id)}
+          onRefreshContext={() => { void refresh(c.id); }}
           selected={selected.has(c.id)}
           onToggleSelected={(next) => {
             setSelected((prev) => {
@@ -142,11 +149,17 @@ function CandidateCard({
   selected,
   onToggleSelected,
   onAfterAction,
+  externalContext,
+  contextRefreshing,
+  onRefreshContext,
 }: {
   candidate: KnowledgeCandidate;
   selected: boolean;
   onToggleSelected: (next: boolean) => void;
   onAfterAction: () => void;
+  externalContext?: import('../api/types.js').CandidateExternalContext;
+  contextRefreshing: boolean;
+  onRefreshContext: () => void;
 }): ReactElement {
   const [busy, setBusy] = useState(false);
 
@@ -202,7 +215,12 @@ function CandidateCard({
             )}
           </div>
           <p style={{ whiteSpace: 'pre-wrap', margin: '8px 0' }}>{candidate.chunkText}</p>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <ExternalContextBox
+            context={externalContext}
+            refreshing={contextRefreshing}
+            onRefresh={onRefreshContext}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <Button onClick={accept} disabled={busy} variant="primary">Accept</Button>
             <Button onClick={reject} disabled={busy} variant="danger">Reject</Button>
           </div>

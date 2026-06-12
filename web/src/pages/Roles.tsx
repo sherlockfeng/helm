@@ -12,9 +12,11 @@
  * for a 10-file set, gated on aria-busy.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
+import { useCandidateContexts } from '../hooks/useCandidateContexts.js';
+import { ExternalContextBox } from '../components/ExternalContextBox.js';
 import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
@@ -583,80 +585,6 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
  * so its state (which candidate is being edited / busy state) doesn't
  * rerender the whole detail panel on every button click.
  */
-/**
- * On-demand org-knowledge comparison for one candidate. Queries the
- * configured external providers (custom MCP bridges / depscope) with
- * the captured text and renders the answers next to the chat content,
- * so the curation decision (new / duplicate / contradicts org
- * knowledge) is made with both sides visible. Lazy — nothing fires
- * until the user clicks (an external round-trip can take seconds and
- * may pop an auth window on first use).
- */
-function ExternalCompare({ text }: { text: string }) {
-  const [state, setState] = useState<
-    | { phase: 'idle' }
-    | { phase: 'loading' }
-    | { phase: 'done'; body: string | null; reason?: string }
-  >({ phase: 'idle' });
-
-  const run = async (): Promise<void> => {
-    setState({ phase: 'loading' });
-    try {
-      // No provider filter: the server defaults to every enabled
-      // EXTERNAL provider from config (custom MCP bridges, depscope).
-      const r = await helmApi.lookupKnowledge(text);
-      const body = r.snippets
-        .map((s) => (s.source ? `【${s.source}】\n${s.body}` : s.body))
-        .join('\n\n').trim();
-      if (body) {
-        setState({ phase: 'done', body });
-      } else {
-        const bad = r.diagnostics.filter((d) => d.status !== 'ok');
-        setState({
-          phase: 'done', body: null,
-          ...(bad.length > 0
-            ? { reason: bad.map((d) => `${d.provider}: ${d.status}${d.reason ? ` (${d.reason})` : ''}`).join('; ') }
-            : {}),
-        });
-      }
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setState({ phase: 'done', body: null, reason: msg });
-    }
-  };
-
-  if (state.phase === 'idle') {
-    return (
-      <button
-        onClick={() => { void run(); }}
-        title="用这段沉淀文本查询已配置的外部知识源，组织已有知识和 chat 内容并排对照"
-        style={{ fontSize: 12, marginTop: 6 }}
-      >
-        外部知识对照
-      </button>
-    );
-  }
-  if (state.phase === 'loading') {
-    return <span className="muted" style={{ fontSize: 12 }}>外部知识查询中…（首次可能拉起授权窗口）</span>;
-  }
-  return (
-    <div style={{
-      marginTop: 6, padding: '8px 10px', borderRadius: 6, width: '100%',
-      backgroundColor: '#f5f3ff', border: '1px solid #ddd6fe',
-    }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#6d28d9', marginBottom: 4 }}>
-        组织已有相关
-        <button onClick={() => { void run(); }} style={{ marginLeft: 8, fontSize: 11 }}>重查</button>
-      </div>
-      {state.body
-        ? <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{state.body}</pre>
-        : <span className="muted" style={{ fontSize: 12 }}>
-            {state.reason ? `查询未成功（${state.reason}）` : '未找到相关组织知识 — 这可能是真正的新知识'}
-          </span>}
-    </div>
-  );
-}
-
 function RoleCandidates({
   roleId,
   onChange,
@@ -665,6 +593,11 @@ function RoleCandidates({
   onChange: () => void;
 }) {
   const list = useApi(() => helmApi.listCandidates(roleId, 'pending'), [roleId]);
+  const candidateIds = useMemo(
+    () => (list.data?.candidates ?? []).map((c) => c.id),
+    [list.data],
+  );
+  const { contexts, refreshing, refresh } = useCandidateContexts(candidateIds);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -804,7 +737,13 @@ function RoleCandidates({
                   </>
                 )}
               </div>
-              {!isEditing && <ExternalCompare text={c.chunkText} />}
+              {!isEditing && (
+                <ExternalContextBox
+                  context={contexts[c.id]}
+                  refreshing={refreshing.has(c.id)}
+                  onRefresh={() => { void refresh(c.id); }}
+                />
+              )}
             </li>
           );
         })}

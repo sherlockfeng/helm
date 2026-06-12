@@ -710,10 +710,15 @@ export const helmApi = {
       snippets: Array<{ source: string; title: string; body: string; score?: number; citation?: string }>;
       diagnostics: Array<{ provider: string; status: 'ok' | 'skipped' | 'error' | 'timeout'; snippetCount: number; reason?: string }>;
     }>('POST', '/api/knowledge-lookup', { query, ...(providers ? { providers } : {}) }),
-  // v28: import-directory whitelist.
-  getRepoDirs: (repoId: string) =>
+  // v28: import-directory whitelist (+PR-γ: parent= lists sub-dirs).
+  getRepoDirs: (repoId: string, parent?: string) =>
     request<{ dirs: string[]; importDirs: string[] | null }>(
-      'GET', `/api/knowledge-repos/${encodeURIComponent(repoId)}/dirs`,
+      'GET', `/api/knowledge-repos/${encodeURIComponent(repoId)}/dirs${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`,
+    ),
+  // PR-γ: 升格 — consolidated personal knowledge → domains/ MR.
+  promoteToDomain: (repoId: string, input: { domain: string; title: string; body: string }) =>
+    request<{ branch: string; prUrl: string; filesWritten: number; relPath: string }>(
+      'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/promote`, input,
     ),
   setRepoImportDirs: (repoId: string, importDirs: string[] | null) =>
     request<{ repo: KnowledgeRepo }>(

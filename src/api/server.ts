@@ -1301,6 +1301,45 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
       }
 
+      // 知识阶梯 PR-γ: 升格 — consolidated personal knowledge → domains/ MR.
+      //   POST /api/knowledge-repos/:id/promote  body { domain, title, body }
+      const repoPromoteMatch = url.pathname.match(
+        /^\/api\/knowledge-repos\/([^/]+)\/promote$/,
+      );
+      if (repoPromoteMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledgeRepoManager) {
+          return send(res, 501, { error: 'no_repo_manager' });
+        }
+        let body: { domain?: unknown; title?: unknown; body?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body.domain !== 'string' || typeof body.title !== 'string'
+            || typeof body.body !== 'string') {
+          return badRequest(res, 'domain, title and body are required strings');
+        }
+        try {
+          const result = await deps.knowledgeRepoManager.promoteToDomain({
+            repoId: repoPromoteMatch[1]!,
+            domain: body.domain,
+            title: body.title,
+            body: body.body,
+          });
+          return send(res, 200, result);
+        } catch (err) {
+          if (err instanceof KnowledgeRepoManagerError) {
+            return send(res, 409, { error: 'promote_failed', message: err.message });
+          }
+          if (err instanceof Error && err.name === 'PublishError') {
+            const stage = (err as { stage?: string }).stage ?? 'unknown';
+            return send(res, stage === 'precheck' ? 403 : 500, {
+              error: 'publish_failed', stage, message: err.message,
+            });
+          }
+          return internalError(res, err);
+        }
+      }
+
       // Files-as-truth PR-3: captured-points batch publish.
       //   GET  /api/knowledge-repos/:id/captured         — list unpublished
       //   POST /api/knowledge-repos/:id/publish-captured — one MR for all
@@ -1422,7 +1461,9 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         try {
           const repo = getKnowledgeRepo(deps.db, repoDirsMatch[1]!);
           if (!repo) return notFound(res);
-          const dirs = deps.knowledgeRepoManager.listRepoTopDirs(repo.id);
+          // PR-γ: ?parent=domains lists sub-domains for the promote modal.
+          const parent = url.searchParams.get('parent') ?? undefined;
+          const dirs = deps.knowledgeRepoManager.listRepoTopDirs(repo.id, parent);
           return send(res, 200, { dirs, importDirs: repo.importDirs ?? null });
         } catch (err) {
           if (err instanceof KnowledgeRepoManagerError) {

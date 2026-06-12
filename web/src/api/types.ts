@@ -255,6 +255,9 @@ export interface Role {
    *  meaningful content change (train, update, drop chunk/source).
    *  Fresh roles + back-migrated rows start at 1. */
   version: number;
+  /** PR-δ: Expert (true) vs pure knowledge Collection (false —
+   *  imported dirs, entity buckets). Retrieval treats both equally. */
+  bindable: boolean;
 }
 
 /** Phase 80 (helm-design PR B): auto-push config for a role. */

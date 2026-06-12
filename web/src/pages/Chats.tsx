@@ -228,7 +228,7 @@ function ConversationDetailPane({
   onMutated,
 }: {
   chat: ActiveChat;
-  roles: { id: string; name: string; isBuiltin?: boolean }[];
+  roles: { id: string; name: string; isBuiltin?: boolean; bindable?: boolean }[];
   onMutated: () => void;
 }): ReactElement {
   const { data, loading, reload } = useApi(
@@ -444,7 +444,7 @@ function KnowledgeInSection({
   onRemoveRole,
 }: {
   chat: ActiveChat;
-  roles: { id: string; name: string; isBuiltin?: boolean }[];
+  roles: { id: string; name: string; isBuiltin?: boolean; bindable?: boolean }[];
   latest: ConversationDetailKnowledgeInPlay | undefined;
   savingRole: boolean;
   onAddRole: (roleId: string) => void;
@@ -454,7 +454,10 @@ function KnowledgeInSection({
     id: rid,
     role: roles.find((r) => r.id === rid),
   }));
-  const addable = roles.filter((r) => !chat.roleIds.includes(r.id));
+  // PR-δ: only Experts are bindable — Collections (imported dirs,
+  // entity buckets) stay out of the persona dropdown; retrieval still
+  // covers their knowledge.
+  const addable = roles.filter((r) => !chat.roleIds.includes(r.id) && r.bindable !== false);
   // Show up to 3 retrieved chunks; the rest fold under "show N more".
   const allPoints = latest?.points ?? [];
   const [expanded, setExpanded] = useState(false);

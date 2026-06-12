@@ -4,8 +4,8 @@ import {
   bumpRoleVersion,
   deleteChunkById,
   deleteChunksForRole, deleteRole, getAgentSession, getChunksForRole, getRole,
-  insertChunk, insertSource, listRoles, upsertAgentSession, upsertRole,
-  deleteSource,
+  insertChunk, insertSource, listRoles, setRoleBindable, upsertAgentSession,
+  upsertRole, deleteSource,
 } from '../../../src/storage/repos/roles.js';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import type { AgentSession, KnowledgeChunk, Role } from '../../../src/storage/types.js';
@@ -26,6 +26,7 @@ function makeRole(overrides: Partial<Role> = {}): Role {
     // schema's INSERT default) so existing assertions about "is the role
     // there" keep working without per-test boilerplate.
     version: 1,
+    bindable: true,
     ...overrides,
   };
 }
@@ -194,5 +195,31 @@ describe('agent sessions', () => {
   it('attack: session with non-existent roleId throws (FK)', () => {
     const session: AgentSession = { provider: 'cursor', roleId: 'ghost', sessionId: 's1', externalId: 'x', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     expect(() => upsertAgentSession(db, session)).toThrow();
+  });
+});
+
+describe('PR-δ: bindable', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => { db = openDb(); });
+  afterEach(() => { db.close(); });
+
+  it('insert defaults to Expert; bindable:false creates a Collection', () => {
+    upsertRole(db, makeRole({ id: 'exp' }));
+    upsertRole(db, { ...makeRole({ id: 'col' }), bindable: false });
+    expect(getRole(db, 'exp')?.bindable).toBe(true);
+    expect(getRole(db, 'col')?.bindable).toBe(false);
+  });
+
+  it('conflict update never flips bindable', () => {
+    upsertRole(db, makeRole({ id: 'r' }));               // Expert
+    upsertRole(db, { ...makeRole({ id: 'r' }), bindable: false }); // re-upsert
+    expect(getRole(db, 'r')?.bindable).toBe(true);
+  });
+
+  it('setRoleBindable flips and reports row existence', () => {
+    upsertRole(db, makeRole({ id: 'r' }));
+    expect(setRoleBindable(db, 'r', false)).toBe(true);
+    expect(getRole(db, 'r')?.bindable).toBe(false);
+    expect(setRoleBindable(db, 'nope', true)).toBe(false);
   });
 });

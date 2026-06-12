@@ -758,6 +758,7 @@ function RoleCard({
   onToggle,
   onUpdateViaChat,
   onTrained,
+  onToggleBindable,
 }: {
   role: RoleSummary;
   expanded: boolean;
@@ -765,13 +766,16 @@ function RoleCard({
   /** Phase 65: open the train modal in update-mode for this role. */
   onUpdateViaChat: () => void;
   onTrained: () => void;
+  /** PR-δ: flip Expert / Collection. */
+  onToggleBindable: () => void;
 }) {
   return (
     <Card>
       <div className="row">
         <div style={{ flex: 1 }}>
           <div className="label">
-            {role.isBuiltin ? 'built-in' : 'custom'} · <code title={role.id}>{shortId(role.id)}</code>
+            {role.isBuiltin ? 'built-in' : role.bindable === false ? '知识集' : '专家'}
+            {' · '}<code title={role.id}>{shortId(role.id)}</code>
             {/* helm-design PR A: role version. Hidden when v1 (the
                 initial state — visually noisy on every brand-new
                 role) so only edited roles show the marker. */}
@@ -810,12 +814,22 @@ function RoleCard({
               train_role) so existing chunks survive. Hidden on built-ins
               because their prompts/chunks are seeded from src — overwriting
               would make them drift from code. */}
-          {!role.isBuiltin && (
+          {!role.isBuiltin && role.bindable !== false && (
             <button
               onClick={onUpdateViaChat}
               title="Append knowledge or refine the system prompt — existing chunks stay."
             >
               Update via chat
+            </button>
+          )}
+          {!role.isBuiltin && (
+            <button
+              onClick={onToggleBindable}
+              title={role.bindable === false
+                ? '升格为专家：可绑定到对话、配置 system prompt、开场注入知识'
+                : '转为知识集：仅作为知识命名空间，检索不受影响，不再出现在绑定列表'}
+            >
+              {role.bindable === false ? '升格为专家' : '转为知识集'}
             </button>
           )}
           <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
@@ -850,8 +864,22 @@ export function RolesPage() {
   // their own roles they've added; pending-candidates rolls up the
   // per-role candidate badge.
   const allRoles = data?.roles ?? [];
+  // PR-δ: Experts (bindable personas) render first; pure knowledge
+  // Collections (imported dirs / entity buckets) get their own section.
+  const experts = allRoles.filter((r) => r.bindable !== false);
+  const collections = allRoles.filter((r) => r.bindable === false);
   const builtInRoles = allRoles.filter((r) => r.isBuiltin).length;
   const userRoles = allRoles.length - builtInRoles;
+
+  const toggleBindable = async (r: RoleSummary): Promise<void> => {
+    try {
+      await helmApi.setRoleBindable(r.id, r.bindable === false);
+      toast.success(r.bindable === false ? `已升格为专家：${r.name}` : `已转为知识集：${r.name}`);
+      reload();
+    } catch (err) {
+      toast.error(`切换失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    }
+  };
   const pendingCandidates = allRoles.reduce(
     (acc, r) => acc + (r.pendingCandidateCount ?? 0),
     0,
@@ -890,16 +918,38 @@ export function RolesPage() {
         />
       )}
 
-      {data && data.roles.map((r) => (
+      {data && experts.map((r) => (
         <RoleCard
           key={r.id}
           role={r}
           expanded={expanded === r.id}
           onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
           onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
+          onToggleBindable={() => { void toggleBindable(r); }}
           onTrained={() => reload()}
         />
       ))}
+
+      {data && collections.length > 0 && (
+        <>
+          <h3 style={{ margin: '20px 0 4px' }}>知识集</h3>
+          <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 12 }}>
+            纯知识命名空间（导入目录、实体碎片桶）——检索照常参与，
+            但不出现在对话绑定列表。值得拥有"人格"的可升格为专家。
+          </p>
+          {collections.map((r) => (
+            <RoleCard
+              key={r.id}
+              role={r}
+              expanded={expanded === r.id}
+              onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
+              onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
+              onToggleBindable={() => { void toggleBindable(r); }}
+              onTrained={() => reload()}
+            />
+          ))}
+        </>
+      )}
 
       {chatTarget && (
         <RoleTrainChatModal

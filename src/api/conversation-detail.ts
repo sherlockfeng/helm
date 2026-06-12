@@ -27,6 +27,7 @@ import { listHostEvents } from '../storage/repos/host-event-log.js';
 import { getRetrievalsForSession } from '../storage/repos/retrieval-log.js';
 import { suggestRolesForChat, type RoleSuggestion } from '../knowledge/chat-role-suggester.js';
 import { unknownEntitiesForChat, type UnknownEntity } from '../knowledge/chat-unknown-entities.js';
+import { applyCuration, getEntityCuration } from '../knowledge/entity-curation.js';
 import type {
   HostEventLogEntry,
   HostSession,
@@ -186,7 +187,12 @@ export function getConversationDetail(
   });
 
   const roleSuggestions = suggestRolesForChat(db, hostSessionId);
-  const unknownEntities = unknownEntitiesForChat(db, hostSessionId);
+  // LLM-curated strip: hide tokens the agent reviewed and rejected;
+  // tokens that appeared after the last pass show until re-curation.
+  const unknownEntities = applyCuration(
+    unknownEntitiesForChat(db, hostSessionId),
+    getEntityCuration(db, hostSessionId),
+  );
 
   return {
     session, timeline, turns, knowledgeInPlay, candidates,

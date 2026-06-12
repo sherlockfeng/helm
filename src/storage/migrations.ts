@@ -1030,6 +1030,26 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 30,
+    description:
+      'chat_entity_curation — LLM-curated unknown-entity strip per chat.'
+      + ' Rule extraction surfaces noise no regex can judge (usernames,'
+      + ' generic platform words); an LLM pass at the Stop hook decides'
+      + ' which tokens are real knowledge entities. input_entities is the'
+      + ' list the LLM saw — entities outside it (new since curation) are'
+      + ' shown unfiltered until the next pass.',
+    up: `
+      CREATE TABLE IF NOT EXISTS chat_entity_curation (
+        host_session_id TEXT PRIMARY KEY
+          REFERENCES host_sessions(id) ON DELETE CASCADE,
+        input_hash      TEXT NOT NULL,
+        input_entities  TEXT NOT NULL,
+        kept            TEXT NOT NULL,
+        curated_at      INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -53,6 +53,7 @@ import { setHybridSearchLogger } from '../roles/hybrid-search.js';
 import { runArchivalSweep } from '../roles/lifecycle.js';
 import { captureFromAgentResponse } from '../capture/index.js';
 import { captureToEntityBuckets } from '../capture/entity-bucket.js';
+import { fetchAndCacheCandidateContext } from '../knowledge/candidate-context.js';
 import {
   fileStoragePlugin,
   loadPlugins,
@@ -850,6 +851,24 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
               model: liveConfig.cursor.model,
             }).catch(() => { /* swallow async rejections */ });
           } catch { /* engine unavailable — skip classification */ }
+        }
+        // PR-β (knowledge tiers): prefetch external context (Tika /
+        // depscope / custom MCP bridges) for each new candidate so the
+        // Review inbox shows fragment + org-side knowledge together
+        // with zero clicks. Fire-and-forget; failures just leave the
+        // cache empty and the UI offers a manual refresh.
+        const externalProviderIds = (liveConfig.knowledge?.providers ?? [])
+          .filter((p) => p.enabled)
+          .map((p) => p.id);
+        if (externalProviderIds.length > 0) {
+          for (const candidate of result.inserted) {
+            void fetchAndCacheCandidateContext(deps.db, knowledge, {
+              candidateId: candidate.id,
+              queryText: candidate.chunkText,
+              providers: externalProviderIds,
+              onWarning: (msg, ctx) => captureLog.warn(msg, { data: ctx }),
+            });
+          }
         }
         if (result.candidatesCreated > 0 || result.segments > 0) {
           captureLog.info('capture_sweep_completed', {

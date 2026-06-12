@@ -107,6 +107,10 @@ import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { slugifyPointId } from '../knowledge-repo/slug.js';
 import { queryKnowledge } from '../mcp/tools/query-knowledge.js';
+import {
+  fetchAndCacheCandidateContext,
+  getCandidateContexts,
+} from '../knowledge/candidate-context.js';
 import type { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginRegistry } from '../plugins/index.js';
@@ -1529,6 +1533,46 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
         const candidates = listCandidatesForRole(deps.db, roleId, { status: statusParam as ValidStatus });
         return send(res, 200, { candidates });
+      }
+
+      // PR-β (knowledge tiers): external-context surface.
+      //   POST /api/knowledge-candidates/context          body { candidateIds }
+      //     — batch-read the prefetched org-side context for a page of
+      //       candidates (Review inbox / Roles / conversation detail).
+      //   POST /api/knowledge-candidates/:id/refresh-context
+      //     — re-query the configured providers now (prefetch missed,
+      //       provider config changed, …).
+      if (url.pathname === '/api/knowledge-candidates/context') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: { candidateIds?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (!Array.isArray(body.candidateIds)
+            || !body.candidateIds.every((x): x is string => typeof x === 'string')) {
+          return badRequest(res, 'candidateIds must be a string array');
+        }
+        const contexts = getCandidateContexts(deps.db, body.candidateIds.slice(0, 200));
+        return send(res, 200, { contexts });
+      }
+      const candidateCtxRefreshMatch = url.pathname.match(
+        /^\/api\/knowledge-candidates\/([^/]+)\/refresh-context$/,
+      );
+      if (candidateCtxRefreshMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.knowledge) {
+          return send(res, 501, { error: 'no_knowledge_registry' });
+        }
+        const cand = getCandidateById(deps.db, candidateCtxRefreshMatch[1]!);
+        if (!cand) return notFound(res);
+        const enabled = (deps.getConfig?.().knowledge.providers ?? [])
+          .filter((p) => p.enabled)
+          .map((p) => p.id);
+        const context = await fetchAndCacheCandidateContext(deps.db, deps.knowledge, {
+          candidateId: cand.id,
+          queryText: cand.chunkText,
+          ...(enabled.length > 0 ? { providers: enabled } : {}),
+        });
+        return send(res, 200, { context });
       }
 
       // Phase 78: candidate lifecycle endpoints. All three POST verbs work

@@ -1012,6 +1012,24 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE knowledge_repo ADD COLUMN import_dirs TEXT;
     `,
   },
+  {
+    version: 29,
+    description:
+      'candidate_external_context — cached external-knowledge context'
+      + ' (Tika / depscope / custom MCP bridges) per knowledge candidate.'
+      + ' Prefetched in the background right after capture so the Review'
+      + ' inbox renders the candidate and the org-side context together'
+      + ' without a click or an on-page round-trip.',
+    up: `
+      CREATE TABLE IF NOT EXISTS candidate_external_context (
+        candidate_id TEXT PRIMARY KEY
+          REFERENCES knowledge_candidates(id) ON DELETE CASCADE,
+        providers    TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        fetched_at   INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

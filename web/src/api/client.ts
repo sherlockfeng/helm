@@ -26,6 +26,7 @@ import type {
   RoleChunk,
   RoleMirror,
   RoleSummary,
+  CandidateExternalContext,
   Task,
   TrainRoleInput,
   UnpublishedCapturedFile,
@@ -688,6 +689,15 @@ export const helmApi = {
   ) =>
     request<{ branch: string; prUrl: string; filesWritten: number }>(
       'POST', `/api/knowledge-repos/${encodeURIComponent(repoId)}/publish`, input,
+    ),
+  // PR-β: candidate external-context cache.
+  getCandidateContexts: (candidateIds: string[]) =>
+    request<{ contexts: Record<string, CandidateExternalContext> }>(
+      'POST', '/api/knowledge-candidates/context', { candidateIds },
+    ),
+  refreshCandidateContext: (candidateId: string) =>
+    request<{ context: CandidateExternalContext | null }>(
+      'POST', `/api/knowledge-candidates/${encodeURIComponent(candidateId)}/refresh-context`,
     ),
   // Ad-hoc external-knowledge lookup (外部知识对照 button).
   lookupKnowledge: (query: string, providers?: string[]) =>

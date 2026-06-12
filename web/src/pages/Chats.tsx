@@ -20,6 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCandidateContexts } from '../hooks/useCandidateContexts.js';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
@@ -907,6 +908,8 @@ function KnowledgeOutSection({
   candidates: ConversationDetailCandidate[];
   onDecided: () => void;
 }): ReactElement | null {
+  const candidateIds = useMemo(() => candidates.map((c) => c.id), [candidates]);
+  const { contexts } = useCandidateContexts(candidateIds);
   // PR-B: split by whether the candidate refines an existing chunk
   // (UPDATE) or proposes new knowledge (NEW). Different visual
   // affordances — updates carry a reference to the chunk they replace.
@@ -939,7 +942,8 @@ function KnowledgeOutSection({
           <div className="helm-conv-out-group-label">🔄 建议更新</div>
           <ul className="helm-conv-candidates">
             {updates.map((c) => (
-              <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
+              <CandidateRow key={c.id} candidate={c} onDecided={onDecided}
+                externalContext={contexts[c.id]} />
             ))}
           </ul>
         </div>
@@ -950,7 +954,8 @@ function KnowledgeOutSection({
           <div className="helm-conv-out-group-label">💡 新知识</div>
           <ul className="helm-conv-candidates">
             {news.map((c) => (
-              <CandidateRow key={c.id} candidate={c} onDecided={onDecided} />
+              <CandidateRow key={c.id} candidate={c} onDecided={onDecided}
+                externalContext={contexts[c.id]} />
             ))}
           </ul>
         </div>
@@ -962,9 +967,11 @@ function KnowledgeOutSection({
 function CandidateRow({
   candidate,
   onDecided,
+  externalContext,
 }: {
   candidate: ConversationDetailCandidate;
   onDecided: () => void;
+  externalContext?: import('../api/types.js').CandidateExternalContext;
 }): ReactElement {
   const [busy, setBusy] = useState<'promote' | 'dismiss' | null>(null);
 
@@ -1014,6 +1021,17 @@ function CandidateRow({
         </div>
         {expanded && showFold && (
           <div className="helm-conv-candidate-excerpt-full">{candidate.chunkText}</div>
+        )}
+        {externalContext && (
+          <details style={{ marginTop: 4 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6d28d9' }}>
+              组织已有相关（{externalContext.providers.join(' · ')}）
+            </summary>
+            <pre style={{
+              margin: '4px 0 0', fontSize: 11, whiteSpace: 'pre-wrap',
+              maxHeight: 160, overflow: 'auto',
+            }}>{externalContext.body}</pre>
+          </details>
         )}
         <div className="helm-conv-candidate-foot">
           <span className="muted">

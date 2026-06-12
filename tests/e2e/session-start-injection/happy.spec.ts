@@ -7,6 +7,7 @@
  * displayName, and writes it to the host's `additional_context` response field.
  */
 
+import { HELM_TOOL_GUIDE_VERSION } from '../../../src/app/helm-tool-guide.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootE2e, runHookViaBridge, type E2eHarness } from '../_helpers/setup.js';
 import { setHostSessionRole, upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
@@ -34,7 +35,7 @@ describe('session-start-injection happy', () => {
     expect(r.additional_context).toBeDefined();
     expect(r.additional_context).toContain('helm is a desktop GUI');
     expect(r.additional_context).toContain('list_roles');
-    expect(r.additional_context).toContain('harness_create_task');
+    expect(r.additional_context).toContain('search_knowledge');
   });
 
   it('Phase 71: records lastInjectedGuideVersion on the host_session row', async () => {
@@ -45,7 +46,7 @@ describe('session-start-injection happy', () => {
     const row = harness.db.prepare(
       `SELECT last_injected_guide_version FROM host_sessions WHERE id = ?`,
     ).get('sess_guide_marker') as { last_injected_guide_version: number };
-    expect(row.last_injected_guide_version).toBe(1);
+    expect(row.last_injected_guide_version).toBe(HELM_TOOL_GUIDE_VERSION);
   });
 
   it('aggregates a fake provider into the response markdown', async () => {

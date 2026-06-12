@@ -1380,6 +1380,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // The renderer's knowledge-lookup endpoint queries the same
       // registry the MCP tools use (custom MCP bridges / depscope).
       knowledge,
+      // PR-γ2: lazy engine getter for the AI-整理 promote draft.
+      // current() throws when no engine is wired — the endpoint maps
+      // that to 503 so the modal can say "engine 未配置".
+      promoteDraftLlm: () => engineRouter.current().summarize,
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
       saveConfig: (input) => {

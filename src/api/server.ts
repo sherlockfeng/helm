@@ -112,6 +112,7 @@ import {
   fetchAndCacheCandidateContext,
   getCandidateContexts,
 } from '../knowledge/candidate-context.js';
+import { draftPromotionDoc } from '../knowledge/promote-draft.js';
 import type { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginRegistry } from '../plugins/index.js';
@@ -211,6 +212,12 @@ export interface HttpApiDeps {
    * context next to chat-captured content. Absent = endpoint responds 501.
    */
   knowledge?: KnowledgeProviderRegistry;
+  /**
+   * PR-γ2: lazy LLM getter for the AI-整理 promote draft. A getter
+   * (not a client) because engine wiring is hot-reloaded with config;
+   * it throws when no engine is available.
+   */
+  promoteDraftLlm?: () => import('../summarizer/campaign.js').LlmClient;
   /**
    * Phase 62: create a fresh pending_binds row from the renderer's
    * "Mirror to Lark" button. The caller (orchestrator) wires this to
@@ -1338,6 +1345,68 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           }
           return internalError(res, err);
         }
+      }
+
+      // PR-γ2: AI 整理 — polish selected fragments into a promotion
+      // draft, with external sources as reference.
+      //   POST /api/knowledge-repos/:id/promote-draft
+      //     body { fragments: string[], domain?, title? }
+      const repoPromoteDraftMatch = url.pathname.match(
+        /^\/api\/knowledge-repos\/([^/]+)\/promote-draft$/,
+      );
+      if (repoPromoteDraftMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.promoteDraftLlm) {
+          return send(res, 501, { error: 'no_draft_llm' });
+        }
+        let llm: import('../summarizer/campaign.js').LlmClient;
+        try { llm = deps.promoteDraftLlm(); }
+        catch {
+          return send(res, 503, {
+            error: 'engine_unavailable',
+            message: 'No LLM engine configured — set up claude or a cursor key in Settings.',
+          });
+        }
+        let body: { fragments?: unknown; domain?: unknown; title?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (!Array.isArray(body.fragments)
+            || !body.fragments.every((f): f is string => typeof f === 'string')
+            || body.fragments.length === 0) {
+          return badRequest(res, 'fragments must be a non-empty string array');
+        }
+        // Reference context from the configured external providers —
+        // best-effort, the draft works without it.
+        let externalContext = '';
+        if (deps.knowledge) {
+          try {
+            const enabled = (deps.getConfig?.().knowledge.providers ?? [])
+              .filter((p) => p.enabled).map((p) => p.id);
+            const lookup = await queryKnowledge(
+              deps.knowledge,
+              {
+                query: body.fragments.join('\n').slice(0, 300),
+                ...(enabled.length > 0 ? { providers: enabled } : {}),
+              },
+              { searchTimeoutMs: 20_000 },
+            );
+            externalContext = lookup.snippets
+              .map((sn) => `【${sn.source}】\n${sn.body.trim()}`)
+              .join('\n\n');
+          } catch { /* reference is optional */ }
+        }
+        const draft = await draftPromotionDoc({
+          fragments: body.fragments,
+          ...(typeof body.domain === 'string' && body.domain ? { domain: body.domain } : {}),
+          ...(typeof body.title === 'string' && body.title ? { title: body.title } : {}),
+          ...(externalContext ? { externalContext } : {}),
+          llm,
+          model: deps.getConfig?.().cursor.model ?? 'claude-sonnet-4-6',
+        });
+        if (draft === null) {
+          return send(res, 502, { error: 'draft_failed', message: 'LLM 未返回可用草稿，请重试或手动编辑。' });
+        }
+        return send(res, 200, { draft, usedExternalContext: externalContext.length > 0 });
       }
 
       // Files-as-truth PR-3: captured-points batch publish.

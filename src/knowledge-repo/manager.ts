@@ -47,7 +47,7 @@ import {
   classifyHost,
   parseGitUrl,
 } from './url.js';
-import { importRepoIntoLibrary, type ImportSummary } from './importer.js';
+import { LLM_WIKI_SKIP_DIRS, importRepoIntoLibrary, type ImportSummary } from './importer.js';
 import type { KnowledgeRepoProfile } from './profiles.js';
 import {
   serializePoint,
@@ -62,7 +62,7 @@ import {
   type CreatePrResult,
   type PrPlatformRunner,
 } from './publish.js';
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '../logger/index.js';
 import { getAliasesForPoint } from '../storage/repos/knowledge-point-alias.js';
@@ -497,6 +497,8 @@ export class KnowledgeRepoManager {
     const effective = profile ?? repo.profile;
     return importRepoIntoLibrary({
       db: this.db, localPath: repo.localPath, profile: effective, sourceRef: repoId,
+      ...(repo.importDirs && repo.importDirs.length > 0
+        ? { importDirs: repo.importDirs } : {}),
     });
   }
 
@@ -675,6 +677,27 @@ export class KnowledgeRepoManager {
         .run(relPath, chunk.id);
       return { relPath, absPath };
     });
+  }
+
+  /**
+   * v28: top-level directories of the working copy that the import
+   * whitelist can select from. chat-captured/ is excluded — it's
+   * always imported, so listing it as a checkbox would mislead.
+   */
+  listRepoTopDirs(repoId: string): string[] {
+    const repo = getKnowledgeRepo(this.db, repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${repoId}`);
+    }
+    if (!existsSync(repo.localPath)) return [];
+    return readdirSync(repo.localPath)
+      .filter((name) => !name.startsWith('.') && !LLM_WIKI_SKIP_DIRS.has(name)
+        && name !== 'chat-captured')
+      .filter((name) => {
+        try { return statSync(join(repo.localPath, name)).isDirectory(); }
+        catch { return false; }
+      })
+      .sort();
   }
 
   /**

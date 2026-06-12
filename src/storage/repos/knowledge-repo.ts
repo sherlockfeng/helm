@@ -179,5 +179,30 @@ function rowToRepo(row: Record<string, unknown>): KnowledgeRepo {
   if (row['last_fetched_sha'] != null) r.lastFetchedSha = String(row['last_fetched_sha']);
   if (row['last_fetched_at']  != null) r.lastFetchedAt  = Number(row['last_fetched_at']);
   if (row['last_error']       != null) r.lastError      = String(row['last_error']);
+  if (row['import_dirs'] != null) {
+    try {
+      const dirs = JSON.parse(String(row['import_dirs'])) as unknown;
+      if (Array.isArray(dirs)) {
+        r.importDirs = dirs.filter((d): d is string => typeof d === 'string');
+      }
+    } catch {
+      // Malformed JSON behaves like "no whitelist" — log-free by design,
+      // the column is only ever written through setRepoImportDirs.
+    }
+  }
   return r;
+}
+
+/**
+ * v28: replace the import-directory whitelist. `null` clears it
+ * (= import every top-level directory, the legacy behaviour).
+ */
+export function setRepoImportDirs(
+  db: Database.Database,
+  id: string,
+  dirs: readonly string[] | null,
+): void {
+  db.prepare(`
+    UPDATE knowledge_repo SET import_dirs = ?, updated_at = ? WHERE id = ?
+  `).run(dirs === null ? null : JSON.stringify(dirs), Date.now(), id);
 }

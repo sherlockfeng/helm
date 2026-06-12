@@ -265,7 +265,10 @@ function RepoRow({
           </span>
         </div>
         {repo.profile === 'llm-wiki' && (
-          <CapturedPanel repo={repo} busyParent={busy !== null} />
+          <>
+            <ImportDirsPanel repo={repo} onSaved={onActed} />
+            <CapturedPanel repo={repo} busyParent={busy !== null} />
+          </>
         )}
       </div>
       {showPublish && (
@@ -275,6 +278,88 @@ function RepoRow({
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * v28: import-directory whitelist. Every top-level dir used to become a
+ * role mechanically (scripts/, raw/, …) — now the user ticks which
+ * directories carry knowledge. Empty selection = import everything
+ * (legacy). chat-captured/ is always imported and not listed.
+ */
+function ImportDirsPanel({
+  repo, onSaved,
+}: { repo: KnowledgeRepo; onSaved: () => void }): ReactElement | null {
+  const dirsQuery = useApi(() => helmApi.getRepoDirs(repo.id), [repo.id]);
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  if (dirsQuery.loading || dirsQuery.error) return null;
+  const dirs = dirsQuery.data?.dirs ?? [];
+  if (dirs.length === 0) return null;
+  const saved = dirsQuery.data?.importDirs ?? null;
+  const current = selected ?? new Set(saved ?? []);
+  const whitelistActive = saved !== null && saved.length > 0;
+
+  const toggle = (d: string): void => {
+    const next = new Set(current);
+    if (next.has(d)) next.delete(d); else next.add(d);
+    setSelected(next);
+  };
+
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    try {
+      const dirsToSave = current.size > 0 ? [...current].sort() : null;
+      await helmApi.setRepoImportDirs(repo.id, dirsToSave);
+      toast.success(dirsToSave
+        ? `已保存白名单（${dirsToSave.length} 个目录）。重新 Import 生效。`
+        : '已清除白名单：导入全部目录。重新 Import 生效。');
+      dirsQuery.reload();
+      setSelected(null);
+      onSaved();
+    } catch (err) {
+      toast.error(`保存失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <button onClick={() => setOpen((p) => !p)} style={{ fontSize: 12 }}>
+        导入目录：{whitelistActive ? `${saved!.length} 个白名单` : '全部'} {open ? '▴' : '▾'}
+      </button>
+      {open && (
+        <div style={{
+          marginTop: 6, padding: '8px 10px', borderRadius: 6,
+          border: '1px solid var(--border)',
+        }}>
+          <p className="muted" style={{ margin: '0 0 6px', fontSize: 11 }}>
+            勾选要导入为知识的顶层目录；全不勾 = 导入全部。
+            chat-captured/ 永远导入，不在列表中。改动后需手动 Import 重建索引；
+            已导入的旧目录数据不会自动清除。
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
+            {dirs.map((d) => (
+              <label key={d} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={current.has(d)}
+                  onChange={() => toggle(d)}
+                />
+                <code>{d}/</code>
+              </label>
+            ))}
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Button disabled={saving || selected === null} aria-busy={saving}
+              onClick={() => { void save(); }}>
+              {saving ? '保存中…' : '保存'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

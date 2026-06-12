@@ -383,6 +383,25 @@ describe('importRepoIntoLibrary', () => {
     expect(getRolesForPoint(db, 'chat-captured-hyf-dr-docs-cap')).toEqual(['dr-docs']);
   });
 
+  it('domains/ imports at sub-domain granularity (domains itself is no collection)', () => {
+    const fs = makeFs({
+      '/repo/domains/stability/dr-plan.md': '# DR plan\n切流预案正文',
+      '/repo/domains/stability/tlb.md': '# TLB\nTLB 配置正文',
+      '/repo/domains/quality/lint.md': '# Lint\n质量门禁正文',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs, importDirs: ['domains'],
+    });
+    expect(summary.rolesImported).toBe(2);
+    expect(summary.pointsUpserted).toBe(3);
+    expect(getRole(db, 'domains')).toBeUndefined();
+    expect(getRole(db, 'stability')?.name).toBe('stability');
+    expect(getRole(db, 'stability')?.bindable).toBe(false);
+    expect(getRole(db, 'quality')?.name).toBe('quality');
+    // Path-slug ids keep the full provenance.
+    expect(getRolesForPoint(db, 'domains-stability-dr-plan')).toEqual(['stability']);
+  });
+
   it('v28: empty importDirs behaves like no whitelist (import everything)', () => {
     const fs = makeFs({
       '/repo/dr-docs/a.md': '# A\nbody',

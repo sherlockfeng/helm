@@ -256,16 +256,16 @@ export function PromoteModal({ roleId, roleName, onClose }: {
     try {
       const r = await helmApi.promoteToDomain(wikiRepo.id, { domain, title, body });
       setResult({ prUrl: r.prUrl, branch: r.branch, relPath: r.relPath });
-      toast.success(r.prUrl ? `升格 MR 已创建` : `分支已推送：${r.branch}（请手动开 MR）`);
+      toast.success(r.prUrl ? `Contribute MR 已创建` : `分支已推送：${r.branch}（请手动开 MR）`);
     } catch (err) {
-      toast.error(`升格失败: ${err instanceof ApiError ? err.message : String(err)}`);
+      toast.error(`Contribute 失败: ${err instanceof ApiError ? err.message : String(err)}`);
     } finally { setBusy(false); }
   };
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent title={`升格到 domains/ — ${roleName}`} width={720}>
-        {!wikiRepo && <p className="muted">未订阅 llm-wiki 仓库，无法升格。</p>}
+      <DialogContent title={`Contribute 到 domains/ — ${roleName}`} width={720}>
+        {!wikiRepo && <p className="muted">未订阅 llm-wiki 仓库，无法 Contribute。</p>}
         {result ? (
           <div>
             <p>✅ 已写入 <code>{result.relPath}</code> 并推送分支 <code>{result.branch}</code>。</p>
@@ -277,7 +277,7 @@ export function PromoteModal({ roleId, roleName, onClose }: {
         ) : (
           <>
             <p className="muted" style={{ fontSize: 12 }}>
-              勾选要升格的碎片 → 右侧合并稿可自由编辑 → 提交后开一个
+              勾选要 Contribute 的碎片 → 右侧合并稿可自由编辑 → 提交后开一个
               MR 到 domains/&lt;域&gt;/。评审合入后即成为团队成熟知识。
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -341,7 +341,7 @@ export function PromoteModal({ roleId, roleName, onClose }: {
                 aria-busy={busy}
                 onClick={() => { void submit(); }}
               >
-                {busy ? '开 MR 中…' : '提交升格 MR'}
+                {busy ? '开 MR 中…' : '提交 Contribute MR'}
               </Button>
               <button onClick={onClose}>取消</button>
             </div>
@@ -1002,19 +1002,19 @@ function RoleCard({
           {!role.isBuiltin && (
             <button
               onClick={onPromote}
-              title="挑选碎片合并成一篇文档，开 MR 升格到 llm-wiki 的 domains/<域>/"
+              title="挑选碎片合并成一篇文档，开 MR Contribute 到 llm-wiki 的 domains/<域>/"
             >
-              升格到 domains
+              Contribute
             </button>
           )}
           {!role.isBuiltin && (
             <button
               onClick={onToggleBindable}
               title={role.bindable === false
-                ? '升格为专家：可绑定到对话、配置 system prompt、开场注入知识'
-                : '转为知识集：仅作为知识命名空间，检索不受影响，不再出现在绑定列表'}
+                ? '设为专家：可绑定到对话、配置 system prompt、开场注入知识'
+                : '设为知识集：仅作为知识命名空间，检索不受影响，不再出现在绑定列表'}
             >
-              {role.bindable === false ? '升格为专家' : '转为知识集'}
+              {role.bindable === false ? '设为专家' : '设为知识集'}
             </button>
           )}
           <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
@@ -1061,7 +1061,7 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
   const toggleBindable = async (r: RoleSummary): Promise<void> => {
     try {
       await helmApi.setRoleBindable(r.id, r.bindable === false);
-      toast.success(r.bindable === false ? `已升格为专家：${r.name}` : `已转为知识集：${r.name}`);
+      toast.success(r.bindable === false ? `已设为专家：${r.name}` : `已设为知识集：${r.name}`);
       reload();
     } catch (err) {
       toast.error(`切换失败: ${err instanceof ApiError ? err.message : String(err)}`);

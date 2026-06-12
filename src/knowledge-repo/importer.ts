@@ -243,6 +243,12 @@ function enumerateHelmNative(fs: WalkerFs, localPath: string): RoleBucket[] {
  */
 const CHAT_CAPTURED_DIR = 'chat-captured';
 
+/**
+ * 团队成熟层的外壳目录：知识按子域组织（domains/stability），子域才是
+ * 集合；'domains' 本身不是知识主题，不应成为一个 60-chunk 的大杂烩集合。
+ */
+const DOMAINS_DIR = 'domains';
+
 /** Dirs that are never knowledge content (CI/tooling metadata). */
 export const LLM_WIKI_SKIP_DIRS: ReadonlySet<string> = new Set([
   'node_modules', '.codebase', '.context', '.cursor',
@@ -273,6 +279,12 @@ function enumerateLlmWiki(
       continue;
     }
     if (allow && !allow.has(slug)) continue;
+    if (slug === DOMAINS_DIR) {
+      // Sub-domain granularity: domains/stability → collection
+      // 'stability'. Whitelisting 'domains' imports every sub-domain.
+      out.push(...enumerateDomainSubdirs(fs, roleDir));
+      continue;
+    }
     const pointFiles = walkMarkdownFiles(fs, roleDir);
     if (pointFiles.length === 0) continue; // skip dirs with no .md
     out.push({
@@ -282,6 +294,27 @@ function enumerateLlmWiki(
       roleDir,
       pointFiles,
     });
+  }
+  return out;
+}
+
+function enumerateDomainSubdirs(fs: WalkerFs, domainsRoot: string): RoleBucket[] {
+  const out: RoleBucket[] = [];
+  let subs: string[];
+  try {
+    subs = fs.readdirSync(domainsRoot).filter((name) => {
+      if (name.startsWith('.')) return false;
+      try { return fs.statSync(join(domainsRoot, name)).isDirectory(); }
+      catch { return false; }
+    });
+  } catch {
+    return out;
+  }
+  for (const sub of subs) {
+    const roleDir = join(domainsRoot, sub);
+    const pointFiles = walkMarkdownFiles(fs, roleDir);
+    if (pointFiles.length === 0) continue;
+    out.push({ roleId: sub, roleName: sub, bindable: false, roleDir, pointFiles });
   }
   return out;
 }

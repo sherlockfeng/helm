@@ -58,18 +58,18 @@ export function KnowledgePromotePage(): ReactElement {
   return (
     <div className="helm-page">
       <PageHeader
-        title="升格"
-        subtitle={<>升级层：把个人层的知识推向团队。两种 MR 语义不同 —— <strong>个人同步</strong>把 chat-captured 文件推到远端（仍是个人态）；<strong>升格</strong>把整理后的文档送进 domains/&lt;域&gt;/，评审合入后成为团队成熟知识。</>}
+        title="Contribute"
+        subtitle={<>升级层：把个人层的知识推向团队。两种 MR 语义不同 —— <strong>个人同步</strong>把 chat-captured 文件推到远端（仍是个人态）；<strong>Contribute</strong> 把整理后的文档送进 domains/&lt;域&gt;/，评审合入后成为团队成熟知识。</>}
         stats={<>
           <StatTile label="未发布碎片" value={files.length} tone={files.length > 0 ? 'warn' : 'muted'} />
-          <StatTile label="可升格集合" value={promotable.length} tone={promotable.length > 0 ? 'live' : 'muted'} />
+          <StatTile label="可 Contribute" value={promotable.length} tone={promotable.length > 0 ? 'live' : 'muted'} />
         </>}
       />
 
       {!wikiRepo && !reposQuery.loading && (
         <EmptyState
           title="未订阅 llm-wiki 仓库。"
-          hint={<>先在 Sources 页订阅 llm-wiki，个人层与升格通道才会生效。</>}
+          hint={<>先在 Sources 页订阅 llm-wiki，个人层与 Contribute 通道才会生效。</>}
         />
       )}
 
@@ -104,7 +104,7 @@ export function KnowledgePromotePage(): ReactElement {
 
       {wikiRepo && (
         <Card>
-          <h3 style={{ marginTop: 0 }}>② 升格到团队层（domains/）</h3>
+          <h3 style={{ marginTop: 0 }}>② Contribute 到团队层（domains/）</h3>
           <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
             选一个集合 → 勾碎片 → ✨AI 整理成文档 → MR 进 domains/&lt;域&gt;/。
           </p>
@@ -127,7 +127,7 @@ export function KnowledgePromotePage(): ReactElement {
                 </span>
               </div>
               <Button onClick={() => setPromoteTarget({ roleId: r.id, name: r.name })}>
-                升格…
+                Contribute…
               </Button>
             </div>
           ))}

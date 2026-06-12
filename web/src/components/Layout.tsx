@@ -63,8 +63,8 @@ export const PRIMARY_NAV: NavEntry[] = [
       { to: '/knowledge/experts', label: 'Experts', icon: BookOpen },
       // 维护：知识命名空间与实体碎片桶（浏览 / 编辑知识点）
       { to: '/knowledge/collections', label: '知识集', icon: Layers },
-      // 升级：个人层 → 团队层（未发布同步 + 升格 MR）
-      { to: '/knowledge/promote', label: '升格', icon: ArrowUpToLine },
+      // 升级：个人层 → 团队层（未发布同步 + Contribute MR）
+      { to: '/knowledge/promote', label: 'Contribute', icon: ArrowUpToLine },
       // 维护：仓库订阅 / 同步 / 导入目录
       { to: '/knowledge/sources', label: 'Sources', icon: Cloud },
     ],

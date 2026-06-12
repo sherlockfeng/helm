@@ -260,19 +260,6 @@ export interface Role {
   bindable: boolean;
 }
 
-/** Phase 80 (helm-design PR B): auto-push config for a role. */
-export interface RoleMirror {
-  roleId: string;
-  targetUrl: string;
-  enabled: boolean;
-  lastPushedVersion?: number;
-  lastPushedEtag?: string;
-  lastPushedAt?: string;
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface RoleSummary extends Role {
   chunkCount: number;
   /** Phase 78 — # of pending knowledge-capture candidates for this role.

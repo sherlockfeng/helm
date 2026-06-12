@@ -1065,6 +1065,18 @@ export const MIGRATIONS: Migration[] = [
        WHERE is_builtin = 0 AND TRIM(COALESCE(system_prompt, '')) = '';
     `,
   },
+  {
+    version: 32,
+    description:
+      'drop role_mirrors — the .helmrole remote-mirror auto-push (Phase'
+      + ' 80 PR B) is superseded by files-as-truth: knowledge syncs'
+      + ' through the llm-wiki repo via MR flows (个人同步 / Contribute),'
+      + ' not bundle uploads to storage plugins.',
+    up: `
+      DROP INDEX IF EXISTS idx_role_mirrors_enabled_version;
+      DROP TABLE IF EXISTS role_mirrors;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

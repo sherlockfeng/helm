@@ -113,8 +113,8 @@ describe('knowledge-update lifecycle', () => {
     it('drops chunks / candidates / point_roles / mirrors / subscriptions', () => {
       seedRole(h.db, 'r-doomed');
       seedChunk(h.db, 'r-doomed', 'p-x');
-      // Candidate, point-role join, mirror, subscription — touch every
-      // table that has an ON DELETE CASCADE back to roles(id).
+      // Candidate, point-role join, subscription — touch every table
+      // that has an ON DELETE CASCADE back to roles(id).
       insertCandidateIfNew(h.db, {
         id: 'c-doomed', roleId: 'r-doomed', chunkText: 't',
         sourceSegmentIndex: 0, kind: 'other',
@@ -125,11 +125,7 @@ describe('knowledge-update lifecycle', () => {
       });
       h.db.prepare(`INSERT INTO knowledge_point_roles (point_id, role_id) VALUES ('p-x', 'r-doomed')`).run();
 
-      // Mirrors + subscriptions — schema lets these be sparse.
-      h.db.prepare(`
-        INSERT INTO role_mirrors (role_id, target_url, created_at, updated_at)
-        VALUES ('r-doomed', 'tos://x', ?, ?)
-      `).run(new Date().toISOString(), new Date().toISOString());
+      // Subscriptions — schema lets these be sparse.
       h.db.prepare(`
         INSERT INTO role_subscriptions
           (id, role_id, source_url, source_type, sync_interval_minutes, auto_apply,
@@ -144,7 +140,6 @@ describe('knowledge-update lifecycle', () => {
           .get() as { n: number }).n;
       expect(counts('knowledge_chunks')).toBe(0);
       expect(counts('knowledge_candidates')).toBe(0);
-      expect(counts('role_mirrors')).toBe(0);
       expect(counts('role_subscriptions')).toBe(0);
       const joinLeft = (h.db.prepare(
         `SELECT COUNT(*) AS n FROM knowledge_point_roles WHERE role_id = 'r-doomed'`,

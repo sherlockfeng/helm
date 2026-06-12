@@ -354,33 +354,9 @@ export interface RoleSubscription {
   createdAt: string;
 }
 
-/**
- * Phase 80 (helm-design PR B): auto-push config for a role's .helmrole
- * bundle. When enabled, the in-process MirrorRunner debounces version
- * bumps and uploads the freshly-packed bundle to `targetUrl` via the
- * matching storage plugin. `last_pushed_version` lets a catch-up sweep
- * rescue pushes missed across restart / transient failure.
- */
-export interface RoleMirror {
-  roleId: string;
-  /** Storage-plugin URL (e.g. `tos://bucket/helm-role/<roleId>.helmrole`). */
-  targetUrl: string;
-  /** When false the runner ignores this row entirely (no pushes, no sweep). */
-  enabled: boolean;
-  /** roles.version at the moment of the last successful upload. Catch-up
-   *  sweep pushes when `last_pushed_version < roles.version`. NULL means
-   *  "never pushed". */
-  lastPushedVersion?: number;
-  /** Storage backend's opaque change-detection token returned by the last
-   *  successful upload. Recorded for diagnostics — not consulted by the
-   *  push logic. */
-  lastPushedEtag?: string;
-  lastPushedAt?: string;
-  /** Last error message; cleared on next successful push. */
-  lastError?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+// RoleMirror (Phase 80 PR B) removed — superseded by files-as-truth:
+// knowledge syncs through the llm-wiki repo (MR flows), not .helmrole
+// bundle pushes. Table dropped in migration v32.
 
 export interface AgentSession {
   provider: string;

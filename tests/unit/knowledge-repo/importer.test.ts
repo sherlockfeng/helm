@@ -404,6 +404,27 @@ describe('importRepoIntoLibrary', () => {
     expect(getRolesForPoint(db, 'domains-stability-dr-plan')).toEqual(['stability']);
   });
 
+  it('tree whitelist: top/sub entries select sub-trees only', () => {
+    const fs = makeFs({
+      '/repo/domains/stability/dr.md': '# DR\n切流预案正文足够长的内容',
+      '/repo/domains/quality/lint.md': '# Lint\n质量门禁正文',
+      '/repo/wiki/concepts/og.md': '# OG\n概念页正文',
+      '/repo/wiki/sources/raw1.md': '# Raw\n来源页正文',
+    });
+    const summary = importRepoIntoLibrary({
+      db, localPath: '/repo', profile: 'llm-wiki', fs,
+      importDirs: ['domains/stability', 'wiki/concepts'],
+    });
+    // stability picked, quality dropped; wiki restricted to concepts/.
+    expect(summary.rolesImported).toBe(2);
+    expect(summary.pointsUpserted).toBe(2);
+    expect(getRole(db, 'stability')).toBeDefined();
+    expect(getRole(db, 'quality')).toBeUndefined();
+    expect(getRolesForPoint(db, 'wiki-concepts-og')).toEqual(['wiki']);
+    expect(db.prepare(`SELECT id FROM knowledge_chunks WHERE id = 'wiki-sources-raw1'`).get())
+      .toBeUndefined();
+  });
+
   it('v28: empty importDirs behaves like no whitelist (import everything)', () => {
     const fs = makeFs({
       '/repo/dr-docs/a.md': '# A\nbody',

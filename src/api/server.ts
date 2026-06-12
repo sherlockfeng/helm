@@ -1532,8 +1532,17 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           if (!repo) return notFound(res);
           // PR-γ: ?parent=domains lists sub-domains for the promote modal.
           const parent = url.searchParams.get('parent') ?? undefined;
-          const dirs = deps.knowledgeRepoManager.listRepoTopDirs(repo.id, parent);
-          return send(res, 200, { dirs, importDirs: repo.importDirs ?? null });
+          if (parent) {
+            const dirs = deps.knowledgeRepoManager.listRepoTopDirs(repo.id, parent);
+            return send(res, 200, { dirs, importDirs: repo.importDirs ?? null });
+          }
+          // Tree-select picker: top dirs + one level of children.
+          const tree = deps.knowledgeRepoManager.listRepoDirTree(repo.id);
+          return send(res, 200, {
+            dirs: tree.map((t) => t.name),
+            tree,
+            importDirs: repo.importDirs ?? null,
+          });
         } catch (err) {
           if (err instanceof KnowledgeRepoManagerError) {
             return send(res, 404, { error: 'dirs_failed', message: err.message });

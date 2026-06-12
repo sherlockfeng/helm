@@ -62,7 +62,9 @@ export interface ImporterInput {
   /** Mark every imported point with this source ref (e.g. repoId). */
   sourceRef?: string;
   /**
-   * v28 (llm-wiki only): whitelist of top-level directories to import.
+   * v28 (llm-wiki only): whitelist of directories to import. Entries
+   * are either a top-level dir ('wiki' = the whole tree) or a
+   * `top/sub` path ('domains/stability' = only that subtree).
    * Empty/absent = every directory (legacy). chat-captured/ — helm's
    * own write zone — is ALWAYS imported regardless of the whitelist.
    */
@@ -255,13 +257,39 @@ export const LLM_WIKI_SKIP_DIRS: ReadonlySet<string> = new Set([
   '.doc-lsp', '.doc-lsp-references', '.git', '.github', '.skills',
 ]);
 
+/**
+ * Whitelist entries parsed into per-top-dir scope: 'all' (bare top
+ * entry) or a set of sub-dir prefixes ('domains/stability' →
+ * domains ⇒ {stability}).
+ */
+function parseAllowMap(importDirs: readonly string[]): Map<string, 'all' | Set<string>> {
+  const map = new Map<string, 'all' | Set<string>>();
+  for (const raw of importDirs) {
+    const entry = raw.replace(/^\/+|\/+$/g, '');
+    if (!entry) continue;
+    const slash = entry.indexOf('/');
+    const top = slash === -1 ? entry : entry.slice(0, slash);
+    const sub = slash === -1 ? null : entry.slice(slash + 1);
+    const cur = map.get(top);
+    if (cur === 'all') continue;
+    if (sub === null) {
+      map.set(top, 'all');
+    } else {
+      const set = cur instanceof Set ? cur : new Set<string>();
+      set.add(sub);
+      map.set(top, set);
+    }
+  }
+  return map;
+}
+
 function enumerateLlmWiki(
   fs: WalkerFs,
   localPath: string,
   importDirs?: readonly string[],
 ): RoleBucket[] {
   if (!fs.existsSync(localPath)) return [];
-  const allow = importDirs && importDirs.length > 0 ? new Set(importDirs) : null;
+  const allow = importDirs && importDirs.length > 0 ? parseAllowMap(importDirs) : null;
   const slugs = fs.readdirSync(localPath)
     .filter((name) => !name.startsWith('.') && !LLM_WIKI_SKIP_DIRS.has(name))
     .filter((name) => {
@@ -278,14 +306,26 @@ function enumerateLlmWiki(
       out.push(...enumerateChatCaptured(fs, roleDir));
       continue;
     }
-    if (allow && !allow.has(slug)) continue;
+    const scope = allow ? allow.get(slug) : 'all';
+    if (allow && scope === undefined) continue;
     if (slug === DOMAINS_DIR) {
       // Sub-domain granularity: domains/stability → collection
-      // 'stability'. Whitelisting 'domains' imports every sub-domain.
-      out.push(...enumerateDomainSubdirs(fs, roleDir));
+      // 'stability'. 'domains' imports every sub-domain; a
+      // 'domains/stability' entry imports just that one.
+      const subs = enumerateDomainSubdirs(fs, roleDir);
+      out.push(...(scope === 'all' || scope === undefined
+        ? subs
+        : subs.filter((b) => scope.has(b.roleId))));
       continue;
     }
-    const pointFiles = walkMarkdownFiles(fs, roleDir);
+    let pointFiles = walkMarkdownFiles(fs, roleDir);
+    if (scope !== 'all' && scope !== undefined) {
+      // Partial selection inside a plain top dir ('wiki/concepts'):
+      // keep only files under one of the chosen sub-prefixes.
+      const prefixes = [...scope].map((p) => join(roleDir, p) + sep);
+      pointFiles = pointFiles.filter((f) =>
+        prefixes.some((p) => (f + sep).startsWith(p) || f.startsWith(p)));
+    }
     if (pointFiles.length === 0) continue; // skip dirs with no .md
     out.push({
       roleId: slug,

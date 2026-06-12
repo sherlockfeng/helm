@@ -1,5 +1,4 @@
 import type Database from 'better-sqlite3';
-import { fireMirrorSync } from '../../mirrors/trigger.js';
 import type {
   AgentSession,
   KnowledgeChunk,
@@ -204,7 +203,6 @@ export function deleteSource(
     bumpRoleVersion(db, roleRow.role_id);
     // PR B: signal the MirrorRunner. No-op if no runner is installed
     // (tests / non-orchestrator contexts).
-    fireMirrorSync(roleRow.role_id);
   }
   return { removed, chunksDeleted: Number(chunksRow.n) };
 }
@@ -411,7 +409,6 @@ export function deleteChunkById(db: Database.Database, chunkId: string): boolean
   if (removed && roleRow) {
     bumpRoleVersion(db, roleRow.role_id);
     // PR B: signal the MirrorRunner. No-op if no runner is installed.
-    fireMirrorSync(roleRow.role_id);
   }
   return removed;
 }

@@ -99,11 +99,6 @@ import {
   setCandidateStatus,
   updateCandidateText,
 } from '../storage/repos/knowledge-candidates.js';
-import {
-  deleteMirror,
-  getMirror,
-  upsertMirror,
-} from '../storage/repos/role-mirrors.js';
 import { updateRole as updateRoleLibrary } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { slugifyPointId } from '../knowledge-repo/slug.js';
@@ -414,16 +409,6 @@ export interface HttpApiDeps {
    * `"unknown"` when omitted.
    */
   helmVersion?: string;
-  /**
-   * Phase 80 (PR B): the auto-push runner. Exposed here so the manual
-   * "Push now" endpoint (POST /api/roles/:id/mirror/push) bypasses the
-   * debounce. Other mirror endpoints (GET/PUT/DELETE) operate on the
-   * role_mirrors table directly. When undefined, the push endpoint
-   * returns 501 — useful for tests + non-orchestrator harnesses.
-   */
-  mirrorRunner?: {
-    pushRole(roleId: string): Promise<{ ok: boolean; pushedVersion?: number; etag?: string; error?: string }>;
-  };
 }
 
 export interface HttpApiOptions {
@@ -2115,86 +2100,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         } catch (err) { return internalError(res, err); }
       }
 
-      // ── Role mirrors (Phase 80 / PR B) ──────────────────────────────
-      //
-      // GET    /api/roles/:id/mirror       → get the current config or 404
-      // PUT    /api/roles/:id/mirror       → upsert (body: { targetUrl, enabled? })
-      // DELETE /api/roles/:id/mirror       → remove the mirror entirely
-      // POST   /api/roles/:id/mirror/push  → bypass debounce + push now
-      //
-      // The mirror is per-role (UNIQUE in the schema). Setting it does NOT
-      // push immediately — that happens on the next role.version bump (or
-      // via the explicit /push endpoint).
-      const mirrorPushMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/mirror\/push$/);
-      if (mirrorPushMatch) {
-        if (req.method !== 'POST') return methodNotAllowed(res);
-        const roleId = mirrorPushMatch[1]!;
-        if (!getRoleRow(deps.db, roleId)) return notFound(res);
-        const mirror = getMirror(deps.db, roleId);
-        if (!mirror) {
-          return send(res, 404, { error: 'no_mirror', message: 'no mirror configured for this role' });
-        }
-        if (!deps.mirrorRunner) {
-          return send(res, 501, { error: 'mirror_runner_not_wired', message: 'manual push requires the mirror runner' });
-        }
-        try {
-          const result = await deps.mirrorRunner.pushRole(roleId);
-          if (!result.ok) {
-            return send(res, 502, { error: 'push_failed', message: result.error ?? 'upload failed' });
-          }
-          return send(res, 200, {
-            roleId,
-            pushedVersion: result.pushedVersion ?? null,
-            etag: result.etag ?? null,
-          });
-        } catch (err) { return internalError(res, err); }
-      }
-      const mirrorMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/mirror$/);
-      if (mirrorMatch) {
-        const roleId = mirrorMatch[1]!;
-        if (!getRoleRow(deps.db, roleId)) return notFound(res);
+      // Role mirrors (Phase 80 / PR B) removed — superseded by
+      // files-as-truth: knowledge syncs through the llm-wiki repo (MR
+      // flows), not .helmrole bundle pushes.
 
-        if (req.method === 'GET') {
-          const mirror = getMirror(deps.db, roleId);
-          if (!mirror) return notFound(res);
-          return send(res, 200, { mirror });
-        }
-
-        if (req.method === 'PUT') {
-          let body: { targetUrl?: unknown; enabled?: unknown };
-          try { body = JSON.parse(ctx.body || '{}'); } catch { return badRequest(res, 'invalid JSON'); }
-          const targetUrl = typeof body.targetUrl === 'string' ? body.targetUrl.trim() : '';
-          if (!targetUrl) return badRequest(res, 'targetUrl is required (string)');
-          // Validate the URL shape early so the user finds out about a
-          // bad URL on save, not on first push.
-          try {
-            resolveBundleUploadUrl(targetUrl, roleId);
-          } catch (err) {
-            return badRequest(res, (err as Error).message);
-          }
-          const enabled = body.enabled === undefined ? undefined : Boolean(body.enabled);
-          const mirror = upsertMirror(deps.db, {
-            roleId,
-            targetUrl,
-            ...(enabled !== undefined ? { enabled } : {}),
-          });
-          deps.logger?.info('role_mirror_upserted', {
-            data: { roleId, targetUrl, enabled: mirror.enabled },
-          });
-          return send(res, 200, { mirror });
-        }
-
-        if (req.method === 'DELETE') {
-          const removed = deleteMirror(deps.db, roleId);
-          if (!removed) return notFound(res);
-          deps.logger?.info('role_mirror_deleted', { data: { roleId } });
-          return send(res, 200, { roleId, deleted: true });
-        }
-
-        return methodNotAllowed(res);
-      }
-
-      // ── Requirements (B3) ───────────────────────────────────────────
       if (url.pathname === '/api/requirements') {
         if (req.method !== 'GET') return methodNotAllowed(res);
         const query = url.searchParams.get('q') ?? undefined;

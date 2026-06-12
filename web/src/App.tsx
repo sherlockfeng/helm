@@ -21,8 +21,8 @@ import { useProposalBootToast } from './lib/proposal-notifications.js';
 
 // Primary surfaces (new IA)
 import { ConversationsPage } from './pages/Conversations.js';
-import { KnowledgeLibraryPage } from './pages/KnowledgeLibrary.js';
-import { KnowledgeReviewPage } from './pages/KnowledgeReview.js';
+import { ExpertsPage, CollectionsPage } from './pages/Roles.js';
+import { KnowledgePromotePage } from './pages/KnowledgePromote.js';
 import { KnowledgeSourcesPage } from './pages/KnowledgeSources.js';
 import { VerificationCasesPage } from './pages/VerificationCases.js';
 import { VerificationRunsPage } from './pages/VerificationRuns.js';
@@ -62,10 +62,15 @@ export default function App() {
 
           {/* Primary IA */}
           <Route path="/conversations" element={<ConversationsPage />} />
-          <Route path="/knowledge" element={<Navigate to="/knowledge/library" replace />} />
-          <Route path="/knowledge/library" element={<KnowledgeLibraryPage />} />
-          <Route path="/knowledge/review" element={<KnowledgeReviewPage />} />
+          <Route path="/knowledge" element={<Navigate to="/knowledge/experts" replace />} />
+          <Route path="/knowledge/experts" element={<ExpertsPage />} />
+          <Route path="/knowledge/collections" element={<CollectionsPage />} />
+          <Route path="/knowledge/promote" element={<KnowledgePromotePage />} />
           <Route path="/knowledge/sources" element={<KnowledgeSourcesPage />} />
+          {/* Back-compat: Library split into Experts/知识集; Review folded
+              into the Conversations detail (提取的知识 section). */}
+          <Route path="/knowledge/library" element={<Navigate to="/knowledge/experts" replace />} />
+          <Route path="/knowledge/review" element={<Navigate to="/conversations" replace />} />
           <Route path="/verification" element={<Navigate to="/verification/cases" replace />} />
           <Route path="/verification/cases" element={<VerificationCasesPage />} />
           <Route path="/verification/runs" element={<VerificationRunsPage />} />
@@ -80,7 +85,7 @@ export default function App() {
 
           {/* Back-compat: old paths redirect to new ones. */}
           <Route path="/chats" element={<Navigate to="/conversations" replace />} />
-          <Route path="/roles" element={<Navigate to="/knowledge/library" replace />} />
+          <Route path="/roles" element={<Navigate to="/knowledge/experts" replace />} />
           <Route path="/subscriptions" element={<Navigate to="/knowledge/sources" replace />} />
 
           {/* Advanced + legacy surfaces — routes resolve regardless of

@@ -10,8 +10,9 @@ import { useEffect, useState, type ComponentType, type SVGProps } from 'react';
 import { helmApi } from '../api/client.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import {
-  // Primary nav (PR 1 — conversations-knowledge IA)
-  MessagesSquare, BookOpen, Inbox, Cloud,
+  // Primary nav — ordered by the knowledge lifecycle:
+  // 提取 (Conversations) → 使用 (Experts) → 维护 (知识集/Sources) → 升级 (升格)
+  MessagesSquare, BookOpen, Layers, ArrowUpToLine, Cloud,
   ListChecks, History, Target,
   Settings,
 } from './Icons.js';
@@ -58,8 +59,13 @@ export const PRIMARY_NAV: NavEntry[] = [
   {
     label: 'Knowledge',
     items: [
-      { to: '/knowledge/library', label: 'Library', icon: BookOpen },
-      { to: '/knowledge/review', label: 'Review', icon: Inbox },
+      // 使用：可绑定的专家人格（训练 / 绑定 / 会话注入）
+      { to: '/knowledge/experts', label: 'Experts', icon: BookOpen },
+      // 维护：知识命名空间与实体碎片桶（浏览 / 编辑知识点）
+      { to: '/knowledge/collections', label: '知识集', icon: Layers },
+      // 升级：个人层 → 团队层（未发布同步 + 升格 MR）
+      { to: '/knowledge/promote', label: '升格', icon: ArrowUpToLine },
+      // 维护：仓库订阅 / 同步 / 导入目录
       { to: '/knowledge/sources', label: 'Sources', icon: Cloud },
     ],
   },

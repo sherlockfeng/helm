@@ -183,7 +183,7 @@ function summarizePrompt(text: string, max = 140): string {
  * 文档 → MR 进 llm-wiki 的 domains/<域>/。合入并 pull 后内容回到团队
  * 成熟层。原碎片不自动删除（MR 可能被拒），合入后手动清理。
  */
-function PromoteModal({ roleId, roleName, onClose }: {
+export function PromoteModal({ roleId, roleName, onClose }: {
   roleId: string;
   roleName: string;
   onClose: () => void;
@@ -1025,7 +1025,7 @@ function RoleCard({
   );
 }
 
-export function RolesPage() {
+function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
   const { data, loading, error, reload } = useApi(() => helmApi.roles());
   const [expanded, setExpanded] = useState<string | null>(null);
   // Phase 65: chat modal can run in two modes:
@@ -1072,11 +1072,59 @@ export function RolesPage() {
     0,
   );
 
+  if (mode === 'collections') {
+    return (
+      <>
+        <PageHeader
+          title="知识集"
+          subtitle={<>维护层：知识命名空间（导入目录）与对话捕获的实体碎片桶。检索照常覆盖这里的每个知识点；它们没有"人格"，不出现在对话绑定列表。</>}
+          stats={<>
+            <StatTile label="知识集" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
+            <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
+          </>}
+        />
+        {loading && <CardSkeletonList n={4} />}
+        {data && collections.length === 0 && (
+          <EmptyState
+            title="还没有知识集。"
+            hint={<>订阅 llm-wiki 仓库（Sources）或在未绑定 role 的对话里聊出新实体，知识集会自动出现。</>}
+          />
+        )}
+        {data && collections.map((r) => (
+          <RoleCard
+            key={r.id}
+            role={r}
+            expanded={expanded === r.id}
+            onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
+            onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
+            onToggleBindable={() => { void toggleBindable(r); }}
+            onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
+            onTrained={() => reload()}
+          />
+        ))}
+        {promoteTarget && (
+          <PromoteModal
+            roleId={promoteTarget.roleId}
+            roleName={promoteTarget.name}
+            onClose={() => setPromoteTarget(null)}
+          />
+        )}
+        {chatTarget && (
+          <RoleTrainChatModal
+            target={chatTarget}
+            onClose={() => setChatTarget(null)}
+            onSaved={() => { setChatTarget(null); reload(); }}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <PageHeader
-        title="Roles"
-        subtitle={<>Built-in agent personas (product / developer / qa) plus any roles you train with project-specific docs. <code>query_knowledge</code> and the sessionStart context provider read from the same chunks.</>}
+        title="Experts"
+        subtitle={<>使用层：可绑定到对话的专家人格。绑定后开场注入 system prompt + 知识摘录，回复按其作用域产生候选。<code>query_knowledge</code> 的检索范围不止于此——知识集同样参与。</>}
         stats={<>
           <StatTile label="Yours" value={userRoles} tone={userRoles > 0 ? 'live' : 'muted'} />
           <StatTile label="Built-in" value={builtInRoles} tone="muted" />
@@ -1098,9 +1146,9 @@ export function RolesPage() {
 
       {loading && <CardSkeletonList n={4} />}
 
-      {data && data.roles.length === 0 && (
+      {data && experts.length === 0 && (
         <EmptyState
-          title="No roles yet."
+          title="No experts yet."
           hint={<>Built-in roles seed automatically — if you see this, the database may not be initialized.</>}
         />
       )}
@@ -1117,28 +1165,6 @@ export function RolesPage() {
           onTrained={() => reload()}
         />
       ))}
-
-      {data && collections.length > 0 && (
-        <>
-          <h3 style={{ margin: '20px 0 4px' }}>知识集</h3>
-          <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 12 }}>
-            纯知识命名空间（导入目录、实体碎片桶）——检索照常参与，
-            但不出现在对话绑定列表。值得拥有"人格"的可升格为专家。
-          </p>
-          {collections.map((r) => (
-            <RoleCard
-              key={r.id}
-              role={r}
-              expanded={expanded === r.id}
-              onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
-              onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
-              onToggleBindable={() => { void toggleBindable(r); }}
-              onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
-              onTrained={() => reload()}
-            />
-          ))}
-        </>
-      )}
 
       {promoteTarget && (
         <PromoteModal
@@ -1623,3 +1649,16 @@ function TrainViaCliPanel() {
 // Phase 63 dropped CodeRow — the panel now uses a button-driven flow that
 // hits POST /api/setup-mcp directly, so the user doesn't have to copy any
 // shell commands.
+
+/** 使用层（提取→使用→维护→升级 IA）：可绑定的专家人格。 */
+export function ExpertsPage() {
+  return <RolesPageBase mode="experts" />;
+}
+
+/** 维护层：知识命名空间 + 实体碎片桶。 */
+export function CollectionsPage() {
+  return <RolesPageBase mode="collections" />;
+}
+
+/** Back-compat for tests/imports that still reference RolesPage. */
+export const RolesPage = ExpertsPage;

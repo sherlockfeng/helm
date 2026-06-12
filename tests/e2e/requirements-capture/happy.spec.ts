@@ -12,6 +12,9 @@
  * the next day.
  */
 
+// Legacy relay-era tools are gated off by default — this suite exercises them.
+process.env['HELM_LEGACY_TOOLS'] = '1';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';

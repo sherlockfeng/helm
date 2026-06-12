@@ -409,33 +409,6 @@ export interface ConversationDetail {
   unknownEntities: UnknownEntity[];
 }
 
-/** Phase 79 — one row in the Settings → Storage plugins list. */
-export type StoragePluginInfo =
-  | { ok: true; id: string; scheme: string; version: string; apiVersion: number; loadedFrom: string }
-  | { ok: false; id: string; reason: string };
-
-/** Phase 79 — subscription row.
- *  Phase 80 (PR C): `'conflict'` added — set when sync detects that
- *  both local and remote moved past last_pulled_version. */
-export type SubscriptionStatus = 'active' | 'paused' | 'error' | 'conflict';
-
-export interface RoleSubscription {
-  id: string;
-  roleId: string;
-  sourceType: string;
-  sourceUrl: string;
-  lastEtag?: string;
-  lastContentHash?: string;
-  lastSyncAt?: string;
-  lastError?: string;
-  syncIntervalMinutes: number;
-  autoApply: boolean;
-  status: SubscriptionStatus;
-  /** Phase 80 (PR C): bundle's roleVersion at last successful apply. */
-  lastPulledVersion?: number;
-  createdAt: string;
-}
-
 /** Phase 73: chunk type discriminator — surfaced as a badge in the UI. */
 export type KnowledgeChunkKind = 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
 

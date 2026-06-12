@@ -1077,6 +1077,17 @@ export const MIGRATIONS: Migration[] = [
       DROP TABLE IF EXISTS role_mirrors;
     `,
   },
+  {
+    version: 33,
+    description:
+      'drop role_subscriptions — the .helmrole bundle-subscription'
+      + ' system (Phase 79/80) is removed with the storage-plugin'
+      + ' ecosystem; knowledge sync is the llm-wiki repo (knowledge_repo'
+      + ' table + MR flows).',
+    up: `
+      DROP TABLE IF EXISTS role_subscriptions;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

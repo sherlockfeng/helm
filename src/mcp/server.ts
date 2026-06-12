@@ -139,6 +139,12 @@ export function createMcpServer(
   info: McpServerInfo = DEFAULT_SERVER_INFO,
 ): McpServer {
   const server = new McpServer(info);
+  // B 类隐藏: relay-era tool surfaces (PDT workflow / harness /
+  // requirements / doc-first / Lark channel) are outside the knowledge
+  // lifecycle (提取/使用/维护/升级) and are no longer registered by
+  // default — the agent-facing tool list stays knowledge-focused.
+  // Set HELM_LEGACY_TOOLS=1 to re-enable them.
+  const legacyTools = process.env['HELM_LEGACY_TOOLS'] === '1';
   const knowledge = deps.knowledge ?? new KnowledgeProviderRegistry();
   const embedFn = deps.embedFn ?? makePseudoEmbedFn();
   const engine = new WorkflowEngine(deps.db);
@@ -153,7 +159,7 @@ export function createMcpServer(
     inputSchema: {},
   }, async () => jsonResult(getActiveChats(deps.db)));
 
-  server.registerTool('bind_to_remote_channel', {
+  if (legacyTools) server.registerTool('bind_to_remote_channel', {
     description:
       'Bind a host session to a remote channel thread. Provide externalThread+externalChat to bind immediately, '
       + 'or omit them to receive a pendingCode the user types into the channel.',
@@ -184,7 +190,8 @@ export function createMcpServer(
     },
   }, async (input) => jsonResult(await queryKnowledge(knowledge, input)));
 
-  // ── Workflow (Phase 7) ──────────────────────────────────────────────────
+  // ── Workflow (Phase 7) — legacy, hidden by default ──────────────────────
+  if (legacyTools) {
 
   server.registerTool('init_workflow', {
     description: 'Start a new vibe coding campaign for a project. Creates the first cycle in product phase.',
@@ -319,6 +326,8 @@ export function createMcpServer(
       return errorResult(`Failed to write doc: ${(err as Error).message}`);
     }
   });
+
+  } // end legacyTools (workflow + doc-first)
 
   // ── Roles (Phase 7) ─────────────────────────────────────────────────────
 
@@ -566,7 +575,8 @@ export function createMcpServer(
     return jsonResult({ roleId, status: status ?? 'pending', candidates });
   });
 
-  // ── Requirements (Phase 7) ──────────────────────────────────────────────
+  // ── Requirements / campaigns / relay / Lark attachments — legacy ────────
+  if (legacyTools) {
 
   server.registerTool('capture_requirement', {
     description: `Capture / update a requirement from a chat session. Multi-turn:
@@ -751,6 +761,8 @@ export function createMcpServer(
     }
   });
 
+  } // end legacyTools (requirements + campaigns + lark attachments)
+
   // ── Lark doc reader (Phase 59) ──────────────────────────────────────────
 
   server.registerTool('read_lark_doc', {
@@ -798,7 +810,8 @@ export function createMcpServer(
     }
   });
 
-  // ── Harness toolchain (Phase 67) ────────────────────────────────────────
+  // ── Harness toolchain (Phase 67) — legacy, hidden by default ────────────
+  if (legacyTools) {
   //
   // These ten tools drive the on-disk Harness workflow scaffold. Source of
   // truth lives in `.harness/` files in the user's project; helm's DB is
@@ -1067,6 +1080,8 @@ export function createMcpServer(
     if (!t) return errorResult(`task.md not found at ${projectPath}/.harness/tasks/${taskId}/task.md`);
     return jsonResult({ taskId: t.id, currentStage: t.currentStage });
   });
+
+  } // end legacyTools (harness)
 
   return server;
 }

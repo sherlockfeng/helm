@@ -39,7 +39,6 @@ import { CycleDetailPage } from './pages/CycleDetail.js';
 import { TaskDetailPage } from './pages/TaskDetail.js';
 import { RequirementsPage } from './pages/Requirements.js';
 import { HarnessPage } from './pages/Harness.js';
-import { PluginsPage } from './pages/Plugins.js';
 
 export default function App() {
   // R-9: once-per-session toast if proposed verification cases exist.
@@ -97,7 +96,6 @@ export default function App() {
           <Route path="/cycles/:cycleId" element={<CycleDetailPage />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
           <Route path="/requirements" element={<RequirementsPage />} />
-          <Route path="/plugins" element={<PluginsPage />} />
 
           <Route path="*" element={<Navigate to="/conversations" replace />} />
         </Route>

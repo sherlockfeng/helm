@@ -104,26 +104,38 @@ function ensureDepscope(config: HelmConfig): { provider: KnowledgeProviderConfig
   return findDepscope(config)!;
 }
 
-interface TikaConfig {
-  tikaEnv?: string;
-  spaceId?: string;
-  serviceKey?: string;
+interface McpProviderUiConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  toolName?: string;
 }
 
-function findTika(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } | null {
-  const idx = config.knowledge.providers.findIndex((p) => p.id === 'tika');
-  if (idx < 0) return null;
-  return { provider: config.knowledge.providers[idx]!, index: idx };
+/** Render env map as KEY=VALUE lines for the paste-friendly textarea. */
+function envToText(env: Record<string, string> | undefined): string {
+  return Object.entries(env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n');
 }
 
-function ensureTika(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } {
-  const found = findTika(config);
-  if (found) return found;
-  config.knowledge.providers.push({
-    id: 'tika', enabled: false,
-    config: { tikaEnv: 'office', spaceId: '', serviceKey: '' },
-  });
-  return findTika(config)!;
+function textToEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const k = line.slice(0, eq).trim();
+    const v = line.slice(eq + 1).trim();
+    if (k) out[k] = v;
+  }
+  return out;
+}
+
+/** Split a pasted launch line into command + args (whitespace tokens). */
+function commandLineToParts(line: string): { command: string; args: string[] } {
+  const tokens = line.trim().split(/\s+/).filter(Boolean);
+  return { command: tokens[0] ?? '', args: tokens.slice(1) };
+}
+
+function partsToCommandLine(cfg: McpProviderUiConfig): string {
+  return [cfg.command ?? '', ...(cfg.args ?? [])].join(' ').trim();
 }
 
 // ── Section identifiers ──────────────────────────────────────────────
@@ -595,8 +607,9 @@ function KnowledgeSection({
 }: { draft: HelmConfig; update: (m: (c: HelmConfig) => void) => void }): ReactElement {
   const depscope = findDepscope(draft);
   const depscopeCfg: DepscopeConfig = (depscope?.provider.config ?? {}) as DepscopeConfig;
-  const tika = findTika(draft);
-  const tikaCfg: TikaConfig = (tika?.provider.config ?? {}) as TikaConfig;
+  const customMcp = draft.knowledge.providers
+    .map((provider, index) => ({ provider, index }))
+    .filter((e) => e.provider.kind === 'mcp-stdio');
 
   return (
     <>
@@ -808,70 +821,105 @@ function KnowledgeSection({
       </Card>
 
       <Card>
-        <h3 style={{ marginTop: 0 }}>Tika provider</h3>
+        <h3 style={{ marginTop: 0 }}>自定义 MCP provider</h3>
         <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          TikTok 内部知识平台。通过本地 MCP 进程
-          （npx @tiktok-mcp/tika）查询你的 Tika 空间。个人使用推荐
-          SSO 鉴权：Service key 留空，首次调用会拉起浏览器走
-          ByteCloud SSO 授权。本机需可访问字节内部 npm 源。
+          把任意知识平台的 MCP 用法贴进来即可：启动命令一行
+          （如 npx -y @org/kb-mcp），环境变量每行一个 KEY=VALUE。
+          helm 会按需拉起该进程并把检索结果并入 query_knowledge 聚合。
+          配置只保存在本机 ~/.helm/config.json，不会进入代码仓库。
         </p>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={tika?.provider.enabled ?? false}
-            onChange={(e) => update((c) => {
-              const found = ensureTika(c);
-              c.knowledge.providers[found.index] = {
-                ...found.provider,
-                enabled: e.target.checked,
-              };
-            })}
-          />
-          Enabled
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">TIKA_ENV</div>
-          <input
-            type="text"
-            value={tikaCfg.tikaEnv ?? 'office'}
-            placeholder="office"
-            onChange={(e) => update((c) => {
-              const found = ensureTika(c);
-              const cfg = (found.provider.config ?? {}) as TikaConfig;
-              cfg.tikaEnv = e.target.value;
-              found.provider.config = cfg as Record<string, unknown>;
-            })}
-            style={{ width: 160 }}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Space ID（租户 ID）</div>
-          <input
-            type="text"
-            value={tikaCfg.spaceId ?? ''}
-            placeholder="可选；留空用公共空间"
-            onChange={(e) => update((c) => {
-              const found = ensureTika(c);
-              const cfg = (found.provider.config ?? {}) as TikaConfig;
-              cfg.spaceId = e.target.value;
-              found.provider.config = cfg as Record<string, unknown>;
-            })}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Service key（可选）</div>
-          <input
-            type="password"
-            value={tikaCfg.serviceKey ?? ''}
-            placeholder="留空 = 个人 SSO 鉴权"
-            onChange={(e) => update((c) => {
-              const found = ensureTika(c);
-              const cfg = (found.provider.config ?? {}) as TikaConfig;
-              cfg.serviceKey = e.target.value;
-              found.provider.config = cfg as Record<string, unknown>;
-            })}
-          />
-        </label>
+        {customMcp.map(({ provider, index }) => {
+          const cfg = (provider.config ?? {}) as McpProviderUiConfig;
+          return (
+            <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="text"
+                  value={provider.id}
+                  placeholder="provider id（如 my-kb）"
+                  aria-label={`custom provider id ${index + 1}`}
+                  onChange={(e) => update((c) => {
+                    c.knowledge.providers[index] = { ...c.knowledge.providers[index]!, id: e.target.value };
+                  })}
+                  style={{ width: 160 }}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={provider.enabled}
+                    onChange={(e) => update((c) => {
+                      c.knowledge.providers[index] = { ...c.knowledge.providers[index]!, enabled: e.target.checked };
+                    })}
+                  />
+                  Enabled
+                </label>
+                <span style={{ marginLeft: 'auto' }}>
+                  <Button
+                    type="button"
+                    variant="danger-outline"
+                    onClick={() => update((c) => {
+                      c.knowledge.providers = c.knowledge.providers.filter((_, i) => i !== index);
+                    })}
+                  >Remove</Button>
+                </span>
+              </div>
+              <label className="helm-form-row">
+                <div className="muted">启动命令</div>
+                <input
+                  type="text"
+                  value={partsToCommandLine(cfg)}
+                  placeholder="npx -y @org/kb-mcp"
+                  onChange={(e) => update((c) => {
+                    const cur = (c.knowledge.providers[index]!.config ?? {}) as McpProviderUiConfig;
+                    const parts = commandLineToParts(e.target.value);
+                    cur.command = parts.command;
+                    cur.args = parts.args;
+                    c.knowledge.providers[index]!.config = cur as Record<string, unknown>;
+                  })}
+                />
+              </label>
+              <label className="helm-form-row">
+                <div className="muted">环境变量（每行 KEY=VALUE）</div>
+                <textarea
+                  rows={3}
+                  defaultValue={envToText(cfg.env)}
+                  placeholder={'SPACE_ID=123\nENV=office'}
+                  style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+                  onBlur={(e) => update((c) => {
+                    const cur = (c.knowledge.providers[index]!.config ?? {}) as McpProviderUiConfig;
+                    cur.env = textToEnv(e.target.value);
+                    c.knowledge.providers[index]!.config = cur as Record<string, unknown>;
+                  })}
+                />
+              </label>
+              <label className="helm-form-row">
+                <div className="muted">Tool 名（可选，留空自动探测）</div>
+                <input
+                  type="text"
+                  value={cfg.toolName ?? ''}
+                  placeholder="留空 = 自动选 server 暴露的检索工具"
+                  onChange={(e) => update((c) => {
+                    const cur = (c.knowledge.providers[index]!.config ?? {}) as McpProviderUiConfig;
+                    if (e.target.value) cur.toolName = e.target.value;
+                    else delete cur.toolName;
+                    c.knowledge.providers[index]!.config = cur as Record<string, unknown>;
+                  })}
+                  style={{ width: 240 }}
+                />
+              </label>
+            </div>
+          );
+        })}
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => update((c) => {
+            c.knowledge.providers.push({
+              id: '', enabled: false, kind: 'mcp-stdio',
+              config: { command: '', args: [], env: {} },
+            });
+          })}
+        >+ 添加 provider</Button>
       </Card>
     </>
   );

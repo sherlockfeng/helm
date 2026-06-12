@@ -199,10 +199,10 @@ export interface HttpApiDeps {
    */
   knowledgeRepoManager?: KnowledgeRepoManager;
   /**
-   * Tika T2: provider registry for POST /api/knowledge-lookup — the
-   * renderer's "Tika 对照" button queries external knowledge (Tika,
-   * depscope, …) with a candidate's text to show org-side context next
-   * to chat-captured content. Absent = endpoint responds 501.
+   * Provider registry for POST /api/knowledge-lookup — the renderer's
+   * "外部知识对照" button queries external knowledge (custom MCP
+   * bridges, depscope, …) with a candidate's text to show org-side
+   * context next to chat-captured content. Absent = endpoint responds 501.
    */
   knowledge?: KnowledgeProviderRegistry;
   /**
@@ -1236,10 +1236,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
       }
 
-      // Tika T2: ad-hoc external-knowledge lookup for the renderer.
+      // Ad-hoc external-knowledge lookup for the renderer.
       //   POST /api/knowledge-lookup  body { query, providers? }
-      // Used by the "Tika 对照" button next to candidates: query org
+      // Used by the "外部知识对照" button next to candidates: query org
       // knowledge with the captured text and show both side by side.
+      // When `providers` is omitted, defaults to the enabled providers
+      // declared in config (custom MCP bridges / depscope) — NOT the
+      // always-on local providers, whose content the page already shows.
       if (url.pathname === '/api/knowledge-lookup') {
         if (req.method !== 'POST') return methodNotAllowed(res);
         if (!deps.knowledge) {
@@ -1251,15 +1254,23 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (typeof body.query !== 'string' || body.query.trim().length === 0) {
           return badRequest(res, 'query must be a non-empty string');
         }
-        const providers = Array.isArray(body.providers)
+        let providers = Array.isArray(body.providers)
           && body.providers.every((p): p is string => typeof p === 'string')
+          && body.providers.length > 0
           ? body.providers
           : undefined;
+        if (!providers && deps.getConfig) {
+          const configured = deps.getConfig().knowledge.providers
+            .filter((p) => p.enabled)
+            .map((p) => p.id)
+            .filter((id) => id.length > 0);
+          if (configured.length > 0) providers = configured;
+        }
         try {
           const result = await queryKnowledge(
             deps.knowledge,
             { query: body.query, ...(providers ? { providers } : {}) },
-            // Tika's RAG round-trip regularly exceeds the 5s default
+            // External RAG round-trips regularly exceed the 5s default
             // used for session-context fetches.
             { searchTimeoutMs: 20_000 },
           );

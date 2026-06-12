@@ -25,9 +25,16 @@ const DepscopeMappingSchema = z.object({
 }).strict();
 
 const KnowledgeProviderConfigSchema = z.object({
-  /** Builtin provider id ('depscope' for now; future 'wiki' / 'sdkdoc'). */
+  /** Builtin provider id ('depscope') or any user-chosen id for kind='mcp-stdio'. */
   id: z.string(),
   enabled: z.boolean().default(true),
+  /**
+   * Provider implementation. Omitted = the id IS the implementation
+   * (built-ins like 'depscope'). 'mcp-stdio' = the generic config-driven
+   * MCP bridge — any id, vendor specifics live entirely in `config`
+   * (which stays in ~/.helm/config.json, never in this repo).
+   */
+  kind: z.enum(['mcp-stdio']).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
@@ -237,27 +244,22 @@ export const DepscopeProviderConfigSchema = z.object({
 export type DepscopeProviderConfig = z.infer<typeof DepscopeProviderConfigSchema>;
 
 /**
- * Schema slice for the per-provider `config` blob when id === 'tika'.
- * Credentials come from the user's Tika space (tenant id + service
- * account key); the bridge passes them to `npx @tiktok-mcp/tika` as
- * TIKA_ENV / TIKA_SPACE_ID / TIKA_SERVICE_KEY.
+ * Schema slice for the per-provider `config` blob when kind === 'mcp-stdio':
+ * the generic bridge to any MCP stdio knowledge server. Paste the
+ * vendor's documented usage (launch command + env vars) and helm knows
+ * how to call it.
  */
-export const TikaProviderConfigSchema = z.object({
-  tikaEnv: z.string().default('office'),
-  /** Optional — Tika falls back to the public space when omitted. */
-  spaceId: z.string().optional(),
-  /**
-   * Optional — personal-SSO mode (recommended for local use) needs no
-   * service key: the first tool call pops a ByteCloud SSO browser
-   * authorization. Set only for service-account integrations.
-   */
-  serviceKey: z.string().optional(),
-  /** Launcher override; default `npx -y @tiktok-mcp/tika`. */
-  command: z.string().optional(),
-  args: z.array(z.string()).optional(),
-  /** Pin the MCP tool name if the package renames it. */
+export const McpProviderConfigSchema = z.object({
+  displayName: z.string().optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  /** Env vars merged over process.env when spawning the server. */
+  env: z.record(z.string(), z.string()).default({}),
+  /** Pin the MCP tool name when the server exposes several. */
   toolName: z.string().optional(),
+  /** Tool argument carrying the query text. Default 'userQuery'. */
+  queryParam: z.string().optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
 }).strict();
 
-export type TikaProviderConfig = z.infer<typeof TikaProviderConfigSchema>;
+export type McpProviderConfig = z.infer<typeof McpProviderConfigSchema>;

@@ -584,14 +584,15 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
  * rerender the whole detail panel on every button click.
  */
 /**
- * Tika T2: on-demand org-knowledge comparison for one candidate. Queries
- * the Tika provider with the captured text and renders the answer next
- * to the chat content, so the curation decision (new / duplicate /
- * contradicts org knowledge) is made with both sides visible. Lazy —
- * nothing fires until the user clicks (a Tika round-trip can take
- * seconds and may pop an SSO browser window on first use).
+ * On-demand org-knowledge comparison for one candidate. Queries the
+ * configured external providers (custom MCP bridges / depscope) with
+ * the captured text and renders the answers next to the chat content,
+ * so the curation decision (new / duplicate / contradicts org
+ * knowledge) is made with both sides visible. Lazy — nothing fires
+ * until the user clicks (an external round-trip can take seconds and
+ * may pop an auth window on first use).
  */
-function TikaCompare({ text }: { text: string }) {
+function ExternalCompare({ text }: { text: string }) {
   const [state, setState] = useState<
     | { phase: 'idle' }
     | { phase: 'loading' }
@@ -601,15 +602,21 @@ function TikaCompare({ text }: { text: string }) {
   const run = async (): Promise<void> => {
     setState({ phase: 'loading' });
     try {
-      const r = await helmApi.lookupKnowledge(text, ['tika']);
-      const body = r.snippets.map((s) => s.body).join('\n\n').trim();
+      // No provider filter: the server defaults to every enabled
+      // EXTERNAL provider from config (custom MCP bridges, depscope).
+      const r = await helmApi.lookupKnowledge(text);
+      const body = r.snippets
+        .map((s) => (s.source ? `【${s.source}】\n${s.body}` : s.body))
+        .join('\n\n').trim();
       if (body) {
         setState({ phase: 'done', body });
       } else {
-        const diag = r.diagnostics.find((d) => d.provider === 'tika');
+        const bad = r.diagnostics.filter((d) => d.status !== 'ok');
         setState({
           phase: 'done', body: null,
-          ...(diag && diag.status !== 'ok' ? { reason: `${diag.status}${diag.reason ? `: ${diag.reason}` : ''}` } : {}),
+          ...(bad.length > 0
+            ? { reason: bad.map((d) => `${d.provider}: ${d.status}${d.reason ? ` (${d.reason})` : ''}`).join('; ') }
+            : {}),
         });
       }
     } catch (e) {
@@ -622,15 +629,15 @@ function TikaCompare({ text }: { text: string }) {
     return (
       <button
         onClick={() => { void run(); }}
-        title="用这段沉淀文本查询 Tika，组织已有知识和 chat 内容并排对照"
+        title="用这段沉淀文本查询已配置的外部知识源，组织已有知识和 chat 内容并排对照"
         style={{ fontSize: 12, marginTop: 6 }}
       >
-        Tika 对照
+        外部知识对照
       </button>
     );
   }
   if (state.phase === 'loading') {
-    return <span className="muted" style={{ fontSize: 12 }}>Tika 查询中…（首次可能拉起 SSO 授权）</span>;
+    return <span className="muted" style={{ fontSize: 12 }}>外部知识查询中…（首次可能拉起授权窗口）</span>;
   }
   return (
     <div style={{
@@ -638,7 +645,7 @@ function TikaCompare({ text }: { text: string }) {
       backgroundColor: '#f5f3ff', border: '1px solid #ddd6fe',
     }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: '#6d28d9', marginBottom: 4 }}>
-        Tika 已有相关
+        组织已有相关
         <button onClick={() => { void run(); }} style={{ marginLeft: 8, fontSize: 11 }}>重查</button>
       </div>
       {state.body
@@ -797,7 +804,7 @@ function RoleCandidates({
                   </>
                 )}
               </div>
-              {!isEditing && <TikaCompare text={c.chunkText} />}
+              {!isEditing && <ExternalCompare text={c.chunkText} />}
             </li>
           );
         })}

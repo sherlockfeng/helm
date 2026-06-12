@@ -60,10 +60,10 @@ import {
 import { resolveSubscriptionConflict, runSubscriptionSync, type ResolveConflictStrategy } from '../subscriptions/sync.js';
 import { createMirrorRunner } from '../mirrors/runner.js';
 import { DepscopeProvider } from '../knowledge/depscope-provider.js';
-import { TikaProvider } from '../knowledge/tika-provider.js';
+import { McpStdioProvider } from '../knowledge/mcp-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
-import { DepscopeProviderConfigSchema, TikaProviderConfigSchema, type HelmConfig } from '../config/schema.js';
+import { DepscopeProviderConfigSchema, McpProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
@@ -444,7 +444,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   let configuredProviderIds = new Set<string>();
   function reconfigureKnowledgeProviders(): void {
     for (const id of configuredProviderIds) {
-      // Providers owning a child process (Tika MCP bridge) must release
+      // Providers owning a child process (MCP bridges) must release
       // it on hot-reload, or each Settings save leaks an npx process.
       const prev = knowledge.get(id) as { dispose?: () => Promise<void> } | undefined;
       if (prev?.dispose) void prev.dispose().catch(() => {});
@@ -1339,8 +1339,8 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       mcpFactory,
       ...(effectiveVerificationRunner ? { verificationRunner: effectiveVerificationRunner } : {}),
       knowledgeRepoManager,
-      // Tika T2: the renderer's knowledge-lookup endpoint queries the
-      // same registry the MCP tools use (Tika / depscope / local roles).
+      // The renderer's knowledge-lookup endpoint queries the same
+      // registry the MCP tools use (custom MCP bridges / depscope).
       knowledge,
       createDiagnosticsBundle: () => createDiagnosticsBundle({ db: deps.db }),
       getConfig: () => liveConfig,
@@ -1865,23 +1865,27 @@ function buildConfiguredProviders(
       }));
       continue;
     }
-    if (decl.id === 'tika') {
-      const parsed = TikaProviderConfigSchema.safeParse(decl.config ?? {});
+    if (decl.kind === 'mcp-stdio') {
+      // Generic config-driven MCP bridge: any id; the vendor-specific
+      // launch command / env stay in the user's local config file, so
+      // company-internal integrations never land in this repo.
+      const parsed = McpProviderConfigSchema.safeParse(decl.config ?? {});
       if (!parsed.success) {
         log.warn('knowledge_provider_config_invalid', {
           data: { id: decl.id, issues: parsed.error.issues },
         });
         continue;
       }
-      providers.push(new TikaProvider({
-        tikaEnv: parsed.data.tikaEnv,
-        ...(parsed.data.spaceId ? { spaceId: parsed.data.spaceId } : {}),
-        ...(parsed.data.serviceKey ? { serviceKey: parsed.data.serviceKey } : {}),
-        ...(parsed.data.command ? { command: parsed.data.command } : {}),
-        ...(parsed.data.args ? { args: parsed.data.args } : {}),
+      providers.push(new McpStdioProvider({
+        id: decl.id,
+        command: parsed.data.command,
+        args: parsed.data.args,
+        env: parsed.data.env,
+        ...(parsed.data.displayName ? { displayName: parsed.data.displayName } : {}),
         ...(parsed.data.toolName ? { toolName: parsed.data.toolName } : {}),
+        ...(parsed.data.queryParam ? { queryParam: parsed.data.queryParam } : {}),
         ...(parsed.data.requestTimeoutMs ? { requestTimeoutMs: parsed.data.requestTimeoutMs } : {}),
-        onWarning: (msg, ctx) => loggers.module('knowledge.tika').warn(msg, { data: ctx }),
+        onWarning: (msg, ctx) => loggers.module(`knowledge.${decl.id}`).warn(msg, { data: ctx }),
       }));
       continue;
     }

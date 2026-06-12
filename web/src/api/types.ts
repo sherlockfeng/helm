@@ -140,6 +140,8 @@ export interface DepscopeMappingConfig {
 export interface KnowledgeProviderConfig {
   id: string;
   enabled: boolean;
+  /** 'mcp-stdio' = generic config-driven MCP bridge; omitted = builtin id. */
+  kind?: 'mcp-stdio';
   config?: Record<string, unknown>;
 }
 

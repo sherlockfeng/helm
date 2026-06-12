@@ -35,7 +35,7 @@ describe('helm-tool-guide injection (Phase 71)', () => {
     expect(r.additional_context).toContain('helm is a desktop GUI');
     expect(r.additional_context).toContain('list_roles');
     expect(r.additional_context).toContain('search_knowledge');
-    expect(r.additional_context).toContain('bind_to_remote_channel');
+    expect(r.additional_context).toContain('query_knowledge');
   });
 
   it('sessionStart bumps last_injected_guide_version to the current constant', async () => {
@@ -73,7 +73,7 @@ describe('helm-tool-guide injection (Phase 71)', () => {
       id: 'sess_g4', host: 'cursor', cwd: '/proj',
       status: 'active', firstSeenAt: now, lastSeenAt: now,
     });
-    setLastInjectedGuideVersion(harness.db, 'sess_g4', 1);
+    setLastInjectedGuideVersion(harness.db, 'sess_g4', HELM_TOOL_GUIDE_VERSION);
 
     const r = await runHookViaBridge(harness, {
       event: 'beforeSubmitPrompt',

@@ -26,10 +26,12 @@ function seedSession(db: BetterSqlite3.Database, id: string): void {
   `).run(id, new Date().toISOString(), new Date().toISOString());
 }
 
-// One paragraph (≥80 chars) mentioning DECC twice — the splitter keeps
-// it as a single segment and the entity bar (2 mentions) passes.
+// One paragraph (>=80 chars after trim — splitter default minimum)
+// mentioning DECC twice; stays one segment and passes the 2-mention bar.
 const DECC_PARA =
-  'DECC 的跨区数据通道申请流程踩过坑：先建 channel 再注册数据，DECC 的权限审批必须挂在通道而不是表上，否则会被打回。';
+  'DECC 的跨区数据通道申请流程踩过坑：必须先建 channel 再注册数据表，顺序反了会被审批系统直接打回；'
+  + '另外 DECC 的权限审批必须挂在通道维度而不是单表维度，挂错维度的工单会停在初审环节没有任何提示，'
+  + '这个坑排查了一个下午才发现，记录下来避免后续接入的同学重复踩。';
 
 describe('captureToEntityBuckets', () => {
   let db: BetterSqlite3.Database;
@@ -78,22 +80,26 @@ describe('captureToEntityBuckets', () => {
 
   it('2-char acronyms (OG) qualify at the stricter 3-mention bar', () => {
     const text =
-      'OG 标签的接入要点：OG 数据要先在 DECC 注册才能打 OG 标签，schema 不匹配时回退 v4 的约定仍然有效，注意保留原字段。';
+      'OG 标签的接入要点整理：OG 数据必须先完成注册流程才能打 OG 标签，这一步没有任何界面提示，全靠口口相传；'
+      + 'schema 不匹配的场景下回退 v4 的老约定仍然有效，迁移期间注意保留原始字段不要删，否则回退路径会直接断掉。';
     const result = captureToEntityBuckets({ db, hostSessionId: 'sess-1', responseText: text });
     const buckets = result.byRole.map((r) => r.roleId);
     expect(buckets).toContain('og');
     expect(getRole(db, 'og')?.name).toBe('OG');
 
     // Two mentions only → below the 2-char bar, no bucket.
-    const weak = 'OG 标签很重要，OG 数据注册流程后面再说，先把通道建好再讨论后续的审批和权限问题。';
+    const weak =
+      'OG 标签的事情确实很重要，OG 数据的注册流程我们后面再展开细说，今天先把基础通道建好，'
+      + '审批和权限的部分等流程文档补齐之后再来逐项讨论，避免现在拍脑袋定下来后面又要返工。';
     const r2 = captureToEntityBuckets({ db, hostSessionId: 'sess-1', responseText: weak });
     expect(r2.byRole.map((r) => r.roleId)).not.toContain('og');
   });
 
   it('caps buckets per response at maxBuckets, most-mentioned first', () => {
     const text =
-      'BAM 接口元数据：BAM 的 IDL 检查里 BAM 规则最严。GECKO 资源走 GECKO 工单。NETLINK 域名配置在 NETLINK 平台。'
-      + 'AEOLUS 数据集查询用 AEOLUS 模板即可，整体流程文档后补。';
+      'BAM 接口元数据的几个要点：BAM 的 IDL 检查里 BAM 的命名规则是最严格的，提交前先在本地把字段过一遍。\n\n'
+      + 'GECKO 资源的发布必须走 GECKO 工单流程，直接改线上包会被回滚；NETLINK 的域名配置统一在 NETLINK 平台操作，'
+      + 'AEOLUS 数据集的查询直接套用 AEOLUS 已保存的模板即可，整体的流程文档我们后面统一补齐归档。';
     const result = captureToEntityBuckets({
       db, hostSessionId: 'sess-1', responseText: text, maxBuckets: 2,
     });
@@ -115,7 +121,9 @@ describe('captureToEntityBuckets', () => {
   it('empty / entity-free responses produce nothing', () => {
     const r = captureToEntityBuckets({
       db, hostSessionId: 'sess-1',
-      responseText: '今天聊的内容都是日常琐事，没有任何值得沉淀的具体技术实体出现在这段话里面，纯粹的闲聊而已。',
+      responseText:
+        '今天聊的内容基本都是日常琐事和无关紧要的进展同步，没有任何值得沉淀的具体技术实体出现在这一大段话里，'
+        + '纯粹的闲聊而已，按设计这类回复不应该产生任何候选条目，也不应该创建任何新的命名空间集合。',
     });
     expect(r.candidatesCreated).toBe(0);
     expect(r.byRole).toEqual([]);

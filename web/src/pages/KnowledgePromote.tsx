@@ -37,9 +37,13 @@ export function KnowledgePromotePage(): ReactElement {
 
   const files = capturedQuery.data?.files ?? [];
   const allRoles = rolesQuery.data?.roles ?? [];
-  // Anything non-builtin with content is promotable — collections AND
-  // user experts both live below the team tier.
-  const promotable = allRoles.filter((r) => !r.isBuiltin && r.chunkCount > 0);
+  // Promotable = personal-layer knowledge with content. Team-layer
+  // topics (tier === 'team', imported from domains/ or wiki/) are
+  // already mature — Contributing them back to domains/ is a no-op, so
+  // they're excluded here just like the card-level Contribute button.
+  const promotable = allRoles.filter(
+    (r) => !r.isBuiltin && r.chunkCount > 0 && r.tier !== 'team',
+  );
 
   const syncPersonal = async (): Promise<void> => {
     if (!wikiRepo) return;

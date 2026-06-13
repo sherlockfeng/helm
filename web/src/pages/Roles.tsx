@@ -999,7 +999,11 @@ function RoleCard({
               Update via chat
             </button>
           )}
-          {!role.isBuiltin && (
+          {/* Contribute = 升格到 domains/. Hidden for team-layer topics
+              (imported from domains/ or wiki/) — they're already there, so
+              promoting them back is a no-op. Only personal-layer knowledge
+              (chat-captured / entity buckets) is contributable. */}
+          {!role.isBuiltin && role.tier !== 'team' && (
             <button
               onClick={onPromote}
               title="挑选碎片合并成一篇文档，开 MR Contribute 到 llm-wiki 的 domains/<域>/"
@@ -1020,10 +1024,10 @@ function RoleCard({
             <button
               onClick={onToggleBindable}
               title={role.bindable === false
-                ? '设为专家：可绑定到对话、配置 system prompt、开场注入知识'
-                : '设为 Topic：仅作为知识主题容器，检索不受影响，不再出现在绑定列表'}
+                ? '配置人格：给这个主题加上 system prompt，让它可绑定到对话、开场注入知识、定向捕获'
+                : '卸下人格：退回纯知识主题。检索不受影响，但不再可绑定、不再注入/定向捕获'}
             >
-              {role.bindable === false ? '设为专家' : '设为 Topic'}
+              {role.bindable === false ? '配置人格' : '卸下人格'}
             </button>
           )}
           <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
@@ -1082,7 +1086,7 @@ function RolesPageBase() {
   const toggleBindable = async (r: RoleSummary): Promise<void> => {
     try {
       await helmApi.setRoleBindable(r.id, r.bindable === false);
-      toast.success(r.bindable === false ? `已设为专家：${r.name}` : `已设为 Topic：${r.name}`);
+      toast.success(r.bindable === false ? `已配置人格：${r.name}（现为专家）` : `已卸下人格：${r.name}（退回纯主题）`);
       reload();
     } catch (err) {
       toast.error(`切换失败: ${err instanceof ApiError ? err.message : String(err)}`);

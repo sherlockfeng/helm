@@ -11,8 +11,10 @@ import { helmApi } from '../api/client.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import {
   // Primary nav — ordered by the knowledge lifecycle:
-  // 提取 (Conversations) → 使用 (Experts) → 维护 (Topics/Sources) → 升级 (Contribute)
-  MessagesSquare, BookOpen, Layers, ArrowUpToLine, Cloud,
+  // 提取 (Conversations) → 使用/维护 (Topics) → 升级 (Contribute) → 维护 (Sources)
+  // P1 (de-redundancy): Experts merged into Topics — an expert is a
+  // topic with a persona (prompt + bindable); one noun, one page.
+  MessagesSquare, Layers, ArrowUpToLine, Cloud,
   ListChecks, History, Target,
   Settings,
 } from './Icons.js';
@@ -59,9 +61,7 @@ export const PRIMARY_NAV: NavEntry[] = [
   {
     label: 'Knowledge',
     items: [
-      // 使用：可绑定的专家人格（训练 / 绑定 / 会话注入）
-      { to: '/knowledge/experts', label: 'Experts', icon: BookOpen },
-      // 维护：知识主题（实体碎片桶 + 导入的主题域）
+      // 知识主题（实体桶 + 导入主题域 + 带人格的专家主题）
       { to: '/knowledge/topics', label: 'Topics', icon: Layers },
       // 升级：个人层 → 团队层（未发布同步 + Contribute MR）
       { to: '/knowledge/promote', label: 'Contribute', icon: ArrowUpToLine },

@@ -247,7 +247,7 @@ function RepoRow({
           <Button
             disabled={busy !== null}
             onClick={() => setShowPublish(true)}
-            title="把本地 role 的知识点序列化成 .md，推一个分支回这个仓库"
+            title="把本地 topic 的知识点序列化成 .md，推一个分支回这个仓库"
           >
             Publish ↗
           </Button>
@@ -611,7 +611,7 @@ function PublishModal({
                 onChange={(e) => setRoleId(e.target.value)}
                 style={{ width: '100%', padding: '6px 8px', fontSize: 13 }}
               >
-                <option value="">选择要发布的 role…</option>
+                <option value="">选择要发布的 topic…</option>
                 {roles.map((r) => (
                   <option key={r.id} value={r.id}>{r.name} ({r.chunkCount} chunks)</option>
                 ))}
@@ -621,7 +621,7 @@ function PublishModal({
             {loadingChunks && <p className="muted" style={{ fontSize: 12 }}>加载 chunks…</p>}
 
             {!loadingChunks && roleId && chunks.length === 0 && (
-              <p className="muted" style={{ fontSize: 12 }}>这个 role 还没有知识 chunks。</p>
+              <p className="muted" style={{ fontSize: 12 }}>这个 topic 还没有知识 chunks。</p>
             )}
 
             {chunks.length > 0 && (
@@ -692,7 +692,7 @@ function PublishModal({
                 onChange={(e) => setProfile(e.target.value as 'helm-native' | 'llm-wiki')}
                 style={{ padding: '4px 8px', fontSize: 12 }}
               >
-                <option value="llm-wiki">llm-wiki（# 标题 + concept 块，顶层目录=role）</option>
+                <option value="llm-wiki">llm-wiki（# 标题 + concept 块，顶层目录=topic）</option>
                 <option value="helm-native">helm-native（frontmatter，roles/&lt;id&gt;/points/）</option>
               </select>
             </label>

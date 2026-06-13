@@ -195,7 +195,7 @@ function ChatRailRow({
         <span className="helm-rail-row-role">
           {firstRole
             ? <>{firstRole}{totalRoles > 1 ? ` +${totalRoles - 1}` : ''}</>
-            : <span className="muted">no role</span>}
+            : <span className="muted">no topic</span>}
         </span>
         {turns > 0 && (
           <>
@@ -268,7 +268,7 @@ function ConversationDetailPane({
       onMutated();
       reload();
     } catch (err) {
-      toast.error(`Add role: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+      toast.error(`绑定 topic: ${err instanceof ApiError ? err.message : (err as Error).message}`);
     } finally { setSavingRole(false); }
   }
 
@@ -681,7 +681,7 @@ function UnknownEntitiesSection({
           onClose={() => setShowModal(false)}
           onSpawned={(roleName, total) => {
             setShowModal(false);
-            toast.success(`Role "${roleName}" 已创建 · 自动提取了 ${total} 个候选`);
+            toast.success(`Topic "${roleName}" 已创建 · 自动提取了 ${total} 个候选`);
             onSpawned();
           }}
         />
@@ -732,7 +732,7 @@ function SpawnRoleModal({
       onSpawned(r.roleName, r.updateCount + r.newCount);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      toast.error(`Spawn role failed: ${msg}`);
+      toast.error(`新建 topic 失败: ${msg}`);
     } finally { setSubmitting(false); }
   }
 
@@ -745,12 +745,12 @@ function SpawnRoleModal({
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>从这条 chat 新建 topic</div>
           <div className="muted" style={{ fontSize: 12 }}>
-            helm 会用 chat 里提到选中实体的段落作为 role 的种子知识，自动训练 + 提取候选。
+            helm 会用 chat 里提到选中实体的段落作为 topic 的种子知识，自动训练 + 提取候选。
           </div>
         </div>
 
         <label style={{ display: 'block', marginBottom: 12 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Role name</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Topic name</div>
           <input
             type="text"
             value={roleName}
@@ -764,7 +764,7 @@ function SpawnRoleModal({
         </label>
 
         <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-          种子实体（chat 里提到这些词的段落会被收进 role）
+          种子实体（chat 里提到这些词的段落会被收进 topic）
         </div>
         <div className="helm-conv-unknown-chips" style={{ marginBottom: 12 }}>
           {unknownEntities.map((e) => {
@@ -790,7 +790,7 @@ function SpawnRoleModal({
             disabled={submitting || selected.size === 0 || !roleName.trim()}
             onClick={() => { void submit(); }}
           >
-            {submitting ? '创建中…' : `创建 role + 提取`}
+            {submitting ? '创建中…' : `创建 topic + 提取`}
           </Button>
           <button type="button" onClick={onClose} disabled={submitting}>取消</button>
         </div>
@@ -863,17 +863,17 @@ function RoleSuggestionRow({
       const r = await helmApi.extractForRole(hostSessionId, suggestion.roleId);
       const total = r.updateCount + r.newCount;
       if (total === 0) {
-        toast.message(`No new knowledge points found for ${suggestion.roleName}.`);
+        toast.message(`${suggestion.roleName}：没有提取到新知识。`);
       } else {
         toast.success(
-          `Extracted ${total} candidate${total === 1 ? '' : 's'} for ${suggestion.roleName}`
-          + ` (${r.updateCount} update · ${r.newCount} new)`,
+          `已为 ${suggestion.roleName} 提取 ${total} 个候选`
+          + `（${r.updateCount} 更新 · ${r.newCount} 新）`,
         );
       }
       onExtracted();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      toast.error(`Extract failed: ${msg}`);
+      toast.error(`提取失败：${msg}`);
     } finally { setExtracting(false); }
   }
 
@@ -944,7 +944,7 @@ function KnowledgeOutSection({
       <div className="helm-conv-section-header">
         <span
           className="helm-conv-section-label"
-          title="从这条对话里提取出来的知识候选 — promote 后进入 topic 的知识库"
+          title="从这条对话里提取出来的知识候选 — 采纳后进入 topic 的知识库"
         >
           提取的知识
         </span>
@@ -997,10 +997,10 @@ function CandidateRow({
     setBusy('promote');
     try {
       await helmApi.acceptCandidate(candidate.id);
-      toast.success('Promoted to knowledge.');
+      toast.success('已采纳到知识库。');
       onDecided();
     } catch (err) {
-      toast.error(`Promote: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+      toast.error(`采纳失败：${err instanceof ApiError ? err.message : (err as Error).message}`);
     } finally { setBusy(null); }
   }
 
@@ -1008,10 +1008,10 @@ function CandidateRow({
     setBusy('dismiss');
     try {
       await helmApi.rejectCandidate(candidate.id);
-      toast.success('Dismissed.');
+      toast.success('已忽略。');
       onDecided();
     } catch (err) {
-      toast.error(`Dismiss: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+      toast.error(`忽略失败：${err instanceof ApiError ? err.message : (err as Error).message}`);
     } finally { setBusy(null); }
   }
 
@@ -1073,18 +1073,18 @@ function CandidateRow({
               className="helm-conv-link-button"
               disabled={busy !== null}
               onClick={() => { void promote(); }}
-              title="Promote to knowledge"
+              title="采纳到这个 topic 的知识库（写入个人层 chat-captured）"
             >
-              ↑ Promote
+              ↑ 采纳
             </button>
             <button
               type="button"
               className="helm-conv-link-button helm-conv-link-danger"
               disabled={busy !== null}
               onClick={() => { void dismiss(); }}
-              title="Dismiss"
+              title="忽略这条候选"
             >
-              ✕ Dismiss
+              ✕ 忽略
             </button>
           </div>
         </div>

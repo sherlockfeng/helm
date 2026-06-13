@@ -83,8 +83,8 @@ export function VerificationCoveragePage(): ReactElement {
 
       {!loading && rows.length === 0 && (
         <EmptyState
-          title="No roles found."
-          hint={<>Create one in <Link to="/knowledge/library">Library</Link>.</>}
+          title="No topics found."
+          hint={<>Create one in <Link to="/knowledge/topics">Topics</Link>.</>}
         />
       )}
 

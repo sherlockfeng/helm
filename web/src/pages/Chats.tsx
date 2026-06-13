@@ -279,7 +279,7 @@ function ConversationDetailPane({
       onMutated();
       reload();
     } catch (err) {
-      toast.error(`Remove role: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+      toast.error(`移除 topic: ${err instanceof ApiError ? err.message : (err as Error).message}`);
     } finally { setSavingRole(false); }
   }
 
@@ -486,7 +486,7 @@ function KnowledgeInSection({
       <div className="helm-conv-section-header">
         <span
           className="helm-conv-section-label"
-          title="绑定的 role 会在会话开始时把它的知识注入给 agent"
+          title="绑定的 topic 会在会话开始时把它的知识注入给 agent"
         >
           注入的知识
         </span>
@@ -494,12 +494,12 @@ function KnowledgeInSection({
             instead of header + explanatory paragraph. The user called
             the old two-line version "很难理解，而且浪费空间". */}
         {isEmpty && (
-          <span className="helm-conv-section-meta">未绑定 role</span>
+          <span className="helm-conv-section-meta">未绑定 topic</span>
         )}
         {addable.length > 0 && (
           <Combobox
             value=""
-            placeholder="+ role"
+            placeholder="+ topic"
             disabled={savingRole}
             triggerClassName="helm-conv-add-role"
             items={addable.map((r) => ({
@@ -521,7 +521,7 @@ function KnowledgeInSection({
                   {role ? role.name : `${id} (unknown)`}
                   <button
                     type="button"
-                    aria-label={`Remove role ${role?.name ?? id}`}
+                    aria-label={`Remove topic ${role?.name ?? id}`}
                     disabled={savingRole}
                     onClick={() => onRemoveRole(id)}
                     className="helm-conv-role-chip-x"
@@ -632,7 +632,7 @@ function UnknownEntitiesSection({
           </span>
         </div>
         <p className="helm-conv-empty" style={{ marginBottom: 8 }}>
-          这条 chat 反复提到 helm 还没有 role 覆盖的内容。要不要建一个 role 来沉淀？
+          这条 chat 反复提到 helm 还没有 topic 覆盖的内容。要不要建一个 topic 来沉淀？
         </p>
         <div className="helm-conv-unknown-chips">
           {unknownEntities.map((e) => (
@@ -670,7 +670,7 @@ function UnknownEntitiesSection({
             className="helm-conv-link-button"
             onClick={() => setShowModal(true)}
           >
-            + 新建 role…
+            + 新建 topic…
           </button>
         </div>
       </div>
@@ -708,7 +708,7 @@ function SpawnRoleModal({
   );
   const [selected, setSelected] = useState<Set<string>>(initial);
   const [roleName, setRoleName] = useState(
-    unknownEntities[0] ? `${unknownEntities[0].entity} 专家` : '新建 role',
+    unknownEntities[0] ? `${unknownEntities[0].entity} 专家` : '新建 topic',
   );
   const [submitting, setSubmitting] = useState(false);
 
@@ -740,10 +740,10 @@ function SpawnRoleModal({
     <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
         width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 560)}
-        aria-label="Create role from chat"
+        aria-label="Create topic from chat"
       >
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>从这条 chat 新建 role</div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>从这条 chat 新建 topic</div>
           <div className="muted" style={{ fontSize: 12 }}>
             helm 会用 chat 里提到选中实体的段落作为 role 的种子知识，自动训练 + 提取候选。
           </div>
@@ -823,7 +823,7 @@ function RoleSuggestionsSection({
       <div className="helm-conv-section-header">
         <span className="helm-conv-section-label">这条对话涉及</span>
         <span className="helm-conv-section-meta">
-          {unbound.length} {unbound.length === 1 ? 'role' : 'roles'} matched
+          {unbound.length} {unbound.length === 1 ? 'topic' : 'topics'} matched
         </span>
       </div>
       <ul className="helm-conv-suggestions">
@@ -891,18 +891,18 @@ function RoleSuggestionRow({
           className="helm-conv-link-button"
           disabled={extracting || savingRole}
           onClick={() => { void extract(); }}
-          title="Run the LLM curation pass for this role on this chat"
+          title="一次性：扫这条对话里匹配该 topic 的内容，跑 LLM 审一遍，产出知识候选（见下方「提取的知识」）。不改变绑定关系。"
         >
-          {extracting ? 'extracting…' : '↗ extract'}
+          {extracting ? '提取中…' : '↗ 提取'}
         </button>
         <button
           type="button"
           className="helm-conv-link-button"
           disabled={savingRole || extracting}
           onClick={() => onAddRole(suggestion.roleId)}
-          title="Bind this role so future captures land here"
+          title="持续：把这条对话绑定到该 topic，之后的新内容自动捕获到这里"
         >
-          + bind
+          + 绑定
         </button>
       </div>
       <div className="helm-conv-suggestion-entities">
@@ -944,7 +944,7 @@ function KnowledgeOutSection({
       <div className="helm-conv-section-header">
         <span
           className="helm-conv-section-label"
-          title="从这条对话里提取出来的知识候选 — promote 后进入 role 的知识库"
+          title="从这条对话里提取出来的知识候选 — promote 后进入 topic 的知识库"
         >
           提取的知识
         </span>

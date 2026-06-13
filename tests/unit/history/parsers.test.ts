@@ -82,7 +82,8 @@ describe('codex history parser', () => {
     mkdirSync(a, { recursive: true });
     writeFileSync(join(a, 'rollout-2026-02-01T00-00-00-dup.jsonl'),
       JSON.stringify({ type: 'session_meta', payload: { id: 'dup' }, timestamp: '2026-02-01T00:00:00Z' }) + '\n'
-      + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] }, timestamp: '2026-02-01T00:00:01Z' }));
+      + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] }, timestamp: '2026-02-01T00:00:01Z' }) + '\n'
+      + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a' }] }, timestamp: '2026-02-01T00:00:02Z' }));
     const out = scanCodexHistory([join(dir, 'sessions')]);
     expect(out).toHaveLength(1);
     expect(out[0]!.id).toBe('dup');

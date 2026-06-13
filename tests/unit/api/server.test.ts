@@ -54,7 +54,7 @@ describe('GET /api/active-chats', () => {
   it('returns active sessions (empty when none)', async () => {
     const r = await fetchJson('/api/active-chats');
     expect(r.status).toBe(200);
-    expect(r.body).toEqual({ chats: [] });
+    expect(r.body).toEqual({ chats: [], total: 0 });
   });
 
   it('omits closed sessions', async () => {

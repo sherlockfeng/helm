@@ -114,7 +114,7 @@ export function KnowledgePromotePage(): ReactElement {
           </p>
           {rolesQuery.loading && <CardSkeletonList n={2} />}
           {promotable.length === 0 && !rolesQuery.loading && (
-            <p className="muted" style={{ marginBottom: 0 }}>还没有带知识点的集合。先在对话里沉淀一些碎片。</p>
+            <p className="muted" style={{ marginBottom: 0 }}>还没有带知识点的 topic。先在对话里沉淀一些碎片。</p>
           )}
           {promotable.map((r) => (
             <div

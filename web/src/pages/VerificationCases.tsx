@@ -270,7 +270,7 @@ function NewCaseForm({ onCreated }: { onCreated: () => void }): ReactElement {
             placeholder="dr-overview, bfc" style={{ width: '100%' }}
             list="helm-known-points" />
         </label>
-        <label>Target role ids (comma-separated, optional)
+        <label>Target topic ids (comma-separated, optional)
           <input value={rolesRaw} onChange={(e) => setRolesRaw(e.target.value)}
             placeholder="tiktok-web-dr" style={{ width: '100%' }}
             list="helm-known-roles" />

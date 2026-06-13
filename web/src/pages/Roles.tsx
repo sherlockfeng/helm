@@ -92,7 +92,7 @@ function ProposedCaseChip({ roleId }: { roleId: string }) {
     <span
       className="helm-status"
       style={{ background: '#fef3c7', color: '#92400e' }}
-      title={`${n} proposed verification case${n === 1 ? '' : 's'} target this role — confirm or reject in Verification › Cases (Proposed).`}
+      title={`${n} proposed verification case${n === 1 ? '' : 's'} target this topic — confirm or reject in Verification › Cases (Proposed).`}
     >
       {n} proposed
     </span>
@@ -114,7 +114,7 @@ function VisibilityToggle({
   if (confirm?.chunkId === chunkId) {
     return (
       <span style={{ display: 'inline-flex', gap: 4, fontSize: 11 }}>
-        <span style={{ color: '#92400e' }}>Promote to public?</span>
+        <span style={{ color: '#92400e' }}>设为公开？</span>
         <button
           type="button"
           disabled={busy}
@@ -122,7 +122,7 @@ function VisibilityToggle({
           onClick={() => onFlip('public', confirm.editVersion)}
           style={{ color: '#166534' }}
         >
-          {busy ? 'Promoting…' : 'Yes, make public'}
+          {busy ? '处理中…' : '确认公开'}
         </button>
         <button type="button" onClick={() => onAskConfirm(null)}>Cancel</button>
       </span>
@@ -142,8 +142,8 @@ function VisibilityToggle({
       }}
       style={{ fontSize: 11 }}
       title={isInternal
-        ? 'Promote to Public so this chunk can be published to a public repo.'
-        : 'Revert to Internal to block publish to public repos.'}
+        ? '设为公开，这条知识点才能发布到公开仓库。'
+        : '改回内部，阻止发布到公开仓库。'}
     >
       {isInternal ? '→ Public' : '→ Internal'}
     </button>
@@ -282,7 +282,7 @@ export function PromoteModal({ roleId, roleName, onClose }: {
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
-                {chunks.length === 0 && <p className="muted">这个集合还没有知识点。</p>}
+                {chunks.length === 0 && <p className="muted">这个 topic 还没有知识点。</p>}
                 {chunks.map((c) => (
                   <label key={c.id} style={{ display: 'flex', gap: 6, marginBottom: 8, fontSize: 12 }}>
                     <input
@@ -490,7 +490,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
     }
   }
 
-  if (detail.loading) return <p className="muted">Loading role…</p>;
+  if (detail.loading) return <p className="muted">Loading topic…</p>;
   if (detail.error) return <p className="muted" style={{ color: 'var(--danger)' }}>{detail.error.message}</p>;
   if (!detail.data) return null;
   const { role, chunks, sources } = detail.data;
@@ -509,7 +509,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
         value={activeTab}
         onValueChange={(v) => setActiveTab(v as 'chunks' | 'candidates')}
       >
-        <TabsList aria-label="Role detail sections">
+        <TabsList aria-label="Topic detail sections">
           <TabsTrigger value="chunks">Chunks</TabsTrigger>
           <TabsTrigger value="candidates">Candidates</TabsTrigger>
         </TabsList>
@@ -666,7 +666,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
 
       <div className="label">Train / re-train</div>
       <p className="muted" style={{ fontSize: 11, margin: '4px 0 8px' }}>
-        Re-training replaces the existing chunks for this role. Built-in roles
+        Re-training replaces the existing chunks for this topic. Built-in topics
         keep their default system prompt unless you override below.
       </p>
       <label className="helm-form-row">
@@ -719,7 +719,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
       )}
       {trainOk && (
         <p className="muted" style={{ color: 'var(--success)', margin: '8px 0 0' }}>
-          Role trained. New chunks visible above.
+          Topic trained. New chunks visible above.
         </p>
       )}
 
@@ -782,7 +782,7 @@ function RoleCandidates({
       onChange();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setErr(`Accept failed: ${msg}`);
+      setErr(`采纳失败：${msg}`);
     } finally {
       setBusyId(null);
     }
@@ -795,7 +795,7 @@ function RoleCandidates({
       onChange();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
-      setErr(`Reject failed: ${msg}`);
+      setErr(`忽略失败：${msg}`);
     } finally {
       setBusyId(null);
     }
@@ -823,7 +823,7 @@ function RoleCandidates({
   if (candidates.length === 0) {
     return (
       <p className="muted" style={{ marginTop: 4, marginBottom: 14 }}>
-        No pending candidates. New ones arrive automatically when this role is
+        No pending candidates. New ones arrive automatically when this topic is
         bound to a chat and the agent's responses contain segments that match
         existing knowledge (entity overlap ≥ 2 OR cosine ≥ 0.6).
       </p>
@@ -876,9 +876,9 @@ function RoleCandidates({
                       aria-busy={isBusy}
                       onClick={() => { void saveEdit(c.id); }}
                     >
-                      {isBusy ? 'Saving…' : 'Save & Accept'}
+                      {isBusy ? '保存中…' : '保存并采纳'}
                     </Button>
-                    <button onClick={() => { setEditingId(null); setEditingText(''); }}>Cancel</button>
+                    <button onClick={() => { setEditingId(null); setEditingText(''); }}>取消</button>
                   </>
                 ) : (
                   <>
@@ -887,23 +887,23 @@ function RoleCandidates({
                       disabled={isBusy}
                       aria-busy={isBusy}
                       onClick={() => { void accept(c.id); }}
-                      title="Add this segment as a new chunk on the role."
+                      title="采纳：把这段作为新知识点加到这个 topic（写入个人层 chat-captured）。"
                     >
-                      {isBusy ? 'Accepting…' : 'Accept'}
+                      {isBusy ? '采纳中…' : '采纳'}
                     </Button>
                     <button
                       disabled={isBusy}
                       onClick={() => { setEditingId(c.id); setEditingText(c.chunkText); }}
                     >
-                      Edit
+                      编辑
                     </button>
                     <button
                       disabled={isBusy}
                       onClick={() => { void reject(c.id); }}
                       style={{ color: 'var(--danger)' }}
-                      title="Reject — won't be re-suggested for this role."
+                      title="忽略——不会再为这个 topic 建议。"
                     >
-                      {isBusy ? 'Rejecting…' : 'Reject'}
+                      {isBusy ? '忽略中…' : '忽略'}
                     </button>
                   </>
                 )}
@@ -1014,7 +1014,7 @@ function RoleCard({
           {!role.isBuiltin && (
             <button
               onClick={onDelete}
-              title="删除这个集合及其全部知识点（不可恢复）"
+              title="删除这个 topic 及其全部知识点（不可恢复）"
               style={{ color: 'var(--danger)' }}
             >
               删除
@@ -1069,7 +1069,7 @@ function RolesPageBase() {
 
   // helm-design PR 9: load errors → toast.
   useEffect(() => {
-    if (error) toast.error(`Roles: ${error.message}`, { id: 'roles-load' });
+    if (error) toast.error(`Topics: ${error.message}`, { id: 'roles-load' });
   }, [error]);
 
   // helm-design PR 6: stats reflect what's in the roles list. Built-in
@@ -1109,7 +1109,7 @@ function RolesPageBase() {
         </>}
         actions={
           <Button variant="primary" onClick={() => setChatTarget({ mode: 'create' })}>
-            + Train a new role via chat
+            + Train a new topic via chat
           </Button>
         }
       />
@@ -1169,7 +1169,7 @@ function RolesPageBase() {
           open
           onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
           title={`删除 ${deleteTarget.name}？`}
-          description="集合及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
+          description="topic 及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
           confirmLabel="删除"
           onConfirm={() => { void doDelete(); }}
         />
@@ -1207,18 +1207,18 @@ type ChatTarget =
 // pick English as the default and keep the Chinese form right next
 // to it so future i18n wiring can swap by user locale.
 const CREATE_GREETING = [
-  "Hi! I'll help you define a new helm role.",
+  "Hi! I'll help you define a new helm topic.",
   '',
   "I'm running inside the Claude Code CLI on your machine — file read, grep, shell, web fetch out of the box; helm wires `train_role`, `read_lark_doc`, etc. as MCP tools.",
   '',
-  "Tell me what kind of expert you want to train: the domain, the projects you care about, the docs / code you want to distill. Once we've agreed on a shape, say \"save this as the XXX role\" and I'll call `train_role` to persist it.",
+  "Tell me what kind of expert you want to train: the domain, the projects you care about, the docs / code you want to distill. Once we've agreed on a shape, say \"save this as the XXX topic\" and I'll call `train_role` to persist it.",
   '',
-  '(中文起手：你好！我会帮你定义一个新的 helm role。直接用中文继续就行。)',
+  '(中文起手：你好！我会帮你定义一个新的 helm topic。直接用中文继续就行。)',
 ].join('\n');
 
 function updateGreeting(roleName: string, roleId: string): string {
   return [
-    `好，给现有 role **${roleName}** (\`${roleId}\`) 增量补充知识。`,
+    `好，给现有 topic **${roleName}** (\`${roleId}\`) 增量补充知识。`,
     '',
     '我会用 helm 的 `update_role` MCP 工具 — 它**只 append、不覆盖**：原有的 chunks 不会被擦掉。也可以同时改 system prompt（如果你想纠正某些表述）。',
     '',
@@ -1306,8 +1306,8 @@ function RoleTrainChatModal({
   }
 
   const title = target.mode === 'update'
-    ? `Update role: ${target.name}`
-    : 'Train a new role via chat';
+    ? `Update topic: ${target.name}`
+    : 'Train a new topic via chat';
 
   return (
     <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -1321,8 +1321,8 @@ function RoleTrainChatModal({
             <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
             <div className="muted" style={{ fontSize: 12 }}>
               Powered by your local <code>claude</code> CLI (Phase 60b). When you&apos;re ready, say
-              {' '}<em>&quot;保存这个为 XXX role&quot;</em> — the agent calls helm&apos;s
-              {' '}<code>train_role</code> MCP tool and the role appears in the list.
+              {' '}<em>&quot;保存这个为 XXX topic&quot;</em> — the agent calls helm&apos;s
+              {' '}<code>train_role</code> MCP tool and the topic appears in the list.
             </div>
           </div>
           <button onClick={onClose} aria-label="Close">✕</button>
@@ -1424,7 +1424,7 @@ function RoleTrainChatModal({
 
 function TrainViaCliPanel() {
   const HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
-  const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 role';
+  const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 topic';
   // Phase 63: state per target so the user can see "Set up Claude Code" and
   // "Set up Cursor" results independently.
   const [busy, setBusy] = useState<'claude' | 'cursor' | null>(null);
@@ -1466,7 +1466,7 @@ function TrainViaCliPanel() {
         <code>{HELM_MCP_URL}</code>. After registering helm with your CLI, end
         any conversation by saying e.g.{' '}
         <em>&quot;{examplePrompt}&quot;</em> — the agent calls{' '}
-        <code>train_role</code> and the role appears below automatically.
+        <code>train_role</code> and the topic appears below automatically.
       </p>
 
       <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>

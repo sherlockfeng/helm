@@ -108,13 +108,16 @@ export function listActiveSessions(db: Database.Database): HostSession[] {
 export function listSessions(
   db: Database.Database,
   filter: 'active' | 'closed' | 'all',
+  limit?: number,
 ): HostSession[] {
   // Single round-trip: pre-fetch role bindings for every matched session and
   // build an in-memory map keyed by host_session_id. Avoids N+1 lookups when
-  // the dashboard renders dozens of chats.
+  // the dashboard renders dozens of chats. History views pass a limit because
+  // a heavy backfill can produce thousands of closed sessions.
   const where = filter === 'all' ? '' : `WHERE status = '${filter}'`;
+  const lim = limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '';
   const rows = db.prepare(
-    `SELECT * FROM host_sessions ${where} ORDER BY last_seen_at DESC`,
+    `SELECT * FROM host_sessions ${where} ORDER BY last_seen_at DESC${lim}`,
   ).all() as Record<string, unknown>[];
   const ids = rows.map((r) => String(r['id']));
   if (ids.length === 0) return [];
@@ -129,6 +132,17 @@ export function listSessions(
     if (list) list.push(role_id); else byId.set(host_session_id, [role_id]);
   }
   return rows.map((r) => rowToHostSession(r, byId.get(String(r['id'])) ?? []));
+}
+
+export function countSessions(
+  db: Database.Database,
+  filter: 'active' | 'closed' | 'all',
+): number {
+  const where = filter === 'all' ? '' : `WHERE status = '${filter}'`;
+  const row = db.prepare(
+    `SELECT COUNT(*) AS n FROM host_sessions ${where}`,
+  ).get() as { n: number };
+  return row.n;
 }
 
 export function updateHostSession(

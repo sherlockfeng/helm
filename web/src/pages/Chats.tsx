@@ -96,10 +96,30 @@ export function ChatsPage() {
   const { data, loading, error, reload } = useApi(() => helmApi.activeChats(filter), [filter]);
   const { data: rolesData } = useApi(() => helmApi.roles());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
     if (error) toast.error(`Chats: ${error.message}`, { id: 'chats-load' });
   }, [error]);
+
+  async function scanHistory(): Promise<void> {
+    setScanning(true);
+    try {
+      const { results } = await helmApi.scanHistory('all');
+      const imported = results.reduce((n, r) => n + r.imported, 0);
+      const skipped = results.reduce((n, r) => n + r.skipped, 0);
+      if (imported === 0) {
+        toast.message(`没有新历史会话（已跳过 ${skipped} 个已导入的）。`);
+      } else {
+        const per = results.filter((r) => r.imported > 0)
+          .map((r) => `${r.host} ${r.imported}`).join(' · ');
+        toast.success(`导入 ${imported} 个历史会话（${per}）；跳过 ${skipped} 个。`);
+      }
+      reload();
+    } catch (err) {
+      toast.error(`扫描失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setScanning(false); }
+  }
 
   useEventStream(() => { reload(); }, {
     types: ['session.started', 'session.closed'],
@@ -125,21 +145,35 @@ export function ChatsPage() {
           this surface, and the giant h1 was burning vertical space without
           earning it. The detail pane's own header IS the page's hierarchy. */}
 
-      <div className="helm-conv-filter" role="tablist" aria-label="Chat filter"
-        style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-        {CHAT_FILTERS.map((f) => (
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+        <div className="helm-conv-filter" role="tablist" aria-label="Chat filter"
+          style={{ display: 'flex', gap: 4 }}>
+          {CHAT_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.value}
+              className={`helm-seg${filter === f.value ? ' is-active' : ''}`}
+              onClick={() => setFilter(f.value)}
+              title={f.hint}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {filter !== 'active' && (
           <button
-            key={f.value}
             type="button"
-            role="tab"
-            aria-selected={filter === f.value}
-            className={`helm-seg${filter === f.value ? ' is-active' : ''}`}
-            onClick={() => setFilter(f.value)}
-            title={f.hint}
+            className="helm-seg"
+            style={{ marginLeft: 'auto' }}
+            disabled={scanning}
+            onClick={() => { void scanHistory(); }}
+            title="一次性扫描 Claude Code / Cursor / Codex 的本机记录，把装 helm 之前的历史会话导入进来（已导入的会跳过）"
           >
-            {f.label}
+            {scanning ? '扫描中…' : '↧ 扫描导入历史'}
           </button>
-        ))}
+        )}
       </div>
 
       {loading && <CardSkeletonList n={3} />}
@@ -151,6 +185,12 @@ export function ChatsPage() {
             ? 'Start one in Cursor / Claude Code / Codex and Helm will pick it up.'
             : '装 helm 之前的对话可以在「已结束」里点「扫描导入历史」一次性导入。'}
         />
+      )}
+
+      {data && typeof data.total === 'number' && data.total > chats.length && (
+        <p className="muted" style={{ fontSize: 11, margin: '0 0 8px' }}>
+          显示最近 {chats.length} / 共 {data.total} 条历史会话
+        </p>
       )}
 
       {data && chats.length > 0 && (

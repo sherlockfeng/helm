@@ -63,9 +63,16 @@ export const helmApi = {
   health: () => request<{ ok: boolean; name: string; version: string }>('GET', '/api/health'),
 
   activeChats: (status: 'active' | 'closed' | 'all' = 'active') =>
-    request<{ chats: ActiveChat[] }>(
+    request<{ chats: ActiveChat[]; total: number }>(
       'GET',
       `/api/active-chats${status === 'active' ? '' : `?status=${status}`}`,
+    ),
+
+  scanHistory: (host: 'claude-code' | 'cursor' | 'codex' | 'all' = 'all') =>
+    request<{ results: { host: string; imported: number; skipped: number; turns: number }[] }>(
+      'POST',
+      '/api/history/scan',
+      { host },
     ),
 
   /**

@@ -26,7 +26,8 @@ import {
   addHostSessionRole,
   deleteHostSession,
   getHostSession,
-  listActiveSessions,
+  listSessions,
+  countSessions,
   removeHostSessionRole,
   setHostSessionDisplayName,
   setHostSessionRole,
@@ -132,6 +133,7 @@ import {
   listReviewsForTask as harnessListReviews,
 } from '../storage/repos/harness.js';
 import type { HarnessReview } from '../storage/types.js';
+import { scanHistory, type ScanHost } from '../history/index.js';
 
 const harnessReviewRepos = {
   getReview: harnessGetReview,
@@ -628,7 +630,18 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
 
       if (url.pathname === '/api/active-chats') {
         if (req.method !== 'GET') return methodNotAllowed(res);
-        const sessions = listActiveSessions(deps.db);
+        // ?status=active (default, back-compat) | closed | all — the
+        // History view passes closed/all to surface ended sessions.
+        const statusParam = url.searchParams.get('status');
+        const filter = statusParam === 'closed' || statusParam === 'all'
+          ? statusParam : 'active';
+        // History can hold thousands of closed sessions after a backfill;
+        // cap the rail at the most-recent N and report the true total so the
+        // UI can show "显示最近 N / 共 M". Active is never capped (few rows).
+        const HISTORY_LIMIT = 500;
+        const limit = filter === 'active' ? undefined : HISTORY_LIMIT;
+        const sessions = listSessions(deps.db, filter, limit);
+        const total = filter === 'active' ? sessions.length : countSessions(deps.db, filter);
         // Three aggregate queries (queued messages, prompt count = turns,
         // pending candidates) hydrate every Active Chats row in one
         // round-trip. The rail uses these to render compact 2-line cards
@@ -645,7 +658,25 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             ? { pendingCandidateCount: candidatesBySession[s.id] }
             : {}),
         }));
-        return send(res, 200, { chats: enriched });
+        return send(res, 200, { chats: enriched, total });
+      }
+
+      // History backfill: scan a host's on-disk transcripts and import
+      // pre-helm conversations as closed sessions. Idempotent — re-scanning
+      // skips sessions already in the DB.
+      if (url.pathname === '/api/history/scan') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: { host?: string } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as typeof body; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const host = body.host;
+        const valid = host === 'claude-code' || host === 'cursor'
+          || host === 'codex' || host === 'all' || host === undefined;
+        if (!valid) return badRequest(res, `unknown host: ${String(host)}`);
+        const results = scanHistory(deps.db, (host ?? 'all') as ScanHost);
+        return send(res, 200, { results });
       }
 
       // Phase 25: bind / unbind a chat to a single role (legacy single-select

@@ -85,14 +85,41 @@ function sourceLabel(key: string): string {
   return key.toUpperCase();
 }
 
+const CHAT_FILTERS: { value: 'active' | 'all' | 'closed'; label: string; hint: string }[] = [
+  { value: 'active', label: 'Active', hint: '正在进行的会话' },
+  { value: 'all', label: '全部', hint: '进行中 + 已结束' },
+  { value: 'closed', label: '已结束', hint: '历史会话（含扫描导入的）' },
+];
+
 export function ChatsPage() {
-  const { data, loading, error, reload } = useApi(() => helmApi.activeChats());
+  const [filter, setFilter] = useState<'active' | 'all' | 'closed'>('active');
+  const { data, loading, error, reload } = useApi(() => helmApi.activeChats(filter), [filter]);
   const { data: rolesData } = useApi(() => helmApi.roles());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
-    if (error) toast.error(`Active chats: ${error.message}`, { id: 'chats-load' });
+    if (error) toast.error(`Chats: ${error.message}`, { id: 'chats-load' });
   }, [error]);
+
+  async function scanHistory(): Promise<void> {
+    setScanning(true);
+    try {
+      const { results } = await helmApi.scanHistory('all');
+      const imported = results.reduce((n, r) => n + r.imported, 0);
+      const skipped = results.reduce((n, r) => n + r.skipped, 0);
+      if (imported === 0) {
+        toast.message(`没有新历史会话（已跳过 ${skipped} 个已导入的）。`);
+      } else {
+        const per = results.filter((r) => r.imported > 0)
+          .map((r) => `${r.host} ${r.imported}`).join(' · ');
+        toast.success(`导入 ${imported} 个历史会话（${per}）；跳过 ${skipped} 个。`);
+      }
+      reload();
+    } catch (err) {
+      toast.error(`扫描失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setScanning(false); }
+  }
 
   useEventStream(() => { reload(); }, {
     types: ['session.started', 'session.closed'],
@@ -118,13 +145,52 @@ export function ChatsPage() {
           this surface, and the giant h1 was burning vertical space without
           earning it. The detail pane's own header IS the page's hierarchy. */}
 
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+        <div className="helm-conv-filter" role="tablist" aria-label="Chat filter"
+          style={{ display: 'flex', gap: 4 }}>
+          {CHAT_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.value}
+              className={`helm-seg${filter === f.value ? ' is-active' : ''}`}
+              onClick={() => setFilter(f.value)}
+              title={f.hint}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {filter !== 'active' && (
+          <button
+            type="button"
+            className="helm-seg"
+            style={{ marginLeft: 'auto' }}
+            disabled={scanning}
+            onClick={() => { void scanHistory(); }}
+            title="一次性扫描 Claude Code / Cursor / Codex 的本机记录，把装 helm 之前的历史会话导入进来（已导入的会跳过）"
+          >
+            {scanning ? '扫描中…' : '↧ 扫描导入历史'}
+          </button>
+        )}
+      </div>
+
       {loading && <CardSkeletonList n={3} />}
 
       {data && chats.length === 0 && (
         <EmptyState
-          title="No active chats."
-          hint="Start one in Cursor / Claude Code / Codex and Helm will pick it up."
+          title={filter === 'active' ? 'No active chats.' : '没有历史会话。'}
+          hint={filter === 'active'
+            ? 'Start one in Cursor / Claude Code / Codex and Helm will pick it up.'
+            : '装 helm 之前的对话可以在「已结束」里点「扫描导入历史」一次性导入。'}
         />
+      )}
+
+      {data && typeof data.total === 'number' && data.total > chats.length && (
+        <p className="muted" style={{ fontSize: 11, margin: '0 0 8px' }}>
+          显示最近 {chats.length} / 共 {data.total} 条历史会话
+        </p>
       )}
 
       {data && chats.length > 0 && (
@@ -190,6 +256,9 @@ function ChatRailRow({
           {sourceLabel(key)}
         </span>
         <span className="helm-rail-row-label">{chatLabel(chat)}</span>
+        {chat.status === 'closed' && (
+          <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }} title="已结束的历史会话">已结束</span>
+        )}
       </div>
       <div className="helm-rail-row-meta">
         <span className="helm-rail-row-role">

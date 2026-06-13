@@ -5,6 +5,7 @@ import {
   closeStaleHostSessions,
   getHostSession,
   listActiveSessions,
+  listSessions,
   listHostSessionRoles,
   removeHostSessionRole,
   setHostSessionDisplayName,
@@ -59,6 +60,14 @@ describe('host sessions', () => {
     const active = listActiveSessions(db);
     expect(active.map((s) => s.id)).toContain('s1');
     expect(active.map((s) => s.id)).not.toContain('s2');
+  });
+
+  it('listSessions filters by status (History view)', () => {
+    upsertHostSession(db, makeSession({ id: 's1', status: 'active' }));
+    upsertHostSession(db, makeSession({ id: 's2', status: 'closed' }));
+    expect(listSessions(db, 'active').map((s) => s.id)).toEqual(['s1']);
+    expect(listSessions(db, 'closed').map((s) => s.id)).toEqual(['s2']);
+    expect(listSessions(db, 'all').map((s) => s.id).sort()).toEqual(['s1', 's2']);
   });
 
   it('updateHostSession closes a session', () => {

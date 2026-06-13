@@ -2381,3 +2381,20 @@ button.helm-conv-unknown-chip.is-amber.is-selected {
   background: var(--border);
   margin: 4px 0;
 }
+
+/* Segmented filter (Active / 全部 / 已结束 on the Chats page). */
+.helm-seg {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.helm-seg:hover { background: var(--border); }
+.helm-seg.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

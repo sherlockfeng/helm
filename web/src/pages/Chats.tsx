@@ -669,6 +669,7 @@ function UnknownEntitiesSection({
             type="button"
             className="helm-conv-link-button"
             onClick={() => setShowModal(true)}
+            title="用这些未识别实体作种子，新建一个 topic 来沉淀这条对话反复提到的内容"
           >
             + 新建 topic…
           </button>
@@ -789,10 +790,11 @@ function SpawnRoleModal({
             variant="primary"
             disabled={submitting || selected.size === 0 || !roleName.trim()}
             onClick={() => { void submit(); }}
+            title="新建这个 topic，并立刻从当前对话提取相关知识候选"
           >
             {submitting ? '创建中…' : `创建 topic + 提取`}
           </Button>
-          <button type="button" onClick={onClose} disabled={submitting}>取消</button>
+          <button type="button" onClick={onClose} disabled={submitting} title="关闭，不创建">取消</button>
         </div>
       </DialogContent>
     </Dialog>
@@ -1336,13 +1338,18 @@ function OverflowMenu({
       </button>
       {open && (
         <div role="menu" className="helm-conv-overflow-menu">
-          <button type="button" role="menuitem" onClick={() => { onRename(); setOpen(false); }}>
+          <button type="button" role="menuitem" onClick={() => { onRename(); setOpen(false); }}
+            title="给这条对话改一个好认的标题">
             Rename…
           </button>
-          <button type="button" role="menuitem" onClick={() => { onCopyId(); setOpen(false); }}>
+          <button type="button" role="menuitem" onClick={() => { onCopyId(); setOpen(false); }}
+            title="复制这条对话的 session id（排查 / 关联日志用）">
             Copy session id
           </button>
-          <button type="button" role="menuitem" onClick={() => { onToggleCapture(); setOpen(false); }}>
+          <button type="button" role="menuitem" onClick={() => { onToggleCapture(); setOpen(false); }}
+            title={captureDisabled
+              ? '恢复后，这条对话的新内容会重新被提取为知识候选'
+              : '暂停后，这条对话不再自动提取知识候选（适合调试 / 闲聊）'}>
             {captureDisabled ? '🔔 恢复知识捕获' : '🔕 暂停知识捕获'}
           </button>
           <div className="helm-conv-overflow-divider" role="separator" />
@@ -1351,6 +1358,7 @@ function OverflowMenu({
             role="menuitem"
             className="helm-conv-overflow-danger"
             onClick={() => { onDelete(); setOpen(false); }}
+            title="从 helm 删除这条对话记录（不影响已采纳的知识）"
           >
             Delete chat
           </button>

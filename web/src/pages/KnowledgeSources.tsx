@@ -132,7 +132,8 @@ function SubscribeForm({ onSubscribed }: { onSubscribed: () => void }): ReactEle
         />
       </label>
       <div>
-        <Button onClick={submit} disabled={busy} variant="primary" aria-busy={busy}>
+        <Button onClick={submit} disabled={busy} variant="primary" aria-busy={busy}
+          title="克隆这个仓库到本地并订阅，之后可 Fetch / Import 它的知识">
           {busy ? 'Cloning…' : 'Subscribe'}
         </Button>
       </div>
@@ -180,6 +181,7 @@ function SeedList({
             onClick={() => { void enroll(s.id); }}
             variant="primary"
             aria-busy={busyId === s.id}
+            title="订阅这个推荐仓库：克隆到本地并加入知识来源"
           >
             {busyId === s.id ? 'Enrolling…' : 'Subscribe'}
           </Button>
@@ -234,6 +236,7 @@ function RepoRow({
             disabled={busy !== null}
             aria-busy={busy === 'fetch'}
             onClick={() => { void run('fetch', () => helmApi.fetchKnowledgeRepoNow(repo.id), 'Fetched.'); }}
+            title="git fetch：把远端最新内容拉到本地克隆（还不写入索引）"
           >
             {busy === 'fetch' ? 'Fetching…' : 'Fetch'}
           </Button>
@@ -241,6 +244,7 @@ function RepoRow({
             disabled={busy !== null}
             aria-busy={busy === 'import'}
             onClick={() => { void run('import', () => helmApi.importKnowledgeRepoNow(repo.id), 'Imported.'); }}
+            title="把本地克隆里白名单目录的 .md 解析成 topic 与知识点，写入 helm 索引"
           >
             {busy === 'import' ? 'Importing…' : 'Import'}
           </Button>
@@ -418,7 +422,8 @@ function ImportDirsPanel({
           })}
           <div style={{ marginTop: 8 }}>
             <Button disabled={saving || selected === null} aria-busy={saving}
-              onClick={() => { void save(); }}>
+              onClick={() => { void save(); }}
+              title="保存导入白名单：只有勾选的目录会在下次 Import 时写入索引">
               {saving ? '保存中…' : '保存'}
             </Button>
           </div>
@@ -702,6 +707,7 @@ function PublishModal({
                 variant="primary"
                 disabled={submitting || selected.size === 0}
                 onClick={() => { void submit(); }}
+                title="把勾选的知识点序列化成 .md，推一个分支回这个仓库"
               >
                 {submitting ? '推送中…' : `Publish ${selected.size} 个知识点`}
               </Button>

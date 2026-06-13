@@ -36,12 +36,20 @@ describe('claude-code history parser', () => {
     const proj = join(projects, '-Users-x-proj');
     mkdirSync(proj, { recursive: true });
     writeFileSync(join(proj, 'abc-123.jsonl'),
-      JSON.stringify({ type: 'user', message: { content: 'hi' }, timestamp: '2026-01-01T00:00:00Z' }) + '\n'
+      JSON.stringify({ type: 'user', message: { content: 'hi' }, cwd: '/Users/x/proj', timestamp: '2026-01-01T00:00:00Z' }) + '\n'
       + JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'yo' }] }, timestamp: '2026-01-01T00:00:01Z' }));
     const out = scanClaudeCodeHistory(projects);
     expect(out).toHaveLength(1);
     expect(out[0]!.id).toBe('abc-123');
     expect(out[0]!.turns.map((t) => t.kind)).toEqual(['prompt', 'response']);
+  });
+
+  it("skips helm's own internal calls (cwd '/')", () => {
+    const lines = [
+      { type: 'user', message: { content: 'You will read a conversation...' }, cwd: '/', timestamp: '2026-01-01T00:00:00Z' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'summary' }] }, timestamp: '2026-01-01T00:00:01Z' },
+    ].map((o) => JSON.stringify(o)).join('\n');
+    expect(parseClaudeTranscript(writeJsonl('internal.jsonl', lines), 'i').session).toBeNull();
   });
 
   it('returns null for a transcript with no real turns', () => {

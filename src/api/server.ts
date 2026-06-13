@@ -26,7 +26,7 @@ import {
   addHostSessionRole,
   deleteHostSession,
   getHostSession,
-  listActiveSessions,
+  listSessions,
   removeHostSessionRole,
   setHostSessionDisplayName,
   setHostSessionRole,
@@ -628,7 +628,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
 
       if (url.pathname === '/api/active-chats') {
         if (req.method !== 'GET') return methodNotAllowed(res);
-        const sessions = listActiveSessions(deps.db);
+        // ?status=active (default, back-compat) | closed | all — the
+        // History view passes closed/all to surface ended sessions.
+        const statusParam = url.searchParams.get('status');
+        const filter = statusParam === 'closed' || statusParam === 'all'
+          ? statusParam : 'active';
+        const sessions = listSessions(deps.db, filter);
         // Three aggregate queries (queued messages, prompt count = turns,
         // pending candidates) hydrate every Active Chats row in one
         // round-trip. The rail uses these to render compact 2-line cards

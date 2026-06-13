@@ -95,11 +95,26 @@ export function getHostSession(db: Database.Database, id: string): HostSession |
 }
 
 export function listActiveSessions(db: Database.Database): HostSession[] {
-  // Single round-trip: pre-fetch role bindings for every active session and
+  return listSessions(db, 'active');
+}
+
+/**
+ * List sessions by lifecycle filter. 'active' (the live rail), 'closed'
+ * (ended history), or 'all' (both — the History view's default). Ended
+ * sessions stay in the DB with status='closed' and their host_event_log
+ * intact, so the same conversation-detail / extract path works on them
+ * unchanged; the filter is the only thing that gated them out of the UI.
+ */
+export function listSessions(
+  db: Database.Database,
+  filter: 'active' | 'closed' | 'all',
+): HostSession[] {
+  // Single round-trip: pre-fetch role bindings for every matched session and
   // build an in-memory map keyed by host_session_id. Avoids N+1 lookups when
   // the dashboard renders dozens of chats.
+  const where = filter === 'all' ? '' : `WHERE status = '${filter}'`;
   const rows = db.prepare(
-    `SELECT * FROM host_sessions WHERE status = 'active' ORDER BY last_seen_at DESC`,
+    `SELECT * FROM host_sessions ${where} ORDER BY last_seen_at DESC`,
   ).all() as Record<string, unknown>[];
   const ids = rows.map((r) => String(r['id']));
   if (ids.length === 0) return [];

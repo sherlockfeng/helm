@@ -62,7 +62,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const helmApi = {
   health: () => request<{ ok: boolean; name: string; version: string }>('GET', '/api/health'),
 
-  activeChats: () => request<{ chats: ActiveChat[] }>('GET', '/api/active-chats'),
+  activeChats: (status: 'active' | 'closed' | 'all' = 'active') =>
+    request<{ chats: ActiveChat[] }>(
+      'GET',
+      `/api/active-chats${status === 'active' ? '' : `?status=${status}`}`,
+    ),
 
   /**
    * Per-conversation aggregate: session header + timeline + knowledge-in-play

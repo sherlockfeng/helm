@@ -21,7 +21,7 @@ import { useProposalBootToast } from './lib/proposal-notifications.js';
 
 // Primary surfaces (new IA)
 import { ConversationsPage } from './pages/Conversations.js';
-import { ExpertsPage, TopicsPage } from './pages/Roles.js';
+import { TopicsPage } from './pages/Roles.js';
 import { KnowledgePromotePage } from './pages/KnowledgePromote.js';
 import { KnowledgeSourcesPage } from './pages/KnowledgeSources.js';
 import { VerificationCasesPage } from './pages/VerificationCases.js';
@@ -61,15 +61,15 @@ export default function App() {
 
           {/* Primary IA */}
           <Route path="/conversations" element={<ConversationsPage />} />
-          <Route path="/knowledge" element={<Navigate to="/knowledge/experts" replace />} />
-          <Route path="/knowledge/experts" element={<ExpertsPage />} />
+          <Route path="/knowledge" element={<Navigate to="/knowledge/topics" replace />} />
+          <Route path="/knowledge/experts" element={<Navigate to="/knowledge/topics" replace />} />
           <Route path="/knowledge/topics" element={<TopicsPage />} />
           <Route path="/knowledge/collections" element={<Navigate to="/knowledge/topics" replace />} />
           <Route path="/knowledge/promote" element={<KnowledgePromotePage />} />
           <Route path="/knowledge/sources" element={<KnowledgeSourcesPage />} />
           {/* Back-compat: Library split into Experts/Topics; Review folded
               into the Conversations detail (提取的知识 section). */}
-          <Route path="/knowledge/library" element={<Navigate to="/knowledge/experts" replace />} />
+          <Route path="/knowledge/library" element={<Navigate to="/knowledge/topics" replace />} />
           <Route path="/knowledge/review" element={<Navigate to="/conversations" replace />} />
           <Route path="/verification" element={<Navigate to="/verification/cases" replace />} />
           <Route path="/verification/cases" element={<VerificationCasesPage />} />
@@ -85,7 +85,7 @@ export default function App() {
 
           {/* Back-compat: old paths redirect to new ones. */}
           <Route path="/chats" element={<Navigate to="/conversations" replace />} />
-          <Route path="/roles" element={<Navigate to="/knowledge/experts" replace />} />
+          <Route path="/roles" element={<Navigate to="/knowledge/topics" replace />} />
           <Route path="/subscriptions" element={<Navigate to="/knowledge/sources" replace />} />
 
           {/* Advanced + legacy surfaces — routes resolve regardless of

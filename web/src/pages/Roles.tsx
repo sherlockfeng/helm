@@ -1034,7 +1034,7 @@ function RoleCard({
   );
 }
 
-function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
+function RolesPageBase() {
   const { data, loading, error, reload } = useApi(() => helmApi.roles());
   const [expanded, setExpanded] = useState<string | null>(null);
   // Phase 65: chat modal can run in two modes:
@@ -1078,7 +1078,6 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
   const experts = allRoles.filter((r) => r.bindable !== false);
   const collections = allRoles.filter((r) => r.bindable === false);
   const builtInRoles = allRoles.filter((r) => r.isBuiltin).length;
-  const userRoles = allRoles.length - builtInRoles;
 
   const toggleBindable = async (r: RoleSummary): Promise<void> => {
     try {
@@ -1094,73 +1093,14 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
     0,
   );
 
-  if (mode === 'collections') {
-    return (
-      <>
-        <PageHeader
-          title="Topics"
-          subtitle={<>维护层：知识主题——对话捕获的实体桶（如 og）与导入的主题域（如 stability）。检索照常覆盖这里的每个知识点；它们没有"人格"，不出现在对话绑定列表。</>}
-          stats={<>
-            <StatTile label="Topics" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
-            <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
-          </>}
-        />
-        {loading && <CardSkeletonList n={4} />}
-        {data && collections.length === 0 && (
-          <EmptyState
-            title="还没有 Topic。"
-            hint={<>订阅 llm-wiki 仓库（Sources）或在未绑定 role 的对话里聊出新实体，Topic 会自动出现。</>}
-          />
-        )}
-        {data && collections.map((r) => (
-          <RoleCard
-            key={r.id}
-            role={r}
-            expanded={expanded === r.id}
-            onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
-            onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
-            onToggleBindable={() => { void toggleBindable(r); }}
-            onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
-            onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
-            onTrained={() => reload()}
-          />
-        ))}
-        {deleteTarget && (
-          <ConfirmDialog
-            open
-            onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
-            title={`删除 ${deleteTarget.name}？`}
-            description="Topic 及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
-            confirmLabel="删除"
-            onConfirm={() => { void doDelete(); }}
-          />
-        )}
-        {promoteTarget && (
-          <PromoteModal
-            roleId={promoteTarget.roleId}
-            roleName={promoteTarget.name}
-            onClose={() => setPromoteTarget(null)}
-          />
-        )}
-        {chatTarget && (
-          <RoleTrainChatModal
-            target={chatTarget}
-            onClose={() => setChatTarget(null)}
-            onSaved={() => { setChatTarget(null); reload(); }}
-          />
-        )}
-      </>
-    );
-  }
-
   return (
     <>
       <PageHeader
-        title="Experts"
-        subtitle={<>使用层：可绑定到对话的专家人格。绑定后开场注入 system prompt + 知识摘录，回复按其作用域产生候选。<code>query_knowledge</code> 的检索范围不止于此——Topics 同样参与。</>}
+        title="Topics"
+        subtitle={<>知识主题——实体桶、导入主题域，以及带人格的专家主题。带 prompt 的可绑定到对话（开场注入知识 + 定向捕获）；检索对所有主题一视同仁。</>}
         stats={<>
-          <StatTile label="Yours" value={userRoles} tone={userRoles > 0 ? 'live' : 'muted'} />
-          <StatTile label="Built-in" value={builtInRoles} tone="muted" />
+          <StatTile label="Experts" value={experts.length - builtInRoles} tone={experts.length - builtInRoles > 0 ? 'live' : 'muted'} />
+          <StatTile label="Topics" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
           <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
         </>}
         actions={
@@ -1179,14 +1119,34 @@ function RolesPageBase({ mode }: { mode: 'experts' | 'collections' }) {
 
       {loading && <CardSkeletonList n={4} />}
 
-      {data && experts.length === 0 && (
+      {data && allRoles.length === 0 && (
         <EmptyState
-          title="No experts yet."
-          hint={<>Built-in roles seed automatically — if you see this, the database may not be initialized.</>}
+          title="还没有任何主题。"
+          hint={<>订阅 llm-wiki（Sources）、在对话里聊出新实体，或训练一个专家主题。</>}
         />
       )}
 
+      {data && experts.length > 0 && (
+        <h3 style={{ margin: '8px 0 4px' }}>专家主题（可绑定）</h3>
+      )}
       {data && experts.map((r) => (
+        <RoleCard
+          key={r.id}
+          role={r}
+          expanded={expanded === r.id}
+          onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
+          onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
+          onToggleBindable={() => { void toggleBindable(r); }}
+          onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
+          onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
+          onTrained={() => reload()}
+        />
+      ))}
+
+      {data && collections.length > 0 && (
+        <h3 style={{ margin: '16px 0 4px' }}>主题（未配人格）</h3>
+      )}
+      {data && collections.map((r) => (
         <RoleCard
           key={r.id}
           role={r}
@@ -1559,15 +1519,12 @@ function TrainViaCliPanel() {
 // hits POST /api/setup-mcp directly, so the user doesn't have to copy any
 // shell commands.
 
-/** 使用层（提取→使用→维护→升级 IA）：可绑定的专家人格。 */
-export function ExpertsPage() {
-  return <RolesPageBase mode="experts" />;
-}
-
-/** 维护层：知识主题（实体桶 + 导入主题域）。 */
+/** P1 (de-redundancy): one unified Topics page — expert topics
+ *  (bindable persona) and plain topics live in one list. */
 export function TopicsPage() {
-  return <RolesPageBase mode="collections" />;
+  return <RolesPageBase />;
 }
 
-/** Back-compat for tests/imports that still reference RolesPage. */
-export const RolesPage = ExpertsPage;
+/** Back-compat for tests/imports that still reference the old names. */
+export const RolesPage = TopicsPage;
+export const ExpertsPage = TopicsPage;

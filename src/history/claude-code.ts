@@ -106,6 +106,11 @@ export function parseClaudeTranscript(filePath: string, sessionId: string): Pars
   if (!turns.some((t) => t.kind === 'prompt') || !turns.some((t) => t.kind === 'response')) {
     return { session: null };
   }
+  // Skip helm's OWN internal claude-CLI calls — the TL;DR summarizer,
+  // candidate classifier and entity-curation agent all run as subprocesses
+  // with cwd '/' (no project). On a heavy helm user these dwarf real chats
+  // (~497/500 here). Real coding sessions always carry a project cwd.
+  if (!cwd || cwd === '/') return { session: null };
   return {
     session: {
       id: sessionId,

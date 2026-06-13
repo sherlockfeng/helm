@@ -50,9 +50,15 @@ export function scanCursorHistory(
     ).all() as { key: string; value: string }[];
 
     for (const { value } of composers) {
+     try {
       let meta: Record<string, unknown>;
       try { meta = JSON.parse(value) as Record<string, unknown>; }
       catch { continue; }
+      // Some composerData rows are the literal `null` or non-objects —
+      // guard before property access, and isolate per-composer failures so
+      // one bad row can't abort the whole scan (the original bug: a `null`
+      // row threw past the JSON try and emptied the entire result).
+      if (!meta || typeof meta !== 'object') continue;
       const composerId = typeof meta['composerId'] === 'string' ? meta['composerId'] : null;
       const headers = meta['fullConversationHeadersOnly'];
       if (!composerId || !Array.isArray(headers) || headers.length === 0) continue;
@@ -71,6 +77,7 @@ export function scanCursorHistory(
         let bubble: Record<string, unknown>;
         try { bubble = JSON.parse(row.value) as Record<string, unknown>; }
         catch { continue; }
+        if (!bubble || typeof bubble !== 'object') continue;
         const text = typeof bubble['text'] === 'string' ? bubble['text'].trim() : '';
         if (!text) continue;
         const kind = bubble['type'] === 1 ? 'prompt' : bubble['type'] === 2 ? 'response' : null;
@@ -94,6 +101,7 @@ export function scanCursorHistory(
         lastSeenAt: updatedIso ?? createdIso ?? turns[turns.length - 1]!.createdAt,
         turns,
       });
+     } catch { /* skip one malformed composer, keep scanning */ }
     }
   } finally {
     db.close();

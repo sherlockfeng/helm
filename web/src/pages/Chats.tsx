@@ -138,6 +138,7 @@ export function ChatsPage() {
 
   const chats = data?.chats ?? [];
   const roles = rolesData?.roles ?? [];
+  const selectedChat = selectedId ? chats.find((c) => c.id === selectedId) : undefined;
 
   return (
     <>
@@ -155,7 +156,7 @@ export function ChatsPage() {
               role="tab"
               aria-selected={filter === f.value}
               className={`helm-seg${filter === f.value ? ' is-active' : ''}`}
-              onClick={() => setFilter(f.value)}
+              onClick={() => { setSelectedId(null); setFilter(f.value); }}
               title={f.hint}
             >
               {f.label}
@@ -208,10 +209,16 @@ export function ChatsPage() {
           </aside>
 
           <section className="helm-rail-content">
-            {selectedId && (
+            {/* Guard: when the filter swaps the whole list, selectedId can
+                briefly point at a chat from the previous filter that isn't in
+                the new list. find() → undefined; rendering the pane with an
+                undefined chat white-screens the app. Render only once the
+                selected chat actually exists in the current list (the
+                seed-selection effect fixes selectedId right after). */}
+            {selectedChat && (
               <ConversationDetailPane
-                key={selectedId}
-                chat={chats.find((c) => c.id === selectedId)!}
+                key={selectedChat.id}
+                chat={selectedChat}
                 roles={roles}
                 onMutated={() => reload()}
               />

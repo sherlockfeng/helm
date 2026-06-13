@@ -1164,9 +1164,23 @@ describe('/api/roles (B3)', () => {
 
     const r = await fetchJson('/api/roles');
     expect(r.status).toBe(200);
-    const body = r.body as { roles: Array<{ id: string; chunkCount: number }> };
+    const body = r.body as { roles: Array<{ id: string; chunkCount: number; tier: string }> };
     expect(body.roles).toHaveLength(1);
     expect(body.roles[0]?.chunkCount).toBe(1);
+    // a.md is neither domains/ nor wiki/ → personal-layer origin.
+    expect(body.roles[0]?.tier).toBe('personal');
+  });
+
+  it('GET tags a domains/-imported role as team tier (Contribute hidden)', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run('stability', 'stability', '', 0, now);
+    db.prepare(`INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('s1', 'stability', 'domains/stability/foo.md', 'bar', new Uint8Array(0), now);
+
+    const r = await fetchJson('/api/roles');
+    const body = r.body as { roles: Array<{ id: string; tier: string }> };
+    expect(body.roles.find((x) => x.id === 'stability')?.tier).toBe('team');
   });
 
   it('GET /api/roles/:id returns role + chunks (no embedding)', async () => {

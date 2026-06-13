@@ -265,6 +265,10 @@ export interface RoleSummary extends Role {
   /** Phase 78 — # of pending knowledge-capture candidates for this role.
    * Drives the `(N)` badge next to the role name in the Roles list. */
   pendingCandidateCount: number;
+  /** Knowledge-tier origin: 'team' = imported from domains/ or wiki/
+   * (already mature) — Contribute hidden; 'personal' = chat-captured /
+   * entity bucket — Contribute available. */
+  tier: 'team' | 'personal';
 }
 
 /** Phase 78 — candidate row from the Roles UI's Candidates tab. */

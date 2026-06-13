@@ -432,6 +432,34 @@ function internalError(res: http.ServerResponse, err: unknown): void {
   send(res, 500, { error: 'internal', message: (err as Error).message });
 }
 
+/**
+ * Knowledge-tier origin of a role, derived from where its points live in
+ * the llm-wiki working copy:
+ *   - domains/… , wiki/…  → team-mature layer (already promoted / read-only)
+ *   - chat-captured/… , no source_file (in-chat entity bucket) → personal
+ *
+ * A role is 'team' only when it has points AND every sourced point is
+ * team-layer (an import from domains/stability is 100% domains/). Any
+ * personal-origin point flips it to 'personal' so a mixed bucket keeps
+ * Contribute. The UI uses this to hide Contribute on team-layer topics —
+ *升格回 domains/ 对已经在 domains/ 的知识没有意义。
+ */
+function classifyRoleTier(
+  chunks: ReadonlyArray<{ sourceFile?: string | null }>,
+): 'team' | 'personal' {
+  let sawTeam = false;
+  for (const c of chunks) {
+    const sf = c.sourceFile ?? '';
+    if (sf.startsWith('domains/') || sf.startsWith('wiki/')) {
+      sawTeam = true;
+    } else {
+      // chat-captured/… or no source_file (entity bucket) → personal.
+      return 'personal';
+    }
+  }
+  return sawTeam ? 'team' : 'personal';
+}
+
 export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): HttpApiHandle {
   const host = options.host ?? '127.0.0.1';
   const desiredPort = options.port ?? 0;
@@ -772,11 +800,22 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         // can render a `(N)` badge without N+1 round-trips. One COUNT GROUP
         // BY across the whole table; the per-role lookup is O(1).
         const pendingByRole = pendingCountsByRole(deps.db);
-        const roles = listRolesRepo(deps.db).map((r) => ({
-          ...r,
-          chunkCount: getChunksForRole(deps.db, r.id).length,
-          pendingCandidateCount: pendingByRole.get(r.id) ?? 0,
-        }));
+        const roles = listRolesRepo(deps.db).map((r) => {
+          const chunks = getChunksForRole(deps.db, r.id);
+          return {
+            ...r,
+            chunkCount: chunks.length,
+            // Knowledge-tier origin: a topic whose points were imported
+            // from the team-mature layer (domains/ or wiki/) is already
+            // there — Contributing it back to domains/ is a no-op. The UI
+            // hides Contribute for 'team'. Personal-layer origins
+            // (chat-captured/, or in-chat entity buckets with no
+            // source_file yet) keep Contribute. 'team' only when the role
+            // is purely team-sourced; any personal chunk → 'personal'.
+            tier: classifyRoleTier(chunks),
+            pendingCandidateCount: pendingByRole.get(r.id) ?? 0,
+          };
+        });
         return send(res, 200, { roles });
       }
       // Topics cleanup: DELETE /api/roles/:id — remove a non-builtin

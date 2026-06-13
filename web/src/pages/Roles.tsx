@@ -340,6 +340,7 @@ export function PromoteModal({ roleId, roleName, onClose }: {
                 disabled={busy || !wikiRepo || !domain.trim() || !title.trim() || !body.trim()}
                 aria-busy={busy}
                 onClick={() => { void submit(); }}
+                title="把合并稿提交到 llm-wiki 的 domains/<域>/，开一个 Contribute MR 等团队评审合入"
               >
                 {busy ? '开 MR 中…' : '提交 Contribute MR'}
               </Button>
@@ -729,6 +730,7 @@ function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => vo
           disabled={training}
           aria-busy={training}
           onClick={() => { void train(); }}
+          title="用上方填写的内容重新训练：替换这个 topic 现有的知识点"
         >
           {training ? 'Training…' : 'Train'}
         </Button>
@@ -875,10 +877,14 @@ function RoleCandidates({
                       disabled={isBusy}
                       aria-busy={isBusy}
                       onClick={() => { void saveEdit(c.id); }}
+                      title="保存你的改写，并把它作为新知识点采纳进这个 topic"
                     >
                       {isBusy ? '保存中…' : '保存并采纳'}
                     </Button>
-                    <button onClick={() => { setEditingId(null); setEditingText(''); }}>取消</button>
+                    <button
+                      onClick={() => { setEditingId(null); setEditingText(''); }}
+                      title="放弃改写，回到候选列表"
+                    >取消</button>
                   </>
                 ) : (
                   <>
@@ -894,6 +900,7 @@ function RoleCandidates({
                     <button
                       disabled={isBusy}
                       onClick={() => { setEditingId(c.id); setEditingText(c.chunkText); }}
+                      title="先改写这条候选的文本，再采纳"
                     >
                       编辑
                     </button>
@@ -1030,7 +1037,10 @@ function RoleCard({
               {role.bindable === false ? '配置人格' : '卸下人格'}
             </button>
           )}
-          <button onClick={onToggle}>{expanded ? 'Hide' : 'Show'}</button>
+          <button
+            onClick={onToggle}
+            title={expanded ? '收起：隐藏知识点、来源与候选' : '展开：查看这个 topic 的知识点、来源与待采纳候选'}
+          >{expanded ? 'Hide' : 'Show'}</button>
         </div>
       </div>
       {expanded && <RoleDetail roleId={role.id} onTrained={onTrained} />}
@@ -1108,7 +1118,11 @@ function RolesPageBase() {
           <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
         </>}
         actions={
-          <Button variant="primary" onClick={() => setChatTarget({ mode: 'create' })}>
+          <Button
+            variant="primary"
+            onClick={() => setChatTarget({ mode: 'create' })}
+            title="打开对话式训练：用本机 CLI 聊出一个新 topic（带 prompt 即成专家），自动蒸馏知识点"
+          >
             + Train a new topic via chat
           </Button>
         }

@@ -98,6 +98,7 @@ export function KnowledgePromotePage(): ReactElement {
                   disabled={syncing || files.every((f) => !f.pointId)}
                   aria-busy={syncing}
                   onClick={() => { void syncPersonal(); }}
+                  title="把本地 chat-captured 文件推到远端（开一个 MR）；仍是个人态，不进 domains/"
                 >
                   {syncing ? '开 MR 中…' : `同步 ${files.filter((f) => f.pointId).length} 条到远端（个人态）`}
                 </Button>
@@ -110,7 +111,7 @@ export function KnowledgePromotePage(): ReactElement {
         <Card>
           <h3 style={{ marginTop: 0 }}>② Contribute 到团队层（domains/）</h3>
           <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-            选一个集合 → 勾碎片 → ✨AI 整理成文档 → MR 进 domains/&lt;域&gt;/。
+            选一个 topic → 勾碎片 → ✨AI 整理成文档 → MR 进 domains/&lt;域&gt;/。
           </p>
           {rolesQuery.loading && <CardSkeletonList n={2} />}
           {promotable.length === 0 && !rolesQuery.loading && (
@@ -130,7 +131,10 @@ export function KnowledgePromotePage(): ReactElement {
                   {' '}· {r.bindable === false ? 'topic' : 'expert'} · {r.chunkCount} 条知识点
                 </span>
               </div>
-              <Button onClick={() => setPromoteTarget({ roleId: r.id, name: r.name })}>
+              <Button
+                onClick={() => setPromoteTarget({ roleId: r.id, name: r.name })}
+                title={`把 ${r.name} 的碎片整理成文档，Contribute 到 domains/<域>/`}
+              >
                 Contribute…
               </Button>
             </div>

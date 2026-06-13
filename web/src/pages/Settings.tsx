@@ -370,7 +370,7 @@ function GeneralSection({
         />
         <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>
           Drives the Campaign summarizer, the Harness reviewer subprocess,
-          and the Roles "Train via chat" modal. Takes effect on the next
+          and the Topics "Train via chat" modal. Takes effect on the next
           request — no restart.
         </p>
       </Card>
@@ -386,7 +386,7 @@ function GeneralSection({
         />
         <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>
           Which CLI agent helm spawns when you click "Train via chat" on
-          a role. Cursor isn't an option — it's a GUI app helm can't
+          a topic. Cursor isn't an option — it's a GUI app helm can't
           spawn as a subprocess. Set the trainer's own model under
           Engines › Claude Code / Codex.
         </p>

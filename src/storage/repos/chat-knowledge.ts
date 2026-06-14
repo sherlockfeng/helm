@@ -47,6 +47,25 @@ export function textHash(s: string): string {
 }
 
 /**
+ * Derive a topic (role) id from a human topic name. Unlike slugifyPointId
+ * (ASCII-only, for doc-lsp concept ids), this KEEPS CJK and other Unicode
+ * letters — so "helm 采集架构" → "helm-采集架构" instead of collapsing to
+ * "helm". role_id is safe with CJK (DB key, path segments go through the
+ * path sanitizer, URLs are encodeURIComponent'd). Falls back when the name
+ * has no usable letters/digits.
+ */
+export function topicIdFromName(name: string, fallback: string): string {
+  const id = name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/\\]+/g, '-')
+    .replace(/[^\p{L}\p{N}-]+/gu, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return id.length >= 1 ? id : fallback;
+}
+
+/**
  * Insert a point unless an identical (session, text) one is already pending or
  * dismissed (the partial unique index). Returns true when inserted.
  */

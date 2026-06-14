@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { parsePoints } from '../../../src/summarizer/chat-knowledge-extract.js';
+import { topicIdFromName } from '../../../src/storage/repos/chat-knowledge.js';
+
+describe('topicIdFromName', () => {
+  it('keeps CJK and avoids the ASCII-only collapse', () => {
+    expect(topicIdFromName('helm 采集架构', 'fb')).toBe('helm-采集架构');
+    expect(topicIdFromName('知识分层', 'fb')).toBe('知识分层');
+    expect(topicIdFromName('OG 接入', 'fb')).toBe('og-接入');
+  });
+  it('strips punctuation/slashes and dedupes dashes', () => {
+    expect(topicIdFromName('  Foo / Bar!! ', 'fb')).toBe('foo-bar');
+  });
+  it('falls back when no usable letters/digits', () => {
+    expect(topicIdFromName('!!! ', 'fb')).toBe('fb');
+  });
+});
 
 const TOPICS = new Set(['stability', 'goofy-expert']);
 

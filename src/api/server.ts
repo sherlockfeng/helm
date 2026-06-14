@@ -97,6 +97,7 @@ import {
 import {
   getChatKnowledgePoint,
   setChatKnowledgePointStatus,
+  topicIdFromName,
 } from '../storage/repos/chat-knowledge.js';
 import {
   bulkRejectCandidates,
@@ -1999,8 +2000,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             ? body.newTopicName.trim()
             : point.suggestedTopicName;
           if (!newName) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
-          // Create a plain (non-bindable) topic to hold the point.
-          const baseId = slugifyPointId(newName, `topic-${pointId.slice(0, 8)}`);
+          // Create a plain (non-bindable) topic to hold the point. Use the
+          // CJK-friendly id slug so Chinese topic names get a meaningful id
+          // (helm 采集架构 → helm-采集架构) instead of collapsing to "helm".
+          const baseId = topicIdFromName(newName, `topic-${pointId.slice(0, 8)}`);
           let id = baseId;
           for (let n = 2; getRoleRow(deps.db, id); n += 1) {
             if (n > 99) { id = `topic-${pointId.slice(0, 8)}`; break; }

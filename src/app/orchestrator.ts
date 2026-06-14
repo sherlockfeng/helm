@@ -67,6 +67,11 @@ import { CursorLlmClient } from '../summarizer/cursor-client.js';
 import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
 import { curateChatEntities } from '../knowledge/entity-curation.js';
+import { extractChatKnowledge } from '../summarizer/chat-knowledge-extract.js';
+import {
+  getLastExtractedAgentChars,
+  setLastExtractedAgentChars,
+} from '../storage/repos/chat-knowledge.js';
 import { generateCandidateGist } from '../summarizer/candidate-gist.js';
 import { runCurationForRole } from '../summarizer/curation.js';
 import {
@@ -89,6 +94,7 @@ import {
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
   closeStaleHostSessions,
+  listStaleActiveSessionIds,
   getHostSession,
   setHostSessionDisplayName,
   setHostSessionFirstPrompt,
@@ -96,7 +102,7 @@ import {
   setLastInjectedRoleIds,
   upsertHostSession,
 } from '../storage/repos/host-sessions.js';
-import { appendHostEvent } from '../storage/repos/host-event-log.js';
+import { appendHostEvent, agentOutputCharsForSession } from '../storage/repos/host-event-log.js';
 import {
   dequeueMessages,
   enqueueMessage,
@@ -214,6 +220,20 @@ export interface HelmAppHandle {
   httpPort(): number | null;
 }
 
+/**
+ * Run the LLM chat knowledge-point extraction once a chat's ASSISTANT output
+ * grows this many characters past the last extraction. Agent output ≈ where
+ * knowledge lives, so chars-of-agent-text is a far better trigger than turn
+ * count. Long/dense chats extract periodically; thin chats wait.
+ */
+const KNOWLEDGE_EXTRACT_CHAR_STEP = 10_000;
+/**
+ * On stale-close, finalize a session with a last extraction if it has at
+ * least this many un-extracted agent chars — catches the tail of a chat that
+ * ended mid-window without re-running for trivial leftovers.
+ */
+const KNOWLEDGE_FINAL_SWEEP_FLOOR = 2_000;
+
 export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const log: Logger = deps.loggers.module('app');
 
@@ -234,6 +254,10 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   const staleCutoff = new Date(
     Date.now() - (deps.staleSessionCutoffMs ?? 24 * 60 * 60 * 1000),
   ).toISOString();
+  // Capture which sessions are about to be closed so we can run a final
+  // knowledge sweep on them once the engine is wired (below). Only sessions
+  // transitioning active→closed now — never the already-closed backfill.
+  const staleClosingIds = listStaleActiveSessionIds(deps.db, staleCutoff);
   const pruned = closeStaleHostSessions(deps.db, staleCutoff);
   if (pruned > 0) {
     log.info('boot_pruned_stale_sessions', {
@@ -884,6 +908,22 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         model: liveConfig.cursor.model,
       }).catch(() => { /* swallow async rejections too */ });
     } catch { /* engine unavailable — skip the LLM pass */ }
+    // LLM knowledge-point extraction — throttled on accumulated AGENT output:
+    // only once the chat has produced KNOWLEDGE_EXTRACT_CHAR_STEP more
+    // assistant chars than at the last extraction. Marker is set
+    // optimistically before the async run to avoid concurrent double-runs; a
+    // failed run just retries at the next threshold.
+    try {
+      const chars = agentOutputCharsForSession(deps.db, req.host_session_id);
+      const last = getLastExtractedAgentChars(deps.db, req.host_session_id);
+      if (chars - last >= KNOWLEDGE_EXTRACT_CHAR_STEP) {
+        setLastExtractedAgentChars(deps.db, req.host_session_id, chars);
+        const llm = engineRouter.current().summarize;
+        const model = liveConfig.cursor.model;
+        void extractChatKnowledge(deps.db, req.host_session_id, { llm, model })
+          .catch(() => { /* best-effort */ });
+      }
+    } catch { /* engine unavailable / count failed — skip */ }
     return runHostStopLongPoll(deps.db, events, req.host_session_id, waitPollMs);
   });
 
@@ -1125,6 +1165,27 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // `buildAdapters()` reads `httpApi.port()` to assemble helmMcpUrl, and
   // httpApi is declared below. The initial build runs right after
   // `httpApi = createHttpApi(...)` (search "refreshEngineRouter()" below).
+
+  // Final knowledge sweep for sessions that went stale-closed this boot:
+  // extract once if they have an un-extracted agent-output tail above the
+  // floor. Fire-and-forget so boot isn't blocked; guarded because the engine
+  // may be unconfigured (fresh install / CI). Backfilled history is already
+  // closed and never enters staleClosingIds, so it's untouched (no mass run).
+  if (staleClosingIds.length > 0) {
+    queueMicrotask(() => {
+      for (const id of staleClosingIds) {
+        try {
+          const chars = agentOutputCharsForSession(deps.db, id);
+          const last = getLastExtractedAgentChars(deps.db, id);
+          if (chars - last < KNOWLEDGE_FINAL_SWEEP_FLOOR) continue;
+          setLastExtractedAgentChars(deps.db, id, chars);
+          const llm = engineRouter.current().summarize;
+          const model = liveConfig.cursor.model;
+          void extractChatKnowledge(deps.db, id, { llm, model }).catch(() => {});
+        } catch { /* engine unavailable — stop trying this boot */ break; }
+      }
+    });
+  }
 
   // Phase 45: MCP HTTP/SSE factory. Builds a fresh McpServer per SSE
   // connection, reusing the orchestrator's already-built knowledge registry
@@ -1425,6 +1486,13 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       runCuration: async ({ hostSessionId, roleId }) => {
         const adapter = engineRouter.current();
         return runCurationForRole(deps.db, hostSessionId, roleId, {
+          llm: adapter.summarize,
+          model: liveConfig.cursor.model,
+        });
+      },
+      extractChatKnowledge: async ({ hostSessionId }) => {
+        const adapter = engineRouter.current();
+        return extractChatKnowledge(deps.db, hostSessionId, {
           llm: adapter.summarize,
           model: liveConfig.cursor.model,
         });

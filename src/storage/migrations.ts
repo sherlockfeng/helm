@@ -1101,6 +1101,41 @@ export const MIGRATIONS: Migration[] = [
         ADD COLUMN capture_disabled INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    version: 35,
+    description:
+      'chat_knowledge_points + host_sessions.last_extracted_turn — LLM'
+      + ' chat-level knowledge extraction. An LLM reads the conversation'
+      + ' and proposes concrete knowledge points, each suggesting an'
+      + ' existing topic (suggested_role_id) or a new one'
+      + ' (suggested_topic_name). Replaces the deterministic entity-token'
+      + ' walls. last_extracted_agent_chars throttles the Stop-hook auto-run'
+      + ' so it only fires once new assistant output accumulates past a'
+      + ' threshold (agent output ≈ where knowledge lives; turn count is a'
+      + ' poor proxy).',
+    up: `
+      CREATE TABLE IF NOT EXISTS chat_knowledge_points (
+        id                   TEXT PRIMARY KEY,
+        host_session_id      TEXT NOT NULL REFERENCES host_sessions(id) ON DELETE CASCADE,
+        title                TEXT NOT NULL,
+        body                 TEXT NOT NULL,
+        kind                 TEXT NOT NULL DEFAULT 'other',
+        suggested_role_id    TEXT REFERENCES roles(id) ON DELETE SET NULL,
+        suggested_topic_name TEXT,
+        text_hash            TEXT NOT NULL,
+        status               TEXT NOT NULL DEFAULT 'pending',
+        created_at           TEXT NOT NULL,
+        decided_at           TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_ckp_session_status
+        ON chat_knowledge_points(host_session_id, status);
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_ckp_session_hash
+        ON chat_knowledge_points(host_session_id, text_hash)
+        WHERE status = 'pending' OR status = 'dismissed';
+      ALTER TABLE host_sessions
+        ADD COLUMN last_extracted_agent_chars INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

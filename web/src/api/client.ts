@@ -68,6 +68,31 @@ export const helmApi = {
       `/api/active-chats${status === 'active' ? '' : `?status=${status}`}`,
     ),
 
+  /** v35: force the LLM knowledge-point extraction for one chat. */
+  extractKnowledge: (hostSessionId: string) =>
+    request<{ inserted: number }>(
+      'POST',
+      `/api/conversations/${encodeURIComponent(hostSessionId)}/extract-knowledge`,
+    ),
+
+  /** v35: accept a knowledge point into a topic (existing or new). */
+  acceptKnowledgePoint: (
+    id: string,
+    target: { targetRoleId?: string; newTopicName?: string } = {},
+  ) =>
+    request<{ pointId: string; status: string; roleId: string }>(
+      'POST',
+      `/api/chat-knowledge/${encodeURIComponent(id)}/accept`,
+      target,
+    ),
+
+  /** v35: dismiss a knowledge point. */
+  dismissKnowledgePoint: (id: string) =>
+    request<{ pointId: string; status: string }>(
+      'POST',
+      `/api/chat-knowledge/${encodeURIComponent(id)}/dismiss`,
+    ),
+
   scanHistory: (host: 'claude-code' | 'cursor' | 'codex' | 'all' = 'all') =>
     request<{ results: { host: string; imported: number; skipped: number; turns: number }[] }>(
       'POST',

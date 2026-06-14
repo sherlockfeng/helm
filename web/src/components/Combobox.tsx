@@ -78,11 +78,15 @@ export function Combobox({
       </PopoverPrimitive.Trigger>
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
-          align="start"
+          align="end"
           sideOffset={4}
+          collisionPadding={8}
           className="helm-combobox-content"
-          /* Match trigger width so the popup aligns under the button. */
-          style={{ width: 'var(--radix-popover-trigger-width)' }}
+          /* Anchor to the trigger's right edge (these triggers sit on the
+             right of their row) and give the popup a readable min width —
+             tiny triggers like "+ topic" otherwise force a clipped,
+             off-screen dropdown. */
+          style={{ minWidth: 'max(240px, var(--radix-popover-trigger-width))' }}
         >
           <Command label={placeholder} className="helm-combobox-command">
             <div className="helm-combobox-input-row">

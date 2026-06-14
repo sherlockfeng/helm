@@ -92,7 +92,12 @@ import {
   listRoles as listRolesRepo,
   listSourcesForRole,
   unarchiveChunk as unarchiveChunkRepo,
+  upsertRole as upsertRoleRepo,
 } from '../storage/repos/roles.js';
+import {
+  getChatKnowledgePoint,
+  setChatKnowledgePointStatus,
+} from '../storage/repos/chat-knowledge.js';
 import {
   bulkRejectCandidates,
   getCandidateById,
@@ -261,6 +266,14 @@ export interface HttpApiDeps {
     hostSessionId: string;
     roleId: string;
   }) => Promise<{ updateCount: number; newCount: number; candidateIds: string[] }>;
+  /**
+   * v35: force the LLM chat knowledge-point extraction now (the manual
+   * "✨ 提取知识点" button). Same pass the Stop hook throttles. Returns the
+   * number of new points inserted.
+   */
+  extractChatKnowledge?: (input: {
+    hostSessionId: string;
+  }) => Promise<{ inserted: number }>;
   /**
    * PR-C (Path B): create a new role from a chat's unknown entities,
    * then immediately run curation against the new role so the user
@@ -1931,6 +1944,117 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         } catch (err) {
           return internalError(res, err);
         }
+      }
+
+      // v35: force the LLM chat knowledge-point extraction for one chat.
+      //   POST /api/conversations/:id/extract-knowledge
+      const extractKnowledgeMatch = url.pathname.match(
+        /^\/api\/conversations\/([^/]+)\/extract-knowledge$/,
+      );
+      if (extractKnowledgeMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.extractChatKnowledge) {
+          return send(res, 503, { error: 'no_engine', message: 'No LLM engine wired.' });
+        }
+        try {
+          const result = await deps.extractChatKnowledge({ hostSessionId: extractKnowledgeMatch[1]! });
+          return send(res, 200, result);
+        } catch (err) { return internalError(res, err); }
+      }
+
+      // v35: chat knowledge-point lifecycle.
+      //   POST /api/chat-knowledge/:id/accept   body { targetRoleId?, newTopicName? }
+      //   POST /api/chat-knowledge/:id/dismiss
+      const ckpMatch = url.pathname.match(
+        /^\/api\/chat-knowledge\/([^/]+)\/(accept|dismiss)$/,
+      );
+      if (ckpMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const pointId = ckpMatch[1]!;
+        const action = ckpMatch[2] as 'accept' | 'dismiss';
+        const point = getChatKnowledgePoint(deps.db, pointId);
+        if (!point) return notFound(res);
+        if (point.status !== 'pending') {
+          return send(res, 409, { error: 'not_pending', currentStatus: point.status });
+        }
+        const now = new Date().toISOString();
+
+        if (action === 'dismiss') {
+          setChatKnowledgePointStatus(deps.db, pointId, 'dismissed', now);
+          return send(res, 200, { pointId, status: 'dismissed' });
+        }
+
+        // Resolve the home topic: explicit override → suggested existing →
+        // create from explicit/suggested new-topic name.
+        let body: { targetRoleId?: unknown; newTopicName?: unknown } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as typeof body; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        let roleId = typeof body.targetRoleId === 'string' && body.targetRoleId
+          ? body.targetRoleId
+          : point.suggestedRoleId;
+        if (!roleId) {
+          const newName = (typeof body.newTopicName === 'string' && body.newTopicName.trim())
+            ? body.newTopicName.trim()
+            : point.suggestedTopicName;
+          if (!newName) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
+          // Create a plain (non-bindable) topic to hold the point.
+          const baseId = slugifyPointId(newName, `topic-${pointId.slice(0, 8)}`);
+          let id = baseId;
+          for (let n = 2; getRoleRow(deps.db, id); n += 1) {
+            if (n > 99) { id = `topic-${pointId.slice(0, 8)}`; break; }
+            id = `${baseId}-${n}`;
+          }
+          upsertRoleRepo(deps.db, {
+            id, name: newName, systemPrompt: '', isBuiltin: false,
+            bindable: false, createdAt: now,
+          });
+          roleId = id;
+        }
+
+        try {
+          const result = await updateRoleLibrary(deps.db, {
+            roleId,
+            appendDocuments: [{
+              filename: `ckp-${pointId}`,
+              content: point.body,
+              kind: point.kind,
+              sourceKind: 'inline',
+              origin: `ckp-${pointId}`,
+              sourceLabel: `Extracted from chat ${point.hostSessionId.slice(0, 8)}`,
+              pointIdBase: slugifyPointId(point.title, `ckp-${pointId.slice(0, 8)}`),
+            }],
+            embedFn: makePseudoEmbedFn(),
+          });
+          if (result.status === 'conflicts') {
+            return send(res, 409, {
+              error: 'conflicts',
+              message: '采纳会产生近似重复的知识点；到该 topic 里处理后重试。',
+              conflicts: result.conflicts,
+            });
+          }
+          setChatKnowledgePointStatus(deps.db, pointId, 'accepted', now);
+          // Files-as-truth: materialize as chat-captured (best-effort).
+          const wikiRepo = deps.knowledgeRepoManager
+            ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
+            : undefined;
+          const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+          if (wikiRepo && wikiUsername) {
+            for (const chunkId of result.chunkIds) {
+              try {
+                await deps.knowledgeRepoManager!.writeCapturedPoint({
+                  repoId: wikiRepo.id, chunkId, username: wikiUsername,
+                });
+              } catch (err) {
+                deps.logger?.warn('wiki_capture_write_failed', {
+                  data: { pointId, chunkId, message: (err as Error).message },
+                });
+              }
+            }
+          }
+          return send(res, 200, { pointId, status: 'accepted', roleId, chunksAdded: result.chunksAdded });
+        } catch (err) { return internalError(res, err); }
       }
 
       // Phase 73: explicit drop endpoint. DELETE /api/knowledge-sources/:id

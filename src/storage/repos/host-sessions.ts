@@ -334,6 +334,17 @@ export function getHostSessionSummary(
  * comfortably covers any reasonable working session while pruning anything
  * that's clearly been abandoned (laptop closed overnight / restart / etc.).
  */
+/** Ids of active sessions that would be closed by the same cutoff — fetch
+ *  before closing so the caller can run a final knowledge sweep on them. */
+export function listStaleActiveSessionIds(
+  db: Database.Database,
+  cutoffIso: string,
+): string[] {
+  return (db.prepare(
+    `SELECT id FROM host_sessions WHERE status = 'active' AND last_seen_at < ?`,
+  ).all(cutoffIso) as { id: string }[]).map((r) => r.id);
+}
+
 export function closeStaleHostSessions(
   db: Database.Database,
   cutoffIso: string,

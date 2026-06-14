@@ -28,6 +28,7 @@ import { getRetrievalsForSession } from '../storage/repos/retrieval-log.js';
 import { suggestRolesForChat, type RoleSuggestion } from '../knowledge/chat-role-suggester.js';
 import { unknownEntitiesForChat, type UnknownEntity } from '../knowledge/chat-unknown-entities.js';
 import { applyCuration, getEntityCuration } from '../knowledge/entity-curation.js';
+import { listChatKnowledgePoints, type ChatKnowledgePoint } from '../storage/repos/chat-knowledge.js';
 import type {
   HostEventLogEntry,
   HostSession,
@@ -117,6 +118,12 @@ export interface ConversationDetail {
    * matches; this one finds the gap.
    */
   unknownEntities: UnknownEntity[];
+  /**
+   * v35: LLM-extracted knowledge points for this chat, pending accept/
+   * dismiss. The semantic replacement for unknownEntities/roleSuggestions
+   * token walls — each point routes to an existing or new topic.
+   */
+  knowledgePoints: ChatKnowledgePoint[];
 }
 
 export interface ConversationDetailOptions {
@@ -194,9 +201,13 @@ export function getConversationDetail(
     getEntityCuration(db, hostSessionId),
   );
 
+  // v35: LLM-extracted knowledge points awaiting accept/dismiss. This is
+  // the section that replaces the deterministic entity walls in the UI.
+  const knowledgePoints = listChatKnowledgePoints(db, hostSessionId, 'pending');
+
   return {
     session, timeline, turns, knowledgeInPlay, candidates,
-    roleSuggestions, unknownEntities,
+    roleSuggestions, unknownEntities, knowledgePoints,
   };
 }
 

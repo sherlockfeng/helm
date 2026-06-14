@@ -19,25 +19,22 @@
  * detail aggregate is fetched only for the currently-selected row.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { useCandidateContexts } from '../hooks/useCandidateContexts.js';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { toast } from 'sonner';
 import { Combobox } from '../components/Combobox.js';
-import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
-import { Button } from '../components/Button.js';
+import { ConfirmDialog } from '../components/Dialog.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import Markdown from 'react-markdown';
 import type {
   ActiveChat,
+  ChatKnowledgePoint,
   ConversationDetailCandidate,
   ConversationDetailKnowledgeInPlay,
   ConversationDetailTurn,
-  RoleSuggestion,
-  UnknownEntity,
 } from '../api/types.js';
 
 function formatRelative(iso: string): string {
@@ -393,7 +390,6 @@ function ConversationDetailPane({
   }
 
   const key = sourceKey(chat);
-  const candidates = data?.candidates ?? [];
   // The latest retrieval (highest turn / most recent ts) is the one whose
   // chunks the developer most likely wants to see; deeper history is
   // pageable in a follow-up. getRetrievalsForSession orders ts DESC.
@@ -472,30 +468,16 @@ function ConversationDetailPane({
         onRemoveRole={(rid) => { void removeRole(rid); }}
       />
 
-      {/* Discovery layers sit ABOVE the timeline — they're the actionable
-          knowledge-flow signals this page exists for, and the timeline
-          (with its auto-expanded latest turn) is tall enough to push
-          anything below it out of the first viewport. Buried-below-fold
-          was exactly how the user missed them. */}
-      <UnknownEntitiesSection
-        unknownEntities={data?.unknownEntities ?? []}
-        turns={data?.turns ?? []}
+      {/* Knowledge OUT — one unified section: LLM-extracted knowledge points,
+          each routed to an existing or new topic. Replaces the old
+          deterministic entity-token walls (unknownEntities / roleSuggestions)
+          and the raw candidate list — those were dumb keyword matching; this
+          is a semantic pass. Sits above the timeline so it's not buried. */}
+      <KnowledgePointsSection
         hostSessionId={chat.id}
-        onSpawned={() => reload()}
-      />
-      <RoleSuggestionsSection
-        suggestions={data?.roleSuggestions ?? []}
-        hostSessionId={chat.id}
-        onAddRole={(rid) => { void addRole(rid); }}
-        onExtracted={() => reload()}
-        savingRole={savingRole}
-      />
-
-      {/* Knowledge OUT — directly after discovery so suggestion → extract
-          → candidates reads as one continuous flow. */}
-      <KnowledgeOutSection
-        candidates={candidates}
-        onDecided={() => reload()}
+        points={data?.knowledgePoints ?? []}
+        roles={roles}
+        onMutated={() => reload()}
       />
 
       {/* Timeline — turn-by-turn conversation content. Sits last among
@@ -648,519 +630,147 @@ function KnowledgeInSection({
   );
 }
 
-// ── Unknown entities (Path B — spawn role from chat) ────────────────────
+// ── v35: LLM knowledge points (the unified "可沉淀的知识" section) ──────────
 
-/**
- * Where in this chat does an entity appear? Pure client-side scan over
- * the already-fetched turns — no extra round-trip. Returns up to
- * `cap` snippets with ±60 chars of context around the first occurrence
- * per message.
- */
-function findEntityMentions(
-  turns: readonly ConversationDetailTurn[],
-  entity: string,
-  cap = 4,
-): Array<{ turnIndex: number; who: 'you' | 'AI'; snippet: string }> {
-  const needle = entity.toLowerCase();
-  const out: Array<{ turnIndex: number; who: 'you' | 'AI'; snippet: string }> = [];
-  for (const t of turns) {
-    const sources: Array<['you' | 'AI', string]> = [['you', t.userPrompt.text]];
-    if (t.assistantResponse) sources.push(['AI', t.assistantResponse.text]);
-    for (const [who, text] of sources) {
-      const idx = text.toLowerCase().indexOf(needle);
-      if (idx === -1) continue;
-      const start = Math.max(0, idx - 60);
-      const end = Math.min(text.length, idx + needle.length + 60);
-      out.push({
-        turnIndex: t.index,
-        who,
-        snippet: `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ')}${end < text.length ? '…' : ''}`,
-      });
-      if (out.length >= cap) return out;
-    }
-  }
-  return out;
-}
-
-function UnknownEntitiesSection({
-  unknownEntities,
-  turns,
-  hostSessionId,
-  onSpawned,
-}: {
-  unknownEntities: UnknownEntity[];
-  turns: ConversationDetailTurn[];
-  hostSessionId: string;
-  onSpawned: () => void;
-}): ReactElement | null {
-  const [showModal, setShowModal] = useState(false);
-  // Which entity's provenance is expanded; null = none.
-  const [inspecting, setInspecting] = useState<string | null>(null);
-  if (unknownEntities.length === 0) return null;
-  const mentions = inspecting ? findEntityMentions(turns, inspecting) : [];
-  return (
-    <>
-      <div className="helm-conv-section">
-        <div className="helm-conv-section-header">
-          <span className="helm-conv-section-label">helm 不认识的内容</span>
-          <span className="helm-conv-section-meta">
-            {unknownEntities.length} unknown {unknownEntities.length === 1 ? 'entity' : 'entities'}
-          </span>
-        </div>
-        <p className="helm-conv-empty" style={{ marginBottom: 8 }}>
-          这条 chat 反复提到 helm 还没有 topic 覆盖的内容。要不要建一个 topic 来沉淀？
-        </p>
-        <div className="helm-conv-unknown-chips">
-          {unknownEntities.map((e) => (
-            <button
-              key={e.entity}
-              type="button"
-              className={`helm-conv-unknown-chip is-amber${inspecting === e.entity ? ' is-selected' : ''}`}
-              title="点击查看它在对话里出现的位置"
-              aria-expanded={inspecting === e.entity}
-              onClick={() => setInspecting((cur) => (cur === e.entity ? null : e.entity))}
-            >
-              {e.entity} <span className="helm-conv-unknown-chip-count">×{e.mentions}</span>
-            </button>
-          ))}
-        </div>
-        {inspecting && (
-          <div className="helm-conv-mentions">
-            {mentions.length === 0 ? (
-              <div className="helm-conv-mention-row muted">
-                出现在更早的 turn 里（timeline 截断了）
-              </div>
-            ) : (
-              mentions.map((m, i) => (
-                <div key={i} className="helm-conv-mention-row">
-                  <span className="helm-conv-mention-loc">Turn {m.turnIndex} · {m.who}</span>
-                  <span className="helm-conv-mention-snippet">{m.snippet}</span>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-        <div style={{ marginTop: 10 }}>
-          <button
-            type="button"
-            className="helm-conv-link-button"
-            onClick={() => setShowModal(true)}
-            title="用这些未识别实体作种子，新建一个 topic 来沉淀这条对话反复提到的内容"
-          >
-            + 新建 topic…
-          </button>
-        </div>
-      </div>
-      {showModal && (
-        <SpawnRoleModal
-          hostSessionId={hostSessionId}
-          unknownEntities={unknownEntities}
-          onClose={() => setShowModal(false)}
-          onSpawned={(roleName, total) => {
-            setShowModal(false);
-            toast.success(`Topic "${roleName}" 已创建 · 自动提取了 ${total} 个候选`);
-            onSpawned();
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function SpawnRoleModal({
-  hostSessionId,
-  unknownEntities,
-  onClose,
-  onSpawned,
+function KnowledgePointsSection({
+  hostSessionId, points, roles, onMutated,
 }: {
   hostSessionId: string;
-  unknownEntities: UnknownEntity[];
-  onClose: () => void;
-  onSpawned: (roleName: string, totalCandidates: number) => void;
-}): ReactElement {
-  // Default selection: top 5 entities. User can uncheck.
-  const initial = useMemo(
-    () => new Set(unknownEntities.slice(0, 5).map((e) => e.entity)),
-    [unknownEntities],
-  );
-  const [selected, setSelected] = useState<Set<string>>(initial);
-  const [roleName, setRoleName] = useState(
-    unknownEntities[0] ? `${unknownEntities[0].entity} 专家` : '新建 topic',
-  );
-  const [submitting, setSubmitting] = useState(false);
-
-  function toggle(entity: string): void {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(entity)) next.delete(entity);
-      else next.add(entity);
-      return next;
-    });
-  }
-
-  async function submit(): Promise<void> {
-    if (selected.size === 0 || !roleName.trim()) return;
-    setSubmitting(true);
-    try {
-      const r = await helmApi.spawnRoleFromChat(hostSessionId, {
-        entities: Array.from(selected),
-        roleName: roleName.trim(),
-      });
-      onSpawned(r.roleName, r.updateCount + r.newCount);
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      toast.error(`新建 topic 失败: ${msg}`);
-    } finally { setSubmitting(false); }
-  }
-
-  return (
-    <Dialog open={true} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent
-        width={Math.min(560, typeof window !== 'undefined' ? window.innerWidth * 0.9 : 560)}
-        aria-label="Create topic from chat"
-      >
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>从这条 chat 新建 topic</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            helm 会用 chat 里提到选中实体的段落作为 topic 的种子知识，自动训练 + 提取候选。
-          </div>
-        </div>
-
-        <label style={{ display: 'block', marginBottom: 12 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Topic name</div>
-          <input
-            type="text"
-            value={roleName}
-            onChange={(e) => setRoleName(e.target.value.slice(0, 60))}
-            placeholder="OG 专家"
-            style={{
-              width: '100%', padding: '6px 10px', fontSize: 13,
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
-            }}
-          />
-        </label>
-
-        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-          种子实体（chat 里提到这些词的段落会被收进 topic）
-        </div>
-        <div className="helm-conv-unknown-chips" style={{ marginBottom: 12 }}>
-          {unknownEntities.map((e) => {
-            const on = selected.has(e.entity);
-            return (
-              <button
-                key={e.entity}
-                type="button"
-                onClick={() => toggle(e.entity)}
-                className={`helm-conv-unknown-chip${on ? ' is-selected' : ''}`}
-                aria-pressed={on}
-              >
-                {on ? '✓ ' : ''}{e.entity}
-                <span className="helm-conv-unknown-chip-count">×{e.mentions}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <Button
-            variant="primary"
-            disabled={submitting || selected.size === 0 || !roleName.trim()}
-            onClick={() => { void submit(); }}
-            title="新建这个 topic，并立刻从当前对话提取相关知识候选"
-          >
-            {submitting ? '创建中…' : `创建 topic + 提取`}
-          </Button>
-          <button type="button" onClick={onClose} disabled={submitting} title="关闭，不创建">取消</button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Role suggestions (KNOWLEDGE OUT — discovery layer) ────────────────────
-
-function RoleSuggestionsSection({
-  suggestions,
-  hostSessionId,
-  onAddRole,
-  onExtracted,
-  savingRole,
-}: {
-  suggestions: RoleSuggestion[];
-  hostSessionId: string;
-  onAddRole: (roleId: string) => void;
-  onExtracted: () => void;
-  savingRole: boolean;
-}): ReactElement | null {
-  // Only show unbound roles — bound ones are already in KNOWLEDGE IN.
-  const unbound = suggestions.filter((s) => !s.isBound);
-  if (unbound.length === 0) return null;
-
-  return (
-    <div className="helm-conv-section">
-      <div className="helm-conv-section-header">
-        <span className="helm-conv-section-label">这条对话涉及</span>
-        <span className="helm-conv-section-meta">
-          {unbound.length} {unbound.length === 1 ? 'topic' : 'topics'} matched
-        </span>
-      </div>
-      <ul className="helm-conv-suggestions">
-        {unbound.map((s) => (
-          <RoleSuggestionRow
-            key={s.roleId}
-            suggestion={s}
-            hostSessionId={hostSessionId}
-            savingRole={savingRole}
-            onAddRole={onAddRole}
-            onExtracted={onExtracted}
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function RoleSuggestionRow({
-  suggestion,
-  hostSessionId,
-  savingRole,
-  onAddRole,
-  onExtracted,
-}: {
-  suggestion: RoleSuggestion;
-  hostSessionId: string;
-  savingRole: boolean;
-  onAddRole: (roleId: string) => void;
-  onExtracted: () => void;
+  points: ChatKnowledgePoint[];
+  roles: { id: string; name: string }[];
+  onMutated: () => void;
 }): ReactElement {
   const [extracting, setExtracting] = useState(false);
 
   async function extract(): Promise<void> {
     setExtracting(true);
     try {
-      const r = await helmApi.extractForRole(hostSessionId, suggestion.roleId);
-      const total = r.updateCount + r.newCount;
-      if (total === 0) {
-        toast.message(`${suggestion.roleName}：没有提取到新知识。`);
-      } else {
-        toast.success(
-          `已为 ${suggestion.roleName} 提取 ${total} 个候选`
-          + `（${r.updateCount} 更新 · ${r.newCount} 新）`,
-        );
-      }
-      onExtracted();
+      const r = await helmApi.extractKnowledge(hostSessionId);
+      if (r.inserted === 0) toast.message('没提取到新的知识点。');
+      else toast.success(`提取了 ${r.inserted} 个知识点`);
+      onMutated();
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : (err as Error).message;
-      toast.error(`提取失败：${msg}`);
+      toast.error(`提取失败：${err instanceof ApiError ? err.message : String(err)}`);
     } finally { setExtracting(false); }
   }
-
-  return (
-    <li className="helm-conv-suggestion">
-      <div className="helm-conv-suggestion-head">
-        <span className="helm-conv-suggestion-role">{suggestion.roleName}</span>
-        <span className="helm-conv-suggestion-meta">
-          {suggestion.hitEntities.length} {suggestion.hitEntities.length === 1 ? 'entity' : 'entities'}
-          {' · '}
-          {suggestion.totalHits} {suggestion.totalHits === 1 ? 'mention' : 'mentions'}
-        </span>
-        <button
-          type="button"
-          className="helm-conv-link-button"
-          disabled={extracting || savingRole}
-          onClick={() => { void extract(); }}
-          title="一次性：扫这条对话里匹配该 topic 的内容，跑 LLM 审一遍，产出知识候选（见下方「提取的知识」）。不改变绑定关系。"
-        >
-          {extracting ? '提取中…' : '↗ 提取'}
-        </button>
-        <button
-          type="button"
-          className="helm-conv-link-button"
-          disabled={savingRole || extracting}
-          onClick={() => onAddRole(suggestion.roleId)}
-          title="持续：把这条对话绑定到该 topic，之后的新内容自动捕获到这里"
-        >
-          + 绑定
-        </button>
-      </div>
-      <div className="helm-conv-suggestion-entities">
-        {suggestion.hitEntities.slice(0, 6).map((e) => (
-          <span key={e} className="helm-conv-entity-chip">{e}</span>
-        ))}
-        {suggestion.hitEntities.length > 6 && (
-          <span className="helm-conv-entity-more">
-            +{suggestion.hitEntities.length - 6}
-          </span>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function KnowledgeOutSection({
-  candidates,
-  onDecided,
-}: {
-  candidates: ConversationDetailCandidate[];
-  onDecided: () => void;
-}): ReactElement | null {
-  const candidateIds = useMemo(() => candidates.map((c) => c.id), [candidates]);
-  const { contexts } = useCandidateContexts(candidateIds);
-  // PR-B: split by whether the candidate refines an existing chunk
-  // (UPDATE) or proposes new knowledge (NEW). Different visual
-  // affordances — updates carry a reference to the chunk they replace.
-  const updates = candidates.filter((c) => c.targetChunkId);
-  const news = candidates.filter((c) => !c.targetChunkId);
-
-  // No candidates → no section. The extract affordance already lives on
-  // the suggestion rows above; an empty section with a how-to sentence
-  // was pure noise ("浪费空间" per user feedback).
-  if (candidates.length === 0) return null;
 
   return (
     <div className="helm-conv-section">
       <div className="helm-conv-section-header">
         <span
           className="helm-conv-section-label"
-          title="从这条对话里提取出来的知识候选 — 采纳后进入 topic 的知识库"
+          title="LLM 读这条对话，提出可沉淀为 topic 的知识点。攒够新内容会自动提取，也可手动强制。"
         >
-          提取的知识
+          可沉淀的知识
         </span>
-        <span className="helm-conv-section-meta">
-          {updates.length > 0 && `${updates.length} update${updates.length === 1 ? '' : 's'}`}
-          {updates.length > 0 && news.length > 0 && ' · '}
-          {news.length > 0 && `${news.length} new`}
-        </span>
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          disabled={extracting}
+          onClick={() => { void extract(); }}
+          title="用 LLM 立刻读这条对话，提取可沉淀为 topic 的知识点（不必等自动触发）"
+        >
+          {extracting ? '提取中…' : '✨ 提取知识点'}
+        </button>
       </div>
-
-      {updates.length > 0 && (
-        <div className="helm-conv-out-group">
-          <div className="helm-conv-out-group-label">🔄 建议更新</div>
-          <ul className="helm-conv-candidates">
-            {updates.map((c) => (
-              <CandidateRow key={c.id} candidate={c} onDecided={onDecided}
-                externalContext={contexts[c.id]} />
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {news.length > 0 && (
-        <div className="helm-conv-out-group">
-          <div className="helm-conv-out-group-label">💡 新知识</div>
-          <ul className="helm-conv-candidates">
-            {news.map((c) => (
-              <CandidateRow key={c.id} candidate={c} onDecided={onDecided}
-                externalContext={contexts[c.id]} />
-            ))}
-          </ul>
-        </div>
+      {points.length === 0 ? (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+          还没有知识点。攒够新的对话内容会自动提取，或点「✨ 提取知识点」手动跑一次。
+        </p>
+      ) : (
+        <ul className="helm-conv-candidates">
+          {points.map((p) => (
+            <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} />
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-function CandidateRow({
-  candidate,
-  onDecided,
-  externalContext,
+function KnowledgePointRow({
+  point, roles, onDecided,
 }: {
-  candidate: ConversationDetailCandidate;
+  point: ChatKnowledgePoint;
+  roles: { id: string; name: string }[];
   onDecided: () => void;
-  externalContext?: import('../api/types.js').CandidateExternalContext;
 }): ReactElement {
-  const [busy, setBusy] = useState<'promote' | 'dismiss' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const isNew = !point.suggestedRoleId;
+  const suggestedName = point.suggestedRoleId
+    ? (roles.find((r) => r.id === point.suggestedRoleId)?.name ?? point.suggestedRoleId)
+    : (point.suggestedTopicName ?? '新 topic');
 
-  async function promote(): Promise<void> {
-    setBusy('promote');
+  async function accept(target: { targetRoleId?: string; newTopicName?: string }): Promise<void> {
+    setBusy(true);
     try {
-      await helmApi.acceptCandidate(candidate.id);
-      toast.success('已采纳到知识库。');
+      const r = await helmApi.acceptKnowledgePoint(point.id, target);
+      const name = roles.find((x) => x.id === r.roleId)?.name ?? r.roleId;
+      toast.success(`已采纳到 ${name}`);
       onDecided();
     } catch (err) {
-      toast.error(`采纳失败：${err instanceof ApiError ? err.message : (err as Error).message}`);
-    } finally { setBusy(null); }
+      toast.error(`采纳失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setBusy(false); }
   }
 
   async function dismiss(): Promise<void> {
-    setBusy('dismiss');
+    setBusy(true);
     try {
-      await helmApi.rejectCandidate(candidate.id);
+      await helmApi.dismissKnowledgePoint(point.id);
       toast.success('已忽略。');
       onDecided();
     } catch (err) {
-      toast.error(`忽略失败：${err instanceof ApiError ? err.message : (err as Error).message}`);
-    } finally { setBusy(null); }
+      toast.error(`忽略失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setBusy(false); }
   }
 
-  // Show the LLM-classified gist as the headline when present; fall back
-  // to the raw chunkText (the original behavior) when classification
-  // hasn't run yet or failed. The full text is always available behind
-  // an expand toggle so the user can see what's actually being promoted.
-  const [expanded, setExpanded] = useState(false);
-  const headline = candidate.gist?.trim() || candidate.chunkText;
-  const showFold = Boolean(candidate.gist?.trim()) && candidate.chunkText.trim() !== headline.trim();
-  const kind = candidate.kind ?? 'other';
-
   return (
-    <li className={`helm-conv-candidate-row helm-conv-kind-${kind}`}>
+    <li className={`helm-conv-candidate-row helm-conv-kind-${point.kind}`}>
       <div className="helm-conv-candidate-accent" />
       <div className="helm-conv-candidate-body">
         <div className="helm-conv-candidate-head">
-          <span
-            className={`helm-conv-kind-chip helm-conv-kind-chip-${kind}`}
-            title={`kind: ${kind}`}
-          >
-            {KIND_EMOJI[kind]} {kind}
+          <span className={`helm-conv-kind-chip helm-conv-kind-chip-${point.kind}`} title={`kind: ${point.kind}`}>
+            {KIND_EMOJI[point.kind]} {point.kind}
           </span>
-          <span className="helm-conv-candidate-headline">{headline}</span>
+          <span className="helm-conv-candidate-headline">{point.title}</span>
         </div>
-        {expanded && showFold && (
-          <div className="helm-conv-candidate-excerpt-full">{candidate.chunkText}</div>
-        )}
-        {externalContext && (
-          <details style={{ marginTop: 4 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 11, color: '#6d28d9' }}>
-              组织已有相关（{externalContext.providers.join(' · ')}）
-            </summary>
-            <pre style={{
-              margin: '4px 0 0', fontSize: 11, whiteSpace: 'pre-wrap',
-              maxHeight: 160, overflow: 'auto',
-            }}>{externalContext.body}</pre>
-          </details>
-        )}
+        {expanded && <div className="helm-conv-candidate-excerpt-full">{point.body}</div>}
         <div className="helm-conv-candidate-foot">
           <span className="muted">
-            from this chat · {formatRelative(candidate.createdAt)}
-            {showFold && (
-              <>
-                {' '}·{' '}
-                <button
-                  type="button"
-                  className="helm-conv-link-button"
-                  onClick={() => setExpanded((v) => !v)}
-                >
-                  {expanded ? 'hide original' : 'show original'}
-                </button>
-              </>
-            )}
+            建议归入 {isNew ? <>新 topic「{suggestedName}」</> : <strong>{suggestedName}</strong>}
+            {' · '}
+            <button type="button" className="helm-conv-link-button" onClick={() => setExpanded((v) => !v)}>
+              {expanded ? '收起' : '展开'}
+            </button>
           </span>
           <div className="helm-conv-candidate-actions">
             <button
               type="button"
               className="helm-conv-link-button"
-              disabled={busy !== null}
-              onClick={() => { void promote(); }}
-              title="采纳到这个 topic 的知识库（写入个人层 chat-captured）"
+              disabled={busy}
+              onClick={() => {
+                void accept(point.suggestedRoleId
+                  ? { targetRoleId: point.suggestedRoleId }
+                  : { newTopicName: point.suggestedTopicName ?? point.title });
+              }}
+              title={isNew ? `采纳并新建 topic「${suggestedName}」` : `采纳到 ${suggestedName}`}
             >
-              ↑ 采纳
+              ↑ {isNew ? '采纳·新建' : '采纳'}
             </button>
+            <Combobox
+              value=""
+              placeholder="改去…"
+              triggerClassName="helm-conv-add-role"
+              items={roles.map((r) => ({ value: r.id, label: r.name }))}
+              onValueChange={(rid) => { if (rid) void accept({ targetRoleId: rid }); }}
+            />
             <button
               type="button"
               className="helm-conv-link-button helm-conv-link-danger"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() => { void dismiss(); }}
-              title="忽略这条候选"
+              title="忽略这个知识点"
             >
               ✕ 忽略
             </button>

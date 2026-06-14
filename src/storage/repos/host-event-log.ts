@@ -80,6 +80,21 @@ export function promptCountsByHostSession(
   return out;
 }
 
+/**
+ * Total assistant-output characters for one session — the throttle signal
+ * for LLM knowledge extraction. Sums the `text` of `response` events only
+ * (tool_use / tool_result / progress are noise, not knowledge). Agent
+ * output is the best proxy for accumulated extractable knowledge.
+ */
+export function agentOutputCharsForSession(db: Database.Database, hostSessionId: string): number {
+  const r = db.prepare(
+    `SELECT COALESCE(SUM(LENGTH(json_extract(payload, '$.text'))), 0) AS n
+       FROM host_event_log
+      WHERE host_session_id = ? AND kind = 'response'`,
+  ).get(hostSessionId) as { n: number };
+  return r.n ?? 0;
+}
+
 export function pruneHostEvents(
   db: Database.Database,
   hostSessionId: string,

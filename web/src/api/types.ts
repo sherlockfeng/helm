@@ -405,6 +405,21 @@ export interface UnknownEntity {
   mentions: number;
 }
 
+/** v35: LLM-extracted knowledge point awaiting accept/dismiss. */
+export interface ChatKnowledgePoint {
+  id: string;
+  hostSessionId: string;
+  title: string;
+  body: string;
+  kind: KnowledgeChunkKind;
+  /** Existing topic the LLM matched this to (null when proposing new). */
+  suggestedRoleId: string | null;
+  /** Proposed new-topic name when no existing topic fits. */
+  suggestedTopicName: string | null;
+  status: 'pending' | 'accepted' | 'dismissed';
+  createdAt: string;
+}
+
 export interface ConversationDetail {
   session: ConversationDetailSession;
   timeline: ConversationDetailEvent[];
@@ -413,6 +428,7 @@ export interface ConversationDetail {
   candidates: ConversationDetailCandidate[];
   roleSuggestions: RoleSuggestion[];
   unknownEntities: UnknownEntity[];
+  knowledgePoints: ChatKnowledgePoint[];
 }
 
 /** Phase 73: chunk type discriminator — surfaced as a badge in the UI. */

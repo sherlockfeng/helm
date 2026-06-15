@@ -1086,12 +1086,14 @@ function RolesPageBase() {
   // roles count separately so the user sees at a glance how many of
   // their own roles they've added; pending-candidates rolls up the
   // per-role candidate badge.
-  const allRoles = data?.roles ?? [];
+  // Built-in roles (the relay-era Developer/Product/Test agents) are persona
+  // scaffolding, not chat knowledge or user dev-habits — hide them from
+  // Topics entirely.
+  const allRoles = (data?.roles ?? []).filter((r) => !r.isBuiltin);
   // PR-δ: Experts (bindable personas) render first; pure knowledge
   // Collections (imported dirs / entity buckets) get their own section.
   const experts = allRoles.filter((r) => r.bindable !== false);
   const collections = allRoles.filter((r) => r.bindable === false);
-  const builtInRoles = allRoles.filter((r) => r.isBuiltin).length;
 
   const toggleBindable = async (r: RoleSummary): Promise<void> => {
     try {
@@ -1113,7 +1115,7 @@ function RolesPageBase() {
         title="Topics"
         subtitle={<>知识主题——实体桶、导入主题域，以及带人格的专家主题。带 prompt 的可绑定到对话（开场注入知识 + 定向捕获）；检索对所有主题一视同仁。</>}
         stats={<>
-          <StatTile label="Experts" value={experts.length - builtInRoles} tone={experts.length - builtInRoles > 0 ? 'live' : 'muted'} />
+          <StatTile label="Experts" value={experts.length} tone={experts.length > 0 ? 'live' : 'muted'} />
           <StatTile label="Topics" value={collections.length} tone={collections.length > 0 ? 'live' : 'muted'} />
           <StatTile label="Candidates" value={pendingCandidates} tone={pendingCandidates > 0 ? 'warn' : 'muted'} />
         </>}

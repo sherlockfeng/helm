@@ -530,7 +530,7 @@ function KnowledgeInSection({
   // PR-δ: only Experts are bindable — Collections (imported dirs,
   // entity buckets) stay out of the persona dropdown; retrieval still
   // covers their knowledge.
-  const addable = roles.filter((r) => !chat.roleIds.includes(r.id) && r.bindable !== false);
+  const addable = roles.filter((r) => !chat.roleIds.includes(r.id) && r.bindable !== false && !r.isBuiltin);
   // Show up to 3 retrieved chunks; the rest fold under "show N more".
   const allPoints = latest?.points ?? [];
   const [expanded, setExpanded] = useState(false);

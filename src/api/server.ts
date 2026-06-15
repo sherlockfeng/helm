@@ -1093,6 +1093,8 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             }
           }
         }
+        // Badge refresh: confirmed cases left 'proposed'.
+        if (confirmed > 0) deps.events?.emit({ type: 'verification.changed' });
         return send(res, 200, { confirmed, filesWritten });
       }
 
@@ -1202,6 +1204,8 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             }
           }
         }
+        // Badge refresh: confirm/reject both move a case out of 'proposed'.
+        deps.events?.emit({ type: 'verification.changed' });
         return send(res, 200, { caseId, status: action === 'confirm' ? 'confirmed' : 'rejected' });
       }
 
@@ -1291,6 +1295,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         for (const rid of targetRoleIds) {
           const { proposed } = await deps.proposeCasesForTopic(rid);
           results.push({ roleId: rid, proposed });
+        }
+        // Badge refresh: backfill inserts new 'proposed' cases.
+        if (results.some((r) => r.proposed > 0)) {
+          deps.events?.emit({ type: 'verification.changed' });
         }
         return send(res, 200, { results });
       }

@@ -556,7 +556,9 @@ export type AppEvent =
   | { type: 'channel.message_enqueued'; bindingId: string; messageId: number }
   // Phase 70: fires when host_stop drains the queue (Cursor turn end /
   // new prompt). Renderer uses it to clear the "📨 queued" badge.
-  | { type: 'channel.message_consumed'; hostSessionId: string; count: number };
+  | { type: 'channel.message_consumed'; hostSessionId: string; count: number }
+  // Verification badge refresh signal — mirrors src/events/bus.ts.
+  | { type: 'verification.changed' };
 
 export type AppEventType = AppEvent['type'];
 

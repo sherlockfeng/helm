@@ -1250,7 +1250,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   let bootstrappedRunner: ((caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>) | undefined;
   if (!deps.verificationRunner) {
     try {
-      const bootstrapped = buildVerificationRunner({ db: deps.db });
+      // Run-now fallback: when there's no providers.json, build the
+      // runner against the app's configured engine (same LlmClient the
+      // summarizer uses). providers.json still wins when present.
+      const bootstrapped = buildVerificationRunner({
+        db: deps.db,
+        engineLlm: () => engineRouter.current().summarize,
+        engineModel: liveConfig.cursor.model,
+      });
       if (bootstrapped) bootstrappedRunner = bootstrapped.runner;
     } catch (err) {
       deps.loggers.module('verification').warn('bootstrap_failed', {

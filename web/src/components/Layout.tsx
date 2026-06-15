@@ -6,7 +6,7 @@
  */
 
 import { NavLink, Outlet } from 'react-router-dom';
-import { useEffect, useState, type ComponentType, type SVGProps } from 'react';
+import { useCallback, useEffect, useState, type ComponentType, type SVGProps } from 'react';
 import { helmApi } from '../api/client.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import {
@@ -169,21 +169,28 @@ export function Layout() {
     return () => clearInterval(id);
   }, []);
 
-  // PR 7: Verification badge. Polled on a slow cadence (60s) — the
-  // failure path is benign so a network blip just leaves the previous
-  // count visible. Combined count = proposed cases + open alerts.
-  useEffect(() => {
-    let alive = true;
-    const refresh = async (): Promise<void> => {
-      try {
-        const c = await helmApi.verificationCounts();
-        if (alive) setVerificationBadge(c.proposed + c.openAlerts);
-      } catch { /* tolerate offline */ }
-    };
-    void refresh();
-    const id = setInterval(refresh, 60_000);
-    return () => { alive = false; clearInterval(id); };
+  // PR 7: Verification badge. Refreshed live on `verification.changed`
+  // and polled on a slow cadence (60s) as a backstop — the failure path
+  // is benign so a network blip just leaves the previous count visible.
+  // Combined count = proposed cases + open alerts.
+  const refreshVerificationBadge = useCallback(async (): Promise<void> => {
+    try {
+      const c = await helmApi.verificationCounts();
+      setVerificationBadge(c.proposed + c.openAlerts);
+    } catch { /* tolerate offline */ }
   }, []);
+
+  useEffect(() => {
+    void refreshVerificationBadge();
+    const id = setInterval(() => { void refreshVerificationBadge(); }, 60_000);
+    return () => clearInterval(id);
+  }, [refreshVerificationBadge]);
+
+  // Refresh the badge the instant a case mutation lands (confirm /
+  // reject / confirm-batch / backfill) instead of waiting up to 60s.
+  useEventStream(() => { void refreshVerificationBadge(); }, {
+    types: ['verification.changed'],
+  });
 
   // Phase 46: also refresh on `approval.decision_received`. Some decision
   // paths fire that event without a follow-up `approval.settled` (race

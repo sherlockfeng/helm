@@ -33,7 +33,11 @@ export type AppEvent =
   // Phase 78: fired once per candidate row inserted from a host_agent_response
   // capture pass. Renderer subscribes via the /api/events SSE stream and
   // increments the Roles "Candidates (N)" badge in real time.
-  | { type: 'knowledge_candidate.created'; candidate: KnowledgeCandidate };
+  | { type: 'knowledge_candidate.created'; candidate: KnowledgeCandidate }
+  // Verification: fired after a count-affecting case mutation (confirm /
+  // reject / confirm-batch / backfill) so the sidebar badge refreshes
+  // immediately instead of waiting for its 60s poll.
+  | { type: 'verification.changed' };
 
 export type AppEventType = AppEvent['type'];
 export type AppEventOf<T extends AppEventType> = Extract<AppEvent, { type: T }>;

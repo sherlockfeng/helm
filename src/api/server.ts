@@ -276,6 +276,17 @@ export interface HttpApiDeps {
     hostSessionId: string;
   }) => Promise<{ inserted: number }>;
   /**
+   * Auto-propose ONE benchmark case from a freshly-accepted knowledge
+   * chunk. Fired fire-and-forget on candidate/chat-knowledge accept; the
+   * drafted case is inserted as `proposed` (no file write until confirm).
+   * Best-effort — returns {proposed:false} on any LLM/parse/DB failure.
+   */
+  proposeBenchmarkCase?: (input: {
+    roleId: string;
+    chunkId: string;
+    event?: 'candidate_accept' | 'point_edit';
+  }) => Promise<{ proposed: boolean }>;
+  /**
    * PR-C (Path B): create a new role from a chat's unknown entities,
    * then immediately run curation against the new role so the user
    * sees candidates without a second click. Returns the new role id +
@@ -1114,6 +1125,25 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             message: `Case is not in 'proposed' state; only proposed cases can be confirmed/rejected.`,
           });
         }
+        // Files-as-truth on confirm: materialize the case file now that the
+        // user has accepted the proposal. Best-effort — a failed write is
+        // logged but never fails the confirm (it retries on next sync).
+        if (action === 'confirm' && deps.knowledgeRepoManager) {
+          const wikiRepo = listKnowledgeRepos(deps.db, { status: 'active' })
+            .find((r) => r.profile === 'llm-wiki');
+          const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+          if (wikiRepo && wikiUsername) {
+            try {
+              await deps.knowledgeRepoManager.writeCaseFile({
+                repoId: wikiRepo.id, caseId, username: wikiUsername,
+              });
+            } catch (err) {
+              deps.logger?.warn('wiki_case_write_failed', {
+                data: { caseId, message: (err as Error).message },
+              });
+            }
+          }
+        }
         return send(res, 200, { caseId, status: action === 'confirm' ? 'confirmed' : 'rejected' });
       }
 
@@ -1919,6 +1949,15 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               }
             }
           }
+          // Auto-propose ONE benchmark case per new chunk (fire-and-forget,
+          // capped at 2). Proposed cases stay file-less until confirmed.
+          if (deps.proposeBenchmarkCase) {
+            for (const chunkId of result.chunkIds.slice(0, 2)) {
+              void deps.proposeBenchmarkCase({
+                roleId: before.roleId, chunkId, event: 'candidate_accept',
+              }).catch(() => {});
+            }
+          }
           // PR 6 (auto-trigger): when a Verification runner is wired,
           // enqueue affected cases so the next time the user looks at
           // the case it reflects the just-accepted knowledge. Done
@@ -2038,6 +2077,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             });
           }
           setChatKnowledgePointStatus(deps.db, pointId, 'accepted', now);
+          // Auto-propose ONE benchmark case per new chunk (fire-and-forget,
+          // capped at 2). Proposed cases stay file-less until confirmed.
+          if (deps.proposeBenchmarkCase) {
+            for (const chunkId of result.chunkIds.slice(0, 2)) {
+              void deps.proposeBenchmarkCase({ roleId, chunkId, event: 'candidate_accept' }).catch(() => {});
+            }
+          }
           // Files-as-truth: materialize as chat-captured (best-effort).
           const wikiRepo = deps.knowledgeRepoManager
             ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')

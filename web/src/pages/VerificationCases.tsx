@@ -34,6 +34,7 @@ type StatusFilter = BenchmarkCaseStatus | 'all';
 export function VerificationCasesPage(): ReactElement {
   const [status, setStatus] = useState<StatusFilter>('confirmed');
   const [showNew, setShowNew] = useState(false);
+  const [busyBulk, setBusyBulk] = useState(false);
 
   const { data, error, loading, reload } = useApi(
     () => helmApi.listVerificationCases({ status, limit: 200 }),
@@ -41,6 +42,32 @@ export function VerificationCasesPage(): ReactElement {
   );
 
   const cases = useMemo(() => data?.cases ?? [], [data]);
+
+  // 为所有 topic 生成 case：one LLM pass per non-builtin topic with chunks.
+  const backfill = async (): Promise<void> => {
+    setBusyBulk(true);
+    try {
+      const { results } = await helmApi.backfillCases();
+      const total = results.reduce((n, r) => n + r.proposed, 0);
+      toast.success(`已为 ${results.length} 个 topic 生成 ${total} 条 case`);
+      setStatus('proposed');
+      reload();
+    } catch (err) {
+      toast.error(`生成失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setBusyBulk(false); }
+  };
+
+  // 全部确认：confirm every proposed case + materialize files.
+  const confirmAll = async (): Promise<void> => {
+    setBusyBulk(true);
+    try {
+      const { confirmed, filesWritten } = await helmApi.confirmCasesBatch({ all: true });
+      toast.success(`已确认 ${confirmed}（落 ${filesWritten} 个文件）`);
+      reload();
+    } catch (err) {
+      toast.error(`确认失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setBusyBulk(false); }
+  };
 
   return (
     <div className="helm-page">
@@ -61,6 +88,14 @@ export function VerificationCasesPage(): ReactElement {
                 <SelectItem value="all">All</SelectItem>
               </SelectContent>
             </Select>
+            <Button onClick={backfill} disabled={busyBulk}>
+              为所有 topic 生成 case
+            </Button>
+            {status === 'proposed' && cases.length > 0 && (
+              <Button onClick={confirmAll} disabled={busyBulk} variant="primary">
+                全部确认
+              </Button>
+            )}
             <Button onClick={() => setShowNew((p) => !p)}>
               {showNew ? 'Hide form' : '+ New case'}
             </Button>

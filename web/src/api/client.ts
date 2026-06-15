@@ -485,6 +485,22 @@ export const helmApi = {
       'POST', `/api/verification/cases/${encodeURIComponent(id)}/run`,
     ),
 
+  /**
+   * One-time backfill: generate `proposed` cases from existing knowledge.
+   * Pass a roleId to scope to one topic; omit to run every non-builtin
+   * topic that has chunks.
+   */
+  backfillCases: (roleId?: string) =>
+    request<{ results: { roleId: string; proposed: number }[] }>(
+      'POST', '/api/verification/backfill', roleId ? { roleId } : {},
+    ),
+
+  /** Batch-confirm proposed cases + materialize their files. */
+  confirmCasesBatch: (input: { caseIds?: string[]; roleId?: string; all?: boolean }) =>
+    request<{ confirmed: number; filesWritten: number }>(
+      'POST', '/api/verification/cases/confirm-batch', input,
+    ),
+
   // ── Role mirrors (Phase 80 / helm-design PR B) ────────────────────────
   // Auto-push a role's .helmrole bundle to a remote URL on every
   // version bump. The mirror runner debounces a few seconds + has a

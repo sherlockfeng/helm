@@ -287,6 +287,12 @@ export interface HttpApiDeps {
     event?: 'candidate_accept' | 'point_edit';
   }) => Promise<{ proposed: boolean }>;
   /**
+   * One-time backfill: generate `proposed` benchmark cases for a topic's
+   * existing knowledge in one LLM pass. Best-effort — returns the count
+   * inserted. Drives POST /api/verification/backfill.
+   */
+  proposeCasesForTopic?: (roleId: string) => Promise<{ proposed: number }>;
+  /**
    * PR-C (Path B): create a new role from a chat's unknown entities,
    * then immediately run curation against the new role so the user
    * sees candidates without a second click. Returns the new role id +
@@ -1038,6 +1044,58 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // is the next PR's wiring. Keeping it out keeps this PR
       // reviewable: schema + repo + provider validator + (mockable)
       // runner library.
+      // Batch-confirm proposed cases (and materialize their files). Listed
+      // ABOVE the `/cases` + `/cases/:id` routes so the literal path wins
+      // over the `:id` capture. body { caseIds?: string[]; roleId?: string; all?: boolean }.
+      if (url.pathname === '/api/verification/cases/confirm-batch') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        let body: Record<string, unknown> = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const explicitIds = Array.isArray(body['caseIds'])
+          ? (body['caseIds'] as unknown[]).filter((x): x is string => typeof x === 'string')
+          : null;
+        const roleId = typeof body['roleId'] === 'string' ? body['roleId'] : undefined;
+        const caseIds = explicitIds && explicitIds.length > 0
+          ? explicitIds
+          : listCases(deps.db, {
+              status: 'proposed',
+              ...(roleId ? { roleId } : {}),
+              limit: 500,
+            }).map((c) => c.id);
+
+        // Resolve the active llm-wiki + username ONCE before the loop, so
+        // each confirmed case can materialize its file (best-effort).
+        const wikiRepo = deps.knowledgeRepoManager
+          ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
+          : undefined;
+        const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+        const confirmedBy = typeof body['confirmedBy'] === 'string' ? body['confirmedBy'] : undefined;
+
+        let confirmed = 0;
+        let filesWritten = 0;
+        for (const caseId of caseIds) {
+          const ok = flipCaseStatus(deps.db, caseId, 'confirmed', confirmedBy);
+          if (!ok) continue;
+          confirmed += 1;
+          if (deps.knowledgeRepoManager && wikiRepo && wikiUsername) {
+            try {
+              await deps.knowledgeRepoManager.writeCaseFile({
+                repoId: wikiRepo.id, caseId, username: wikiUsername,
+              });
+              filesWritten += 1;
+            } catch (err) {
+              deps.logger?.warn('wiki_case_write_failed', {
+                data: { caseId, message: (err as Error).message },
+              });
+            }
+          }
+        }
+        return send(res, 200, { confirmed, filesWritten });
+      }
+
       if (url.pathname === '/api/verification/cases') {
         if (req.method === 'GET') {
           const statusParam = url.searchParams.get('status') ?? 'confirmed';
@@ -1205,6 +1263,36 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           `SELECT COUNT(*) AS n FROM regression_alert WHERE status = 'open'`,
         ).get() as { n: number }).n;
         return send(res, 200, { proposed, openAlerts });
+      }
+
+      // One-time backfill: generate `proposed` cases from a topic's
+      // existing knowledge. body { roleId? } — when given, just that
+      // topic; otherwise every non-builtin topic that has chunks.
+      if (url.pathname === '/api/verification/backfill') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.proposeCasesForTopic) {
+          return send(res, 503, {
+            error: 'no_backfill',
+            message: 'Case backfill is not configured (no LLM wired).',
+          });
+        }
+        let body: Record<string, unknown> = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as Record<string, unknown>; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const roleId = typeof body['roleId'] === 'string' ? body['roleId'] : undefined;
+        const targetRoleIds = roleId
+          ? [roleId]
+          : listRolesRepo(deps.db)
+              .filter((r) => !r.isBuiltin && getChunksForRole(deps.db, r.id).length > 0)
+              .map((r) => r.id);
+        const results: Array<{ roleId: string; proposed: number }> = [];
+        for (const rid of targetRoleIds) {
+          const { proposed } = await deps.proposeCasesForTopic(rid);
+          results.push({ roleId: rid, proposed });
+        }
+        return send(res, 200, { results });
       }
 
       // PR 5.5a: KnowledgeRepo subscription surface.

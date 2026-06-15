@@ -194,6 +194,9 @@ export interface UnpublishedCaptured {
   /** Chunk whose source_file points at this path, when indexed. */
   pointId?: string;
   title?: string;
+  /** A benchmark-case file under cases/ — publishable as a literal file
+   *  (no knowledge-chunk pointId), NOT an "un-indexed, will skip" point. */
+  isCase?: boolean;
 }
 
 export class KnowledgeRepoManagerError extends Error {
@@ -572,13 +575,23 @@ export class KnowledgeRepoManager {
     const out: UnpublishedCaptured[] = [];
     for (const e of entries) {
       if (!e.path.endsWith('.md')) continue;
-      const row = this.db.prepare(
-        `SELECT id, chunk_text FROM knowledge_chunks WHERE source_file = ?`,
-      ).get(e.path) as { id: string; chunk_text: string } | undefined;
       const item: UnpublishedCaptured = {
         relPath: e.path,
         isNew: e.status === '??',
       };
+      // Benchmark-case files live under chat-captured/<user>/<role>/cases/.
+      // They're not knowledge chunks (no source_file row) but ARE publishable
+      // files-as-truth — flag them so publishCaptured ships them via
+      // extraFiles instead of skipping them as "un-indexed".
+      if (e.path.includes('/cases/')) {
+        item.isCase = true;
+        item.title = e.path.split('/').pop()?.replace(/\.md$/, '');
+        out.push(item);
+        continue;
+      }
+      const row = this.db.prepare(
+        `SELECT id, chunk_text FROM knowledge_chunks WHERE source_file = ?`,
+      ).get(e.path) as { id: string; chunk_text: string } | undefined;
       if (row) {
         item.pointId = row.id;
         const firstLine = row.chunk_text.split('\n')
@@ -605,28 +618,43 @@ export class KnowledgeRepoManager {
     message?: string;
     anonymous?: boolean;
   }): Promise<PublishResult & { pointIds: string[]; skipped: string[] }> {
+    const repo = getKnowledgeRepo(this.db, input.repoId);
+    if (!repo) throw new KnowledgeRepoManagerError(`unknown repo: ${input.repoId}`);
     const unpublished = await this.listUnpublishedCaptured(input.repoId);
     const pointIds = unpublished
       .map((u) => u.pointId)
       .filter((id): id is string => typeof id === 'string');
+    // Benchmark-case files ride the same MR as literal extraFiles (no DB
+    // pointId — their content comes straight off the working copy).
+    const caseEntries = unpublished.filter((u) => u.isCase);
+    const extraFiles: Array<{ relPath: string; content: string }> = [];
+    for (const c of caseEntries) {
+      try {
+        extraFiles.push({ relPath: c.relPath, content: readFileSync(join(repo.localPath, c.relPath), 'utf8') });
+      } catch { /* file vanished — skip silently */ }
+    }
+    // Genuinely un-indexed = no pointId AND not a case file.
     const skipped = unpublished
-      .filter((u) => !u.pointId)
+      .filter((u) => !u.pointId && !u.isCase)
       .map((u) => u.relPath);
-    if (pointIds.length === 0) {
+    if (pointIds.length === 0 && extraFiles.length === 0) {
       throw new KnowledgeRepoManagerError(
         'no unpublished captured points (nothing indexed under chat-captured/)',
       );
     }
+    const total = pointIds.length + extraFiles.length;
     const message = input.message ?? [
-      `feat(chat-captured): publish ${pointIds.length} captured knowledge point(s)`,
+      `feat(chat-captured): publish ${total} captured file(s)`,
       '',
-      ...unpublished.filter((u) => u.pointId).map((u) => `- ${u.relPath}`),
+      ...unpublished.filter((u) => u.pointId || u.isCase).map((u) => `- ${u.relPath}`),
     ].join('\n');
+    const seed = (pointIds.length > 0 ? pointIds.join(',') : extraFiles.map((f) => f.relPath).join(','));
     const result = await this.publish({
       repoId: input.repoId,
       pointIds,
+      ...(extraFiles.length > 0 ? { extraFiles } : {}),
       message,
-      branchName: `helm/captured/${new Date().toISOString().slice(0, 10)}-${sha256Short(pointIds.join(',')).slice(0, 6)}`,
+      branchName: `helm/captured/${new Date().toISOString().slice(0, 10)}-${sha256Short(seed).slice(0, 6)}`,
       ...(input.anonymous !== undefined ? { anonymous: input.anonymous } : {}),
     });
     if (skipped.length > 0) {

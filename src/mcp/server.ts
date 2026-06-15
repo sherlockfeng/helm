@@ -19,6 +19,7 @@ import type Database from 'better-sqlite3';
 import { getActiveChats } from './tools/get-active-chats.js';
 import { bindToRemoteChannel } from './tools/bind-to-remote-channel.js';
 import { listKnowledgeProviders } from './tools/list-knowledge-providers.js';
+import { proposeBenchmarkCase, updateBenchmarkCase } from './tools/benchmark-cases.js';
 import { queryKnowledge } from './tools/query-knowledge.js';
 import { startRelayChatSession } from './tools/start-relay-chat-session.js';
 import { makePseudoEmbedFn } from './embed.js';
@@ -565,6 +566,41 @@ export function createMcpServer(
     });
     return jsonResult({ roleId, status: status ?? 'pending', candidates });
   });
+
+  // ── Benchmark / eval cases (always-on) ──────────────────────────────────
+  //
+  // Lets a coding agent propose + edit eval cases right alongside the
+  // knowledge it just added. MCP-created/edited cases stay status='proposed'
+  // (file-less); they only become files when the user confirms via the
+  // HTTP/UI confirm path. DB-only — no file writes, no LLM here.
+
+  server.registerTool('propose_benchmark_case', {
+    description:
+      'Propose a benchmark/eval case for a topic (knowledge collection): a realistic question + '
+      + 'the expected-truth answer + optional golden knowledge-point ids. Inserted as "proposed" '
+      + 'for the user to confirm; on confirm it is written to the topic\'s cases/ file. Use this '
+      + 'right after adding knowledge so the eval ships with it.',
+    inputSchema: {
+      topicId: z.string(),
+      question: z.string(),
+      expectedTruth: z.string(),
+      name: z.string().optional(),
+      goldenPointIds: z.array(z.string()).optional(),
+    },
+  }, async (input) => jsonResult(proposeBenchmarkCase(deps.db, input)));
+
+  server.registerTool('update_benchmark_case', {
+    description:
+      'Update a still-proposed benchmark case (question / expected truth / golden points / name). '
+      + 'Confirmed cases are file-backed — edit those via the UI/file, not here.',
+    inputSchema: {
+      caseId: z.string(),
+      name: z.string().optional(),
+      question: z.string().optional(),
+      expectedTruth: z.string().optional(),
+      goldenPointIds: z.array(z.string()).optional(),
+    },
+  }, async (input) => jsonResult(updateBenchmarkCase(deps.db, input)));
 
   // ── Requirements / campaigns / relay / Lark attachments — legacy ────────
   if (legacyTools) {

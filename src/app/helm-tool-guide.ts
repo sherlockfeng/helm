@@ -21,7 +21,7 @@
  * blocks. ~600 chars is roughly the right budget.
  */
 
-export const HELM_TOOL_GUIDE_VERSION = 2;
+export const HELM_TOOL_GUIDE_VERSION = 3;
 
 export const HELM_TOOL_GUIDE = [
   "You're in a chat connected to **helm** — a macOS desktop app for",
@@ -38,6 +38,8 @@ export const HELM_TOOL_GUIDE = [
   '- **Ingestion**: `read_lark_doc` (pull a Feishu doc as training input);',
   '  `list_knowledge_sources` / `drop_knowledge_source`;',
   '  `list_role_candidates` for pending chat captures.',
+  '- **Benchmark/eval**: `propose_benchmark_case` (after adding knowledge,',
+  '  propose a Q+expected-truth eval) / `update_benchmark_case`.',
   '- **Sessions**: `get_active_chats`.',
   '',
   'When the user mentions a role or knowledge, reach for an MCP tool',

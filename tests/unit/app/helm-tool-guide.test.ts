@@ -34,13 +34,15 @@ describe('HELM_TOOL_GUIDE constant', () => {
     // Each line is a category the agent might be asked about. Legacy
     // relay-era families (harness / bindings) left the guide when their
     // tools were gated off — the guide must only advertise what is
-    // actually registered (HELM_TOOL_GUIDE_VERSION bumped to 2).
+    // actually registered (HELM_TOOL_GUIDE_VERSION bumped to 3, adding the
+    // benchmark/eval tools).
     for (const tool of [
       'list_roles', 'update_role', 'train_role', 'search_knowledge',
       'get_active_chats',
       'read_lark_doc',
       'query_knowledge',
       'list_knowledge_sources', 'list_role_candidates',
+      'propose_benchmark_case', 'update_benchmark_case',
     ]) {
       expect(HELM_TOOL_GUIDE).toContain(tool);
     }

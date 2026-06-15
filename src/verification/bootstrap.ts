@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import { getChunksForRole } from '../storage/repos/roles.js';
+import { getRun } from '../storage/repos/benchmark.js';
 import {
   loadProviderConfigFromFile,
   resolveProviders,
@@ -198,10 +199,11 @@ export function buildVerificationRunner(input: BootstrapInput): BootstrapResult 
       db: input.db, caseId, providers,
       llm, retrieve, repoProbe,
     });
-    // runCase persists the run row itself; re-read so the auto-trigger
-    // can hand the typed BenchmarkRun to detectRegression.
-    return input.db.prepare(`SELECT * FROM benchmark_run WHERE id = ?`).get(result.runId) as
-      BenchmarkRun | null;
+    // runCase persists the run row itself; re-read via getRun so the
+    // result is the camelCase BenchmarkRun shape. Returning the raw
+    // snake_case row made the renderer read alignmentPct=undefined →
+    // toFixed crash on Run now.
+    return getRun(input.db, result.runId) ?? null;
   };
 
   return { runner, providers };

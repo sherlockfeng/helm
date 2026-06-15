@@ -327,6 +327,13 @@ export function listRunsForCase(
   `).all(caseId, limit) as Record<string, unknown>[]).map(rowToRun);
 }
 
+/** Single run by id, mapped to the camelCase BenchmarkRun shape. */
+export function getRun(db: Database.Database, id: string): BenchmarkRun | undefined {
+  const row = db.prepare(`SELECT * FROM benchmark_run WHERE id = ?`)
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? rowToRun(row) : undefined;
+}
+
 export function getRepoStateForRun(
   db: Database.Database,
   runId: string,

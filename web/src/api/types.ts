@@ -482,6 +482,8 @@ export interface UnpublishedCapturedFile {
   isNew: boolean;
   pointId?: string;
   title?: string;
+  /** benchmark-case file (cases/) — publishable, not "un-indexed". */
+  isCase?: boolean;
 }
 
 /** R-6 — curated seed catalogue entry (e.g. llm-wiki one-click). */

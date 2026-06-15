@@ -113,13 +113,17 @@ export function KnowledgePromotePage(): ReactElement {
                 </p>
                 {groupFilesByTopic(files).map(([roleId, fs]) => {
                   const modified = fs.filter((f) => !f.isNew).length;
-                  const skipped = fs.filter((f) => !f.pointId).length;
+                  const cases = fs.filter((f) => f.isCase).length;
+                  // Un-indexed = no pointId AND not a case file (cases publish
+                  // via extraFiles, they're not "will skip").
+                  const skipped = fs.filter((f) => !f.pointId && !f.isCase).length;
                   return (
                     <details key={roleId} style={{ margin: '4px 0' }}>
                       <summary style={{ cursor: 'pointer', fontSize: 13 }}>
                         <strong>{roleName(allRoles, roleId)}</strong>
                         <span className="muted" style={{ fontSize: 12 }}>
                           {' '}· {fs.length} 个文件
+                          {cases > 0 && <span> · {cases} case</span>}
                           {modified > 0 && <span style={{ color: '#92400e' }}> · {modified} 已修改</span>}
                           {skipped > 0 && <span style={{ color: '#dc2626' }}> · {skipped} 未入索引（将跳过）</span>}
                         </span>
@@ -128,9 +132,10 @@ export function KnowledgePromotePage(): ReactElement {
                         {fs.map((f) => (
                           <li key={f.relPath}>
                             <code>{f.relPath.split('/').pop()}</code>
-                            {f.title && <span className="muted"> — {f.title}</span>}
+                            {f.isCase && <span className="muted"> · case</span>}
+                            {f.title && !f.isCase && <span className="muted"> — {f.title}</span>}
                             {!f.isNew && <span style={{ color: '#92400e' }}> · 已修改</span>}
-                            {!f.pointId && <span style={{ color: '#dc2626' }}> · 未入索引</span>}
+                            {!f.pointId && !f.isCase && <span style={{ color: '#dc2626' }}> · 未入索引</span>}
                           </li>
                         ))}
                       </ul>
@@ -138,13 +143,13 @@ export function KnowledgePromotePage(): ReactElement {
                   );
                 })}
                 <Button
-                  disabled={syncing || files.every((f) => !f.pointId)}
+                  disabled={syncing || files.every((f) => !f.pointId && !f.isCase)}
                   aria-busy={syncing}
                   onClick={() => { void syncPersonal(); }}
                   title="把本地 chat-captured 文件推到远端（开一个 MR）；仍是个人态，不进 domains/"
                   style={{ marginTop: 8 }}
                 >
-                  {syncing ? '开 MR 中…' : `同步 ${files.filter((f) => f.pointId).length} 条到远端（个人态）`}
+                  {syncing ? '开 MR 中…' : `同步 ${files.filter((f) => f.pointId || f.isCase).length} 条到远端（个人态）`}
                 </Button>
               </>
             )}

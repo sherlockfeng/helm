@@ -119,10 +119,10 @@ function NavRow({
 }) {
   const Icon = item.icon;
   const isApprovals = item.to === '/approvals';
-  // Any verification surface participates in the verification badge so
-  // the count is visible from the group entry AND from each sub-item
-  // until the user clears the queue.
-  const isVerification = item.to.startsWith('/verification');
+  // The verification badge (= proposed cases + open alerts) belongs on
+  // Cases only — that's where the queue is reviewed. Showing the same
+  // count on Runs + Coverage made it look like each had N items.
+  const isVerification = item.to === '/verification/cases';
   return (
     <NavLink
       to={item.to}

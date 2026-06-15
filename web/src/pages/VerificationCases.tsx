@@ -10,7 +10,7 @@
  * that lands, the per-row "Run" button gets wired without a layout change.
  */
 
-import { useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ApiError, helmApi } from '../api/client.js';
@@ -35,6 +35,19 @@ export function VerificationCasesPage(): ReactElement {
   const [status, setStatus] = useState<StatusFilter>('confirmed');
   const [showNew, setShowNew] = useState(false);
   const [busyBulk, setBusyBulk] = useState(false);
+  // Land on the Proposed queue when there's something to review — the nav
+  // badge points here, so an empty default "Confirmed" view looked like the
+  // badge was lying. Runs once on mount; never overrides a user choice.
+  const [autoFilterDone, setAutoFilterDone] = useState(false);
+  useEffect(() => {
+    if (autoFilterDone) return;
+    let alive = true;
+    void helmApi.verificationCounts()
+      .then((c) => { if (alive && c.proposed > 0) setStatus('proposed'); })
+      .catch(() => {})
+      .finally(() => { if (alive) setAutoFilterDone(true); });
+    return () => { alive = false; };
+  }, [autoFilterDone]);
 
   const { data, error, loading, reload } = useApi(
     () => helmApi.listVerificationCases({ status, limit: 200 }),

@@ -20,6 +20,30 @@ import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import { PromoteModal } from './Roles.js';
+import type { UnpublishedCapturedFile } from '../api/types.js';
+
+/**
+ * Group unpublished chat-captured files by their topic (role) — the 3rd path
+ * segment of chat-captured/<user>/<role>/<file>.md. Sorted by file count desc
+ * so the heaviest topic is first. The 227-file flat list was unreadable.
+ */
+function groupFilesByTopic(
+  files: readonly UnpublishedCapturedFile[],
+): Array<[string, UnpublishedCapturedFile[]]> {
+  const m = new Map<string, UnpublishedCapturedFile[]>();
+  for (const f of files) {
+    const seg = f.relPath.split('/');
+    const roleId = seg.length >= 4 ? seg[2]! : '(其它)';
+    const list = m.get(roleId) ?? [];
+    list.push(f);
+    m.set(roleId, list);
+  }
+  return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
+function roleName(roles: { id: string; name: string }[], id: string): string {
+  return roles.find((r) => r.id === id)?.name ?? id;
+}
 
 export function KnowledgePromotePage(): ReactElement {
   const reposQuery = useApi(() => helmApi.listKnowledgeRepos('active'), []);
@@ -84,21 +108,41 @@ export function KnowledgePromotePage(): ReactElement {
             ? <p className="muted" style={{ marginBottom: 0 }}>chat-captured 没有待同步的文件 — 个人层与远端一致。</p>
             : (
               <>
-                <ul style={{ margin: '6px 0 10px', paddingLeft: 18, fontSize: 12 }}>
-                  {files.map((f) => (
-                    <li key={f.relPath}>
-                      <code>{f.relPath}</code>
-                      {f.title && <span className="muted"> — {f.title}</span>}
-                      {!f.isNew && <span style={{ color: '#92400e' }}> · 已修改</span>}
-                      {!f.pointId && <span style={{ color: '#dc2626' }}> · 未入索引（将跳过）</span>}
-                    </li>
-                  ))}
-                </ul>
+                <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+                  按 topic 聚合，共 {files.length} 个文件待同步。一次同步推送全部（一个 MR）。
+                </p>
+                {groupFilesByTopic(files).map(([roleId, fs]) => {
+                  const modified = fs.filter((f) => !f.isNew).length;
+                  const skipped = fs.filter((f) => !f.pointId).length;
+                  return (
+                    <details key={roleId} style={{ margin: '4px 0' }}>
+                      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+                        <strong>{roleName(allRoles, roleId)}</strong>
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          {' '}· {fs.length} 个文件
+                          {modified > 0 && <span style={{ color: '#92400e' }}> · {modified} 已修改</span>}
+                          {skipped > 0 && <span style={{ color: '#dc2626' }}> · {skipped} 未入索引（将跳过）</span>}
+                        </span>
+                      </summary>
+                      <ul style={{ margin: '4px 0 8px', paddingLeft: 18, fontSize: 12 }}>
+                        {fs.map((f) => (
+                          <li key={f.relPath}>
+                            <code>{f.relPath.split('/').pop()}</code>
+                            {f.title && <span className="muted"> — {f.title}</span>}
+                            {!f.isNew && <span style={{ color: '#92400e' }}> · 已修改</span>}
+                            {!f.pointId && <span style={{ color: '#dc2626' }}> · 未入索引</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  );
+                })}
                 <Button
                   disabled={syncing || files.every((f) => !f.pointId)}
                   aria-busy={syncing}
                   onClick={() => { void syncPersonal(); }}
                   title="把本地 chat-captured 文件推到远端（开一个 MR）；仍是个人态，不进 domains/"
+                  style={{ marginTop: 8 }}
                 >
                   {syncing ? '开 MR 中…' : `同步 ${files.filter((f) => f.pointId).length} 条到远端（个人态）`}
                 </Button>

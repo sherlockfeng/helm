@@ -29,6 +29,8 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { parseMarkdownWithFrontmatter } from './frontmatter.js';
+import { parseCaseFile } from './case-file.js';
+import { getCase, insertCase } from '../storage/repos/benchmark.js';
 import {
   parsePointFile,
   type KnowledgeRepoProfile,
@@ -81,6 +83,8 @@ export interface ImporterInput {
 export interface ImportSummary {
   rolesImported: number;
   pointsUpserted: number;
+  /** Benchmark cases imported from `cases/` subdirs (files-as-truth). */
+  casesImported: number;
   /**
    * PR-4 (files-as-truth): always 0. The merge-conflict flow is retired
    * — files in the working copy ARE the truth, so the import always
@@ -98,7 +102,7 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
     existsSync: input.fs?.existsSync ?? existsSync,
     statSync: input.fs?.statSync ?? statSync,
   };
-  const summary: ImportSummary = { rolesImported: 0, pointsUpserted: 0, conflictsDetected: 0, errors: {} };
+  const summary: ImportSummary = { rolesImported: 0, pointsUpserted: 0, casesImported: 0, conflictsDetected: 0, errors: {} };
 
   // R-? (verification fix): the layout the importer walks depends on
   // the profile. The original implementation only knew helm-native's
@@ -163,9 +167,55 @@ export function importRepoIntoLibrary(input: ImporterInput): ImportSummary {
         summary.errors[file] = (err as Error).message;
       }
     }
+
+    // Benchmark cases co-located under <roleDir>/cases/. These never
+    // become knowledge chunks (walkMarkdownFiles skips `cases/`); they
+    // upsert into the benchmark_case tables instead, re-keyed by the
+    // fence id so a re-import is idempotent.
+    for (const file of bucket.caseFiles ?? []) {
+      const fallbackId = repoRelFallbackId(input.localPath, file);
+      try {
+        const raw = fs.readFileSync(file, 'utf8');
+        const parsed = parseCaseFile(raw, fallbackId);
+        if (!parsed) continue; // not a benchmark-case file
+        const targetRoleIds = parsed.targetRoleIds.length > 0
+          ? parsed.targetRoleIds
+          : [bucket.roleId];
+        // insertCase INSERTs (no upsert-on-conflict) — guard on the id
+        // so re-import is a no-op rather than a UNIQUE violation. Same
+        // idempotency contract the point path relies on.
+        if (getCase(input.db, parsed.id)) continue;
+        insertCase(input.db, {
+          id: parsed.id,
+          name: parsed.name,
+          question: parsed.question,
+          expectedTruth: parsed.expectedTruth,
+          goldenPointIds: parsed.goldenPointIds,
+          targetRoleIds,
+          proposedSource: 'imported',
+          status: 'confirmed',
+        });
+        summary.casesImported += 1;
+      } catch (err) {
+        summary.errors[file] = (err as Error).message;
+      }
+    }
   }
 
   return summary;
+}
+
+/**
+ * Collision-free fallback id for a case file with no fence id: the
+ * repo-root-relative path with separators folded to dashes and the
+ * extension stripped (mirrors profiles.ts's pathIdNoExt convention).
+ */
+function repoRelFallbackId(localPath: string, file: string): string {
+  return relative(localPath, file)
+    .replace(/\.md$/i, '')
+    .split(sep)
+    .filter(Boolean)
+    .join('-');
 }
 
 interface RoleBucket {
@@ -179,6 +229,8 @@ interface RoleBucket {
   /** The dir paths under this bucket are walked recursively for .md files. */
   roleDir: string;
   pointFiles: string[];
+  /** Benchmark-case .md files directly under <roleDir>/cases/. */
+  caseFiles?: string[];
 }
 
 type WalkerFs = NonNullable<ImporterInput['fs']> & {
@@ -250,6 +302,14 @@ const CHAT_CAPTURED_DIR = 'chat-captured';
  * 集合；'domains' 本身不是知识主题，不应成为一个 60-chunk 的大杂烩集合。
  */
 const DOMAINS_DIR = 'domains';
+
+/**
+ * Files-as-truth (benchmark): benchmark cases live in a `cases/`
+ * subdir under each role bucket. walkMarkdownFiles never descends into
+ * it (so case files don't become knowledge chunks); collectCaseFiles
+ * gathers them separately.
+ */
+const CASES_DIR = 'cases';
 
 /** Dirs that are never knowledge content (CI/tooling metadata). */
 export const LLM_WIKI_SKIP_DIRS: ReadonlySet<string> = new Set([
@@ -326,13 +386,15 @@ function enumerateLlmWiki(
       pointFiles = pointFiles.filter((f) =>
         prefixes.some((p) => (f + sep).startsWith(p) || f.startsWith(p)));
     }
-    if (pointFiles.length === 0) continue; // skip dirs with no .md
+    const caseFiles = collectCaseFiles(fs, roleDir);
+    if (pointFiles.length === 0 && caseFiles.length === 0) continue; // skip empty dirs
     out.push({
       roleId: slug,
       roleName: slug,
       bindable: false,
       roleDir,
       pointFiles,
+      caseFiles,
     });
   }
   return out;
@@ -353,8 +415,9 @@ function enumerateDomainSubdirs(fs: WalkerFs, domainsRoot: string): RoleBucket[]
   for (const sub of subs) {
     const roleDir = join(domainsRoot, sub);
     const pointFiles = walkMarkdownFiles(fs, roleDir);
-    if (pointFiles.length === 0) continue;
-    out.push({ roleId: sub, roleName: sub, bindable: false, roleDir, pointFiles });
+    const caseFiles = collectCaseFiles(fs, roleDir);
+    if (pointFiles.length === 0 && caseFiles.length === 0) continue;
+    out.push({ roleId: sub, roleName: sub, bindable: false, roleDir, pointFiles, caseFiles });
   }
   return out;
 }
@@ -386,8 +449,9 @@ function enumerateChatCaptured(fs: WalkerFs, capturedRoot: string): RoleBucket[]
     for (const role of roleDirs) {
       const roleDir = join(userDir, role);
       const pointFiles = walkMarkdownFiles(fs, roleDir);
-      if (pointFiles.length === 0) continue;
-      out.push({ roleId: role, roleName: role, bindable: false, roleDir, pointFiles });
+      const caseFiles = collectCaseFiles(fs, roleDir);
+      if (pointFiles.length === 0 && caseFiles.length === 0) continue;
+      out.push({ roleId: role, roleName: role, bindable: false, roleDir, pointFiles, caseFiles });
     }
   }
   return out;
@@ -485,11 +549,41 @@ function walkMarkdownFiles(
     for (const entry of entries) {
       const full = join(cur, entry);
       const stat = fs.statSync(full);
-      if (stat.isDirectory()) stack.push(full);
-      else if (stat.isFile() && entry.toLowerCase().endsWith('.md')) {
+      if (stat.isDirectory()) {
+        // Never descend into a cases/ dir — those files are benchmark
+        // cases (collectCaseFiles handles them), not knowledge chunks.
+        if (entry === CASES_DIR) continue;
+        stack.push(full);
+      } else if (stat.isFile() && entry.toLowerCase().endsWith('.md')) {
         out.push(full);
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Collect the benchmark-case .md files directly under
+ * <roleDir>/cases/. Non-recursive — cases are flat per role.
+ */
+function collectCaseFiles(
+  fs: NonNullable<ImporterInput['fs']> & {
+    readdirSync: typeof readdirSync; statSync: typeof statSync;
+    existsSync: typeof existsSync;
+  },
+  roleDir: string,
+): string[] {
+  const casesDir = join(roleDir, CASES_DIR);
+  if (!fs.existsSync(casesDir)) return [];
+  let entries: string[];
+  try { entries = fs.readdirSync(casesDir); } catch { return []; }
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (!entry.toLowerCase().endsWith('.md')) continue;
+    const full = join(casesDir, entry);
+    try {
+      if (fs.statSync(full).isFile()) out.push(full);
+    } catch { /* skip unreadable entry */ }
   }
   return out;
 }

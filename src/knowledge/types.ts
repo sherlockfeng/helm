@@ -8,7 +8,7 @@
  *
  * Phase 6 ships only the types + a `KnowledgeProviderRegistry` so the MCP
  * `query_knowledge` / `list_knowledge_providers` tools have something to dispatch
- * against. Phase 7.5 lands LocalRolesProvider; Phase 13 lands DepscopeProvider.
+ * against. Phase 7.5 lands LocalRolesProvider.
  */
 
 export interface KnowledgeContext {

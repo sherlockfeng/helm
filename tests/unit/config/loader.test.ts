@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadHelmConfig, saveHelmConfig } from '../../../src/config/loader.js';
-import { HelmConfigSchema, DepscopeProviderConfigSchema } from '../../../src/config/schema.js';
+import { HelmConfigSchema } from '../../../src/config/schema.js';
 
 let dir: string;
 let path: string;
@@ -74,24 +74,11 @@ describe('HelmConfigSchema defaults', () => {
       server: { port: 18_000 },
       approval: { defaultTimeoutMs: 1000, waitPollMs: 500 },
       lark: { enabled: true, cliCommand: '/opt/lark-cli' },
-      knowledge: { providers: [{ id: 'depscope', enabled: true, config: { endpoint: 'http://x' } }] },
+      knowledge: { providers: [{ id: 'my-wiki', enabled: true, kind: 'mcp-stdio', config: { command: 'wiki-mcp' } }] },
     });
     expect(c.server.port).toBe(18_000);
     expect(c.lark.cliCommand).toBe('/opt/lark-cli');
     expect(c.knowledge.providers).toHaveLength(1);
-  });
-});
-
-describe('DepscopeProviderConfigSchema', () => {
-  it('requires a valid URL', () => {
-    expect(() => DepscopeProviderConfigSchema.parse({ endpoint: 'not a url' })).toThrow();
-    expect(DepscopeProviderConfigSchema.parse({ endpoint: 'http://x.com' }).mappings).toEqual([]);
-  });
-
-  it('attack: rejects unknown keys', () => {
-    expect(() => DepscopeProviderConfigSchema.parse({
-      endpoint: 'http://x.com', extra: 1,
-    })).toThrow();
   });
 });
 

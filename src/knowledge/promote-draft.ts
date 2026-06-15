@@ -1,7 +1,7 @@
 /**
  * 知识阶梯 PR-γ2: AI 整理 — turn a pile of personal knowledge fragments
  * into a polished promotion draft, with the external knowledge sources
- * (Tika / depscope / custom MCP bridges) as reference context.
+ * (Tika / custom MCP bridges) as reference context.
  *
  * The Tika positioning from the tiers design: 帮助"生成、完善"
  * chat-captured 里的知识 — this is the "完善" half. The LLM merges the

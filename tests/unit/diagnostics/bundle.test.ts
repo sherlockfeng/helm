@@ -49,7 +49,7 @@ describe('createDiagnosticsBundle', () => {
   it('redacts sensitive fields in config.json', () => {
     writeFileSync(configPath, JSON.stringify({
       lark: { authToken: 'sk-supersecret-12345' },
-      knowledge: { providers: [{ id: 'depscope', config: { authToken: 'longTokenABCDEF' } }] },
+      knowledge: { providers: [{ id: 'my-wiki', config: { authToken: 'longTokenABCDEF' } }] },
     }));
     const r = createDiagnosticsBundle({
       targetDir: tmpDir, configPath, logsDir, bridgeSocketPath, db,

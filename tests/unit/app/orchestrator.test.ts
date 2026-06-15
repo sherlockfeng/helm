@@ -283,12 +283,10 @@ describe('createHelmApp — provider hot-reload (Phase 27 / D4)', () => {
     const initialConfig = {
       knowledge: {
         providers: [{
-          id: 'depscope',
+          id: 'my-wiki',
           enabled: true,
-          config: {
-            endpoint: 'http://depscope.test',
-            mappings: [{ cwdPrefix: '/old', scmName: 'org/old' }],
-          },
+          kind: 'mcp-stdio',
+          config: { command: 'wiki-mcp-old' },
         }],
       },
     };
@@ -302,53 +300,51 @@ describe('createHelmApp — provider hot-reload (Phase 27 / D4)', () => {
     });
     await app.start();
     try {
-      // Boot lands depscope alongside the always-on LocalRoles + RequirementsArchive.
+      // Boot lands my-wiki alongside the always-on LocalRoles + RequirementsArchive.
       const initialIds = app.knowledge.list().map((p) => p.id).sort();
-      expect(initialIds).toContain('depscope');
+      expect(initialIds).toContain('my-wiki');
       expect(initialIds).toContain('local-roles');
       expect(initialIds).toContain('requirements-archive');
 
-      // Disable depscope via /api/config — should drop it on the spot.
+      // Disable my-wiki via /api/config — should drop it on the spot.
       const port = app.httpPort();
       let res = await fetch(`http://127.0.0.1:${port}/api/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          knowledge: { providers: [{ id: 'depscope', enabled: false, config: {} }] },
+          knowledge: { providers: [{ id: 'my-wiki', enabled: false, kind: 'mcp-stdio', config: { command: 'wiki-mcp-old' } }] },
         }),
       });
       expect(res.status).toBe(200);
       const afterDisable = app.knowledge.list().map((p) => p.id).sort();
-      expect(afterDisable).not.toContain('depscope');
+      expect(afterDisable).not.toContain('my-wiki');
       expect(afterDisable).toContain('local-roles');
       expect(afterDisable).toContain('requirements-archive');
 
-      // Re-enable with new mappings — should re-register a fresh DepscopeProvider.
+      // Re-enable with a new command — should re-register a fresh provider.
       res = await fetch(`http://127.0.0.1:${port}/api/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           knowledge: {
             providers: [{
-              id: 'depscope',
+              id: 'my-wiki',
               enabled: true,
-              config: {
-                endpoint: 'http://depscope.test',
-                mappings: [{ cwdPrefix: '/new', scmName: 'org/new' }],
-              },
+              kind: 'mcp-stdio',
+              config: { command: 'wiki-mcp-new' },
             }],
           },
         }),
       });
       expect(res.status).toBe(200);
       const afterReEnable = app.knowledge.list().map((p) => p.id).sort();
-      expect(afterReEnable).toContain('depscope');
+      expect(afterReEnable).toContain('my-wiki');
 
       // The persisted file matches what we just sent (atomic-write target).
       const onDisk = JSON.parse(readFileSync(configPath, 'utf8')) as {
         knowledge: { providers: Array<{ id: string; enabled: boolean }> };
       };
-      const dep = onDisk.knowledge.providers.find((p) => p.id === 'depscope')!;
+      const dep = onDisk.knowledge.providers.find((p) => p.id === 'my-wiki')!;
       expect(dep.enabled).toBe(true);
     } finally {
       await app.stop();
@@ -366,22 +362,22 @@ describe('createHelmApp — provider hot-reload (Phase 27 / D4)', () => {
     await app.start();
     try {
       const port = app.httpPort();
-      // depscope with a bogus endpoint (not a URL) — schema rejects per-provider,
+      // mcp-stdio with a missing command — schema rejects per-provider,
       // orchestrator logs a warning and skips. Always-on providers stay alive.
       const res = await fetch(`http://127.0.0.1:${port}/api/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           knowledge: {
-            providers: [{ id: 'depscope', enabled: true, config: { endpoint: 'not-a-url' } }],
+            providers: [{ id: 'my-wiki', enabled: true, kind: 'mcp-stdio', config: {} }],
           },
         }),
       });
       // Top-level config still parses (per-provider config blob is loose);
-      // the per-provider DepscopeProviderConfigSchema is what rejects the URL.
+      // the per-provider McpProviderConfigSchema is what rejects the missing command.
       expect(res.status).toBe(200);
       const ids = app.knowledge.list().map((p) => p.id);
-      expect(ids).not.toContain('depscope');
+      expect(ids).not.toContain('my-wiki');
       expect(ids).toContain('local-roles');
     } finally {
       await app.stop();

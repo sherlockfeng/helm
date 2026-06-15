@@ -10,7 +10,7 @@
  * IA groups (rail order):
  *   - General      — Default engine, Default trainer engine, HTTP port
  *   - Engines      — Cursor / Claude Code / Codex sub-tabs
- *   - Knowledge    — Lifecycle, Depscope provider
+ *   - Knowledge    — Wiki identity, custom MCP providers
  *   - Integrations — Lark, Lark bindings link
  *   - Workflow     — Doc-first toggle, Harness conventions
  *   - Advanced     — Approvals / Harness / Bindings links (was /settings/advanced)
@@ -40,7 +40,7 @@ import { ConfirmDialog } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
-import type { HelmConfig, KnowledgeProviderConfig } from '../api/types.js';
+import type { HelmConfig } from '../api/types.js';
 
 /**
  * Curated Cursor models — shipped manually because Cursor doesn't
@@ -77,30 +77,6 @@ const KNOWN_CODEX_MODELS: ReadonlyArray<{ id: string; label: string }> = [
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
-}
-
-interface DepscopeConfig {
-  endpoint?: string;
-  authToken?: string;
-  mappings?: Array<{ cwdPrefix: string; scmName: string }>;
-  cacheTtlMs?: number;
-  requestTimeoutMs?: number;
-}
-
-function findDepscope(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } | null {
-  const idx = config.knowledge.providers.findIndex((p) => p.id === 'depscope');
-  if (idx < 0) return null;
-  return { provider: config.knowledge.providers[idx]!, index: idx };
-}
-
-function ensureDepscope(config: HelmConfig): { provider: KnowledgeProviderConfig; index: number } {
-  const found = findDepscope(config);
-  if (found) return found;
-  config.knowledge.providers.push({
-    id: 'depscope', enabled: false,
-    config: { endpoint: '', mappings: [] },
-  });
-  return findDepscope(config)!;
 }
 
 interface McpProviderUiConfig {
@@ -596,8 +572,6 @@ function CodexPane({
 function KnowledgeSection({
   draft, update,
 }: { draft: HelmConfig; update: (m: (c: HelmConfig) => void) => void }): ReactElement {
-  const depscope = findDepscope(draft);
-  const depscopeCfg: DepscopeConfig = (depscope?.provider.config ?? {}) as DepscopeConfig;
   const customMcp = draft.knowledge.providers
     .map((provider, index) => ({ provider, index }))
     .filter((e) => e.provider.kind === 'mcp-stdio');
@@ -627,188 +601,6 @@ function KnowledgeSection({
             style={{ width: 240 }}
           />
         </label>
-      </Card>
-
-      <Card variant="danger">
-        <h3 style={{ marginTop: 0 }}>Lifecycle</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
-          When stale chunks soft-archive (hidden from search) and how
-          strongly recent access biases retrieval. Applies to the next
-          sweep / search — no restart.
-        </p>
-        <label className="helm-form-row">
-          <div className="muted">Archive after (days)</div>
-          <input
-            type="number"
-            min={1}
-            value={draft.knowledge.lifecycle?.archiveAfterDays ?? 90}
-            onChange={(e) => update((c) => {
-              c.knowledge.lifecycle = {
-                archiveAfterDays: Math.max(1, Number(e.target.value) || 90),
-                archiveBelowAccessCount: c.knowledge.lifecycle?.archiveBelowAccessCount ?? 3,
-                decayTauDays: c.knowledge.lifecycle?.decayTauDays ?? 30,
-                decayAlpha: c.knowledge.lifecycle?.decayAlpha ?? 0.3,
-              };
-            })}
-            style={{ width: 120 }}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Archive below access count</div>
-          <input
-            type="number"
-            min={0}
-            value={draft.knowledge.lifecycle?.archiveBelowAccessCount ?? 3}
-            onChange={(e) => update((c) => {
-              c.knowledge.lifecycle = {
-                archiveAfterDays: c.knowledge.lifecycle?.archiveAfterDays ?? 90,
-                archiveBelowAccessCount: Math.max(0, Number(e.target.value) || 0),
-                decayTauDays: c.knowledge.lifecycle?.decayTauDays ?? 30,
-                decayAlpha: c.knowledge.lifecycle?.decayAlpha ?? 0.3,
-              };
-            })}
-            style={{ width: 120 }}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Decay τ (days)</div>
-          <input
-            type="number"
-            min={1}
-            value={draft.knowledge.lifecycle?.decayTauDays ?? 30}
-            onChange={(e) => update((c) => {
-              c.knowledge.lifecycle = {
-                archiveAfterDays: c.knowledge.lifecycle?.archiveAfterDays ?? 90,
-                archiveBelowAccessCount: c.knowledge.lifecycle?.archiveBelowAccessCount ?? 3,
-                decayTauDays: Math.max(1, Number(e.target.value) || 30),
-                decayAlpha: c.knowledge.lifecycle?.decayAlpha ?? 0.3,
-              };
-            })}
-            style={{ width: 120 }}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Decay α (boost cap)</div>
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={draft.knowledge.lifecycle?.decayAlpha ?? 0.3}
-            onChange={(e) => update((c) => {
-              c.knowledge.lifecycle = {
-                archiveAfterDays: c.knowledge.lifecycle?.archiveAfterDays ?? 90,
-                archiveBelowAccessCount: c.knowledge.lifecycle?.archiveBelowAccessCount ?? 3,
-                decayTauDays: c.knowledge.lifecycle?.decayTauDays ?? 30,
-                decayAlpha: Math.min(1, Math.max(0, Number(e.target.value) || 0)),
-              };
-            })}
-            style={{ width: 120 }}
-          />
-        </label>
-        <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>
-          Defaults: 90d / access&lt;3 / τ=30d / α=0.3. A chunk is
-          archived only when BOTH "older than archive-after" AND
-          "fewer accesses than threshold" are true. α=0 disables the
-          decay re-rank entirely.
-        </p>
-      </Card>
-
-      <Card>
-        <h3 style={{ marginTop: 0 }}>Depscope provider</h3>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={depscope?.provider.enabled ?? false}
-            onChange={(e) => update((c) => {
-              const found = ensureDepscope(c);
-              c.knowledge.providers[found.index] = {
-                ...found.provider,
-                enabled: e.target.checked,
-              };
-            })}
-          />
-          Enabled
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Endpoint URL</div>
-          <input
-            type="text"
-            value={depscopeCfg.endpoint ?? ''}
-            placeholder="http://depscope.example.com"
-            onChange={(e) => update((c) => {
-              const found = ensureDepscope(c);
-              const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-              cfg.endpoint = e.target.value;
-              found.provider.config = cfg as Record<string, unknown>;
-            })}
-          />
-        </label>
-        <label className="helm-form-row">
-          <div className="muted">Auth token</div>
-          <input
-            type="password"
-            value={depscopeCfg.authToken ?? ''}
-            placeholder="Bearer token (optional)"
-            onChange={(e) => update((c) => {
-              const found = ensureDepscope(c);
-              const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-              cfg.authToken = e.target.value || undefined;
-              found.provider.config = cfg as Record<string, unknown>;
-            })}
-          />
-        </label>
-        <div className="label" style={{ marginTop: 16 }}>cwd → scmName mappings</div>
-        {(depscopeCfg.mappings ?? []).map((m, i) => (
-          <div key={i} className="helm-mapping-row">
-            <input
-              type="text"
-              value={m.cwdPrefix}
-              placeholder="~/proj/foo"
-              aria-label={`cwd prefix for mapping ${i + 1}`}
-              onChange={(e) => update((c) => {
-                const found = ensureDepscope(c);
-                const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-                cfg.mappings = (cfg.mappings ?? []).map((mm, idx) => idx === i ? { ...mm, cwdPrefix: e.target.value } : mm);
-                found.provider.config = cfg as Record<string, unknown>;
-              })}
-            />
-            <input
-              type="text"
-              value={m.scmName}
-              placeholder="org/repo"
-              aria-label={`scm name for mapping ${i + 1}`}
-              onChange={(e) => update((c) => {
-                const found = ensureDepscope(c);
-                const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-                cfg.mappings = (cfg.mappings ?? []).map((mm, idx) => idx === i ? { ...mm, scmName: e.target.value } : mm);
-                found.provider.config = cfg as Record<string, unknown>;
-              })}
-            />
-            <Button
-              type="button"
-              variant="danger-outline"
-              aria-label={`Remove mapping for ${m.cwdPrefix || '(unset prefix)'}`}
-              onClick={() => update((c) => {
-                const found = ensureDepscope(c);
-                const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-                cfg.mappings = (cfg.mappings ?? []).filter((_, idx) => idx !== i);
-                found.provider.config = cfg as Record<string, unknown>;
-              })}
-            >Remove</Button>
-          </div>
-        ))}
-        <Button
-          type="button"
-          variant="ghost"
-          style={{ marginTop: 10 }}
-          onClick={() => update((c) => {
-            const found = ensureDepscope(c);
-            const cfg = (found.provider.config ?? {}) as DepscopeConfig;
-            cfg.mappings = [...(cfg.mappings ?? []), { cwdPrefix: '', scmName: '' }];
-            found.provider.config = cfg as Record<string, unknown>;
-          })}
-        >+ Add mapping</Button>
       </Card>
 
       <Card>

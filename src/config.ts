@@ -53,7 +53,7 @@ export interface AppConfig {
     getContextTimeoutMs: number;
   };
   relay?: {
-    backend: 'depscope' | 'cloudflare-tunnel' | 'tailscale' | 'self-hosted';
+    backend: 'cloudflare-tunnel' | 'tailscale' | 'self-hosted';
     config: Record<string, unknown>;
   };
 }

@@ -39,49 +39,6 @@ import { PRODUCT_SYSTEM_PROMPT } from './builtin/product.js';
 import { DEVELOPER_SYSTEM_PROMPT } from './builtin/developer.js';
 import { TESTER_SYSTEM_PROMPT } from './builtin/tester.js';
 
-/**
- * Phase 77: post-mutation sweep hook. The orchestrator installs a callback
- * via {@link setLifecycleSweepTrigger} at boot; library mutations call it
- * fire-and-forget after train / update / drop. Pulled out as a setter so
- * `library.ts` doesn't import the orchestrator (which would create a
- * cycle — orchestrator already imports `trainRole` from this module).
- *
- * No-op when no trigger has been installed (e.g. in unit tests that drive
- * library functions directly).
- */
-type LifecycleSweepTrigger = (roleId: string) => void;
-let lifecycleSweepTrigger: LifecycleSweepTrigger | null = null;
-export function setLifecycleSweepTrigger(trigger: LifecycleSweepTrigger | null): void {
-  lifecycleSweepTrigger = trigger;
-}
-
-// R-21: optional logger sink so the orchestrator can route
-// trigger-failure noise to the file logger instead of stderr. The
-// module stays usable in unit tests (no logger installed) by
-// falling back to console.warn.
-type SweepLogger = { warn(msg: string, fields?: { data?: unknown }): void };
-let sweepLogger: SweepLogger | null = null;
-export function setLifecycleSweepLogger(logger: SweepLogger | null): void {
-  sweepLogger = logger;
-}
-
-export function fireLifecycleSweep(roleId: string): void {
-  if (!lifecycleSweepTrigger) return;
-  try {
-    lifecycleSweepTrigger(roleId);
-  } catch (err) {
-    // Triggers are fire-and-forget — failing to schedule a sweep must
-    // never break a train/update call.
-    const message = (err as Error).message;
-    if (sweepLogger) {
-      sweepLogger.warn('lifecycle_sweep_trigger_threw', { data: { roleId, message } });
-    } else {
-      // eslint-disable-next-line no-console
-      console.warn('[roles/library] lifecycle sweep trigger threw:', message);
-    }
-  }
-}
-
 const BUILTIN_ROLES: Omit<Role, 'createdAt' | 'version' | 'bindable'>[] = [
   { id: 'product', name: 'Product Agent', systemPrompt: PRODUCT_SYSTEM_PROMPT, docPath: 'docs/roles/product.md', isBuiltin: true },
   { id: 'developer', name: 'Developer Agent', systemPrompt: DEVELOPER_SYSTEM_PROMPT, docPath: 'docs/roles/developer.md', isBuiltin: true },
@@ -247,12 +204,6 @@ export async function trainRole(db: Database.Database, input: TrainRoleInput): P
 
   const refreshed = getRoleRow(db, input.roleId);
   if (!refreshed) throw new Error(`trainRole: role disappeared after upsert: ${input.roleId}`);
-  // Phase 77: nudge the orchestrator to sweep this role. trainRole is a
-  // full-replace, so brand-new chunks won't qualify yet — but any leftover
-  // archived state from earlier rounds is gone too (the DELETE above
-  // wiped them), so the sweep itself is essentially a no-op. We still
-  // fire it for symmetry with updateRole / drop_knowledge_source.
-  fireLifecycleSweep(input.roleId);
   return refreshed;
 }
 
@@ -474,8 +425,6 @@ export async function updateRole(
 
   const refreshed = getRoleRow(db, existing.id);
   if (!refreshed) throw new Error(`updateRole: role disappeared after update: ${existing.id}`);
-  // Phase 77: post-mutation sweep — see fireLifecycleSweep docstring.
-  fireLifecycleSweep(existing.id);
   return { status: 'applied', role: refreshed, chunksAdded, chunkIds };
 }
 
@@ -571,17 +520,6 @@ export interface SearchKnowledgeOptions {
    * answering "do you have older notes on X?") opt in here.
    */
   includeArchived?: boolean;
-  /**
-   * Phase 77: override the decay re-rank time constant (days). Defaults
-   * to the lifecycle module's DEFAULT_DECAY_TAU_DAYS. Production callers
-   * read this from `liveConfig.knowledge.lifecycle.decayTauDays`.
-   */
-  decayTauDays?: number;
-  /**
-   * Phase 77: max boost (and effective penalty) of the decay re-rank.
-   * 0 disables the re-rank cleanly. Defaults to module constant.
-   */
-  decayAlpha?: number;
 }
 
 export async function searchKnowledge(
@@ -607,14 +545,10 @@ export async function searchKnowledge(
   // Phase 76: dispatch via hybridSearch. Single-leg strategies still flow
   // through the same module so all the diversification / kind-filter /
   // result-shape logic stays in one place.
-  // Phase 77: thread includeArchived + decay knobs through. Defaults are
-  // injected by hybrid-search when fields are omitted.
   const hits: HybridSearchHit[] = await hybridSearch({
     db, roleId, query, topK, strategy,
     ...(opts.kind ? { kind: opts.kind } : {}),
     ...(opts.includeArchived !== undefined ? { includeArchived: opts.includeArchived } : {}),
-    ...(opts.decayTauDays !== undefined ? { decayTauDays: opts.decayTauDays } : {}),
-    ...(opts.decayAlpha !== undefined ? { decayAlpha: opts.decayAlpha } : {}),
   });
   return hits.map((h) => {
     const r: KnowledgeSearchResult = {

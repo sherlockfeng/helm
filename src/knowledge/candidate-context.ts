@@ -3,8 +3,8 @@
  *
  * "对话里找到知识点后，用外部知识源查一下，一起展示出来" — when capture
  * inserts a candidate, helm immediately queries the configured external
- * providers (custom MCP bridges like the user's knowledge platform,
- * depscope, …) with the fragment text in the background and caches the
+ * providers (custom MCP bridges like the user's knowledge platform)
+ * with the fragment text in the background and caches the
  * answer. By the time the user opens the Review inbox, the org-side
  * context is already sitting next to the chat-captured fragment — no
  * button, no on-page round-trip.

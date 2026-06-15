@@ -1016,7 +1016,7 @@ export const MIGRATIONS: Migration[] = [
     version: 29,
     description:
       'candidate_external_context — cached external-knowledge context'
-      + ' (Tika / depscope / custom MCP bridges) per knowledge candidate.'
+      + ' (Tika / custom MCP bridges) per knowledge candidate.'
       + ' Prefetched in the background right after capture so the Review'
       + ' inbox renders the candidate and the org-side context together'
       + ' without a click or an on-page round-trip.',

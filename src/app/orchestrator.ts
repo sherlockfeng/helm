@@ -45,20 +45,16 @@ import { aggregateSessionContext } from '../knowledge/aggregator.js';
 import { LocalRolesProvider } from '../knowledge/local-roles-provider.js';
 import {
   seedBuiltinRoles,
-  setLifecycleSweepLogger,
-  setLifecycleSweepTrigger,
   trainRole,
 } from '../roles/library.js';
 import { setHybridSearchLogger } from '../roles/hybrid-search.js';
-import { runArchivalSweep } from '../roles/lifecycle.js';
 import { captureFromAgentResponse } from '../capture/index.js';
 import { captureToEntityBuckets } from '../capture/entity-bucket.js';
 import { fetchAndCacheCandidateContext } from '../knowledge/candidate-context.js';
-import { DepscopeProvider } from '../knowledge/depscope-provider.js';
 import { McpStdioProvider } from '../knowledge/mcp-provider.js';
 import { RequirementsArchiveProvider } from '../knowledge/requirements-archive-provider.js';
 import { KnowledgeProviderRegistry, type KnowledgeProvider } from '../knowledge/types.js';
-import { DepscopeProviderConfigSchema, McpProviderConfigSchema, type HelmConfig } from '../config/schema.js';
+import { McpProviderConfigSchema, type HelmConfig } from '../config/schema.js';
 import { createHttpApi, type HttpApiHandle } from '../api/server.js';
 import { createDiagnosticsBundle } from '../diagnostics/bundle.js';
 import { saveHelmConfig } from '../config/loader.js';
@@ -190,7 +186,7 @@ export interface HelmAppDeps {
   waitPollMs?: number;
   /**
    * Optional config (from `~/.helm/config.json`). When set, registers
-   * configured KnowledgeProviders (DepscopeProvider et al.) into the
+   * configured KnowledgeProviders (mcp-stdio bridges) into the
    * registry alongside the always-on LocalRolesProvider. Tests usually
    * skip this and add providers manually via `app.knowledge.register`.
    */
@@ -278,65 +274,11 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // it on every saveConfig.
   let liveConfig = deps.config ?? HelmConfigSchema.parse({});
 
-  // Phase 77: knowledge-lifecycle wiring.
-  //
-  //   - On boot: one immediate sweep so a long-idle install catches up.
-  //   - Every 24h: cron-style sweep across every role with chunks.
-  //   - On mutation (trainRole / updateRole / drop_knowledge_source): a
-  //     fire-and-forget per-role sweep, via the library + MCP triggers.
-  //
-  // The sweep reads thresholds from `liveConfig.knowledge.lifecycle`
-  // through a closure so a Settings edit takes effect on the NEXT sweep
-  // — no orchestrator restart needed. `unref` on the interval so test
-  // suites that forget to call `.stop()` don't deadlock the event loop.
-  const lifecycleLog = deps.loggers.module('knowledge.lifecycle');
-  function runSweepWithLogging(roleId?: string): void {
-    try {
-      const result = runArchivalSweep(deps.db, {
-        ...(roleId ? { roleId } : {}),
-        thresholds: liveConfig.knowledge?.lifecycle,
-      });
-      // Decision §11: log-only reporting, no UI. Skip noisy empty sweeps
-      // (no candidates anywhere) — only log when at least one role had
-      // candidates to consider OR at least one chunk got archived.
-      if (result.archived > 0 || result.scanned > 0) {
-        lifecycleLog.info('archival_sweep_completed', {
-          data: {
-            ...(roleId ? { roleId } : { scope: 'all_roles' }),
-            scanned: result.scanned,
-            archived: result.archived,
-            skipped: result.skipped,
-            durationMs: result.durationMs,
-            byRole: result.byRole.filter((r) => r.scanned > 0),
-          },
-        });
-      }
-    } catch (err) {
-      lifecycleLog.warn('archival_sweep_failed', {
-        data: { error: (err as Error).message, ...(roleId ? { roleId } : {}) },
-      });
-    }
-  }
-  // Mutation-driven sweep: library + MCP fire this fire-and-forget. We
-  // do the actual SQL on a microtask so the caller's promise resolves
-  // before the sweep starts hitting the DB.
-  setLifecycleSweepTrigger((roleId) => {
-    queueMicrotask(() => runSweepWithLogging(roleId));
-  });
   // R-21: route the leaf modules' best-effort failure logs through the
   // structured logger so they land in ~/.helm/logs/ alongside the
   // rest. Tests that don't pass a loggerFactory simply skip the wiring
   // — the leaf modules fall back to console.warn in that case.
-  setLifecycleSweepLogger(deps.loggers.module('roles.library'));
   setHybridSearchLogger(deps.loggers.module('roles.hybrid-search'));
-  // Boot sweep — synchronous so failures show up in the boot log.
-  runSweepWithLogging();
-  // 24h cron tick.
-  const LIFECYCLE_CRON_MS = 24 * 60 * 60 * 1000;
-  const lifecycleCron: NodeJS.Timeout = setInterval(() => {
-    runSweepWithLogging();
-  }, LIFECYCLE_CRON_MS);
-  lifecycleCron.unref?.();
 
   // .helmrole plugin/subscription system removed — knowledge sync is
   // the llm-wiki repo (Sources page + repoSyncCron below).
@@ -779,7 +721,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           } catch { /* engine unavailable — skip classification */ }
         }
         // PR-β (knowledge tiers): prefetch external context (Tika /
-        // depscope / custom MCP bridges) for each new candidate so the
+        // custom MCP bridges) for each new candidate so the
         // Review inbox shows fragment + org-side knowledge together
         // with zero clicks. Fire-and-forget; failures just leave the
         // cache empty and the UI offers a manual refresh.
@@ -1340,7 +1282,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       ...(effectiveVerificationRunner ? { verificationRunner: effectiveVerificationRunner } : {}),
       knowledgeRepoManager,
       // The renderer's knowledge-lookup endpoint queries the same
-      // registry the MCP tools use (custom MCP bridges / depscope).
+      // registry the MCP tools use (custom MCP bridges).
       knowledge,
       // PR-γ2: lazy engine getter for the AI-整理 promote draft.
       // current() throws when no engine is wired — the endpoint maps
@@ -1684,15 +1626,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     async stop(): Promise<void> {
       if (!started) return;
       log.info('shutdown_start');
-      // Phase 77: stop the lifecycle cron + unhook the mutation trigger
-      // first so a stray train/update/drop call during shutdown doesn't
-      // schedule new sweep work onto a tearing-down DB connection.
-      clearInterval(lifecycleCron);
-      setLifecycleSweepTrigger(null);
-      // R-21: detach the module-level loggers so a post-shutdown
+      // R-21: detach the module-level logger so a post-shutdown
       // failure in another HelmApp instance (tests) doesn't write
       // into our closed log files.
-      setLifecycleSweepLogger(null);
       setHybridSearchLogger(null);
       clearInterval(repoSyncCron);
       await httpApi.stop();
@@ -1807,24 +1743,6 @@ function buildConfiguredProviders(
 
   for (const decl of decls) {
     if (!decl.enabled) continue;
-    if (decl.id === 'depscope') {
-      const parsed = DepscopeProviderConfigSchema.safeParse(decl.config ?? {});
-      if (!parsed.success) {
-        log.warn('knowledge_provider_config_invalid', {
-          data: { id: decl.id, issues: parsed.error.issues },
-        });
-        continue;
-      }
-      providers.push(new DepscopeProvider({
-        endpoint: parsed.data.endpoint,
-        authToken: parsed.data.authToken,
-        mappings: parsed.data.mappings,
-        cacheTtlMs: parsed.data.cacheTtlMs,
-        requestTimeoutMs: parsed.data.requestTimeoutMs,
-        onWarning: (msg, ctx) => loggers.module('knowledge.depscope').warn(msg, { data: ctx }),
-      }));
-      continue;
-    }
     if (decl.kind === 'mcp-stdio') {
       // Generic config-driven MCP bridge: any id; the vendor-specific
       // launch command / env stay in the user's local config file, so

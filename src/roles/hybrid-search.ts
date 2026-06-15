@@ -39,12 +39,6 @@ import type {
   KnowledgeChunkKind,
 } from '../storage/types.js';
 import { extractEntitiesFromQuery } from './entity-extract.js';
-import {
-  DEFAULT_DECAY_ALPHA,
-  DEFAULT_DECAY_TAU_DAYS,
-  applyDecayBoost,
-  scoreDecay,
-} from './lifecycle.js';
 
 /** Standard RRF constant. Adjust only with benchmark evidence. */
 export const RRF_K = 60;
@@ -109,19 +103,6 @@ export interface HybridSearchInput {
    * `includeArchived: true` on the search_knowledge MCP tool".
    */
   includeArchived?: boolean;
-  /**
-   * Phase 77: decay re-rank knobs. Sourced from helm Settings in
-   * production; defaults to the module constants for tests / benchmarks.
-   * decayAlpha=0 disables the re-rank cleanly (formula collapses to
-   * final = rrf * 1).
-   */
-  decayTauDays?: number;
-  decayAlpha?: number;
-  /**
-   * Phase 77: inject a clock for testing the decay re-rank deterministically.
-   * Production callers leave this undefined — search uses `new Date()`.
-   */
-  now?: Date;
 }
 
 /**
@@ -149,9 +130,6 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
   const weights = input.weights ?? DEFAULT_RRF_WEIGHTS;
   const k = input.rrfK ?? RRF_K;
   const includeArchived = input.includeArchived ?? false;
-  const decayTau = input.decayTauDays ?? DEFAULT_DECAY_TAU_DAYS;
-  const decayAlpha = input.decayAlpha ?? DEFAULT_DECAY_ALPHA;
-  const now = input.now ?? new Date();
   // Each leg fetches more candidates than `topK` so RRF has overlap to
   // work with. agentmemory uses 2x; for small role corpora (< 200 chunks
   // typical) that's already most of the table — cheap.
@@ -226,17 +204,9 @@ async function runFusion(input: HybridSearchInput): Promise<HybridSearchHit[]> {
     const rBm25 = bm25Ranks.get(chunkId);
     const rEnt  = entityRanks.get(chunkId);
 
-    const rrfScore =
+    const fusedScore =
       (rBm25 != null ? effective.bm25 / (k + rBm25) : 0) +
       (rEnt  != null ? effective.entity / (k + rEnt)  : 0);
-
-    // Phase 77: decay re-rank. Multiply the RRF score by a (1 + α·decay)
-    // factor so freshly-used chunks get a small boost and dormant ones
-    // sit on the unaltered RRF floor. With α=0 (or chunks all equally
-    // fresh) the formula collapses to `final = rrf`, leaving Phase 76
-    // ranking identical when lifecycle is opted out.
-    const decayFactor = scoreDecay(chunk.lastAccessedAt, chunk.createdAt, now, decayTau);
-    const fusedScore = applyDecayBoost(rrfScore, decayFactor, decayAlpha);
 
     const contributing: Array<'bm25' | 'entity'> = [];
     if (rBm25 != null) contributing.push('bm25');

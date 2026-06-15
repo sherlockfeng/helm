@@ -95,7 +95,7 @@ export function VerificationCasesPage(): ReactElement {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="confirmed">Confirmed</SelectItem>
-                <SelectItem value="proposed">Proposed (R-5)</SelectItem>
+                <SelectItem value="proposed">Proposed</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
                 <SelectItem value="archived">Archived</SelectItem>
                 <SelectItem value="all">All</SelectItem>

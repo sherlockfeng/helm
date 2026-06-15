@@ -198,7 +198,7 @@ describe('importRepoIntoLibrary', () => {
       db, localPath: '/repo', profile: 'helm-native', fs,
     });
     expect(summary).toEqual({
-      rolesImported: 0, pointsUpserted: 0, conflictsDetected: 0, errors: {},
+      rolesImported: 0, pointsUpserted: 0, casesImported: 0, conflictsDetected: 0, errors: {},
     });
   });
 

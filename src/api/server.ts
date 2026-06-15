@@ -202,7 +202,7 @@ export interface HttpApiDeps {
   /**
    * Provider registry for POST /api/knowledge-lookup — the renderer's
    * "外部知识对照" button queries external knowledge (custom MCP
-   * bridges, depscope, …) with a candidate's text to show org-side
+   * bridges) with a candidate's text to show org-side
    * context next to chat-captured content. Absent = endpoint responds 501.
    */
   knowledge?: KnowledgeProviderRegistry;
@@ -1325,7 +1325,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // Used by the "外部知识对照" button next to candidates: query org
       // knowledge with the captured text and show both side by side.
       // When `providers` is omitted, defaults to the enabled providers
-      // declared in config (custom MCP bridges / depscope) — NOT the
+      // declared in config (custom MCP bridges) — NOT the
       // always-on local providers, whose content the page already shows.
       if (url.pathname === '/api/knowledge-lookup') {
         if (req.method !== 'POST') return methodNotAllowed(res);

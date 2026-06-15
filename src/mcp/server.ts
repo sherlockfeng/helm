@@ -28,7 +28,6 @@ import { KnowledgeProviderRegistry } from '../knowledge/types.js';
 import { WorkflowEngine } from '../workflow/engine.js';
 import { updateDocFirst } from '../workflow/doc-first.js';
 import {
-  fireLifecycleSweep,
   getRole,
   listRoles,
   searchKnowledge,
@@ -534,14 +533,6 @@ export function createMcpServer(
   }, async ({ sourceId }) => {
     const sourceBefore = getSource(deps.db, sourceId);
     const result = deleteSource(deps.db, sourceId);
-    // Phase 77: dropping a source is a knowledge mutation — kick the
-    // lifecycle sweep for the affected role so any newly-orphaned
-    // archived stats stay coherent. Fire-and-forget; no-op when no
-    // trigger has been installed (e.g. in unit tests using createMcpServer
-    // directly).
-    if (result.removed && sourceBefore) {
-      fireLifecycleSweep(sourceBefore.roleId);
-    }
     return jsonResult({
       sourceId,
       removed: result.removed,

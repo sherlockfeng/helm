@@ -132,11 +132,6 @@ export interface PendingBind {
 // Mirror of src/config/schema.ts HelmConfig — kept loose so the renderer
 // doesn't need Zod. Backend rejects unknown keys; renderer just edits what
 // it knows about.
-export interface DepscopeMappingConfig {
-  cwdPrefix: string;
-  scmName: string;
-}
-
 export interface KnowledgeProviderConfig {
   id: string;
   enabled: boolean;
@@ -145,27 +140,12 @@ export interface KnowledgeProviderConfig {
   config?: Record<string, unknown>;
 }
 
-/** Phase 77: knowledge lifecycle thresholds — user-tunable in Settings. */
-export interface KnowledgeLifecycleConfig {
-  /** Min chunk age (days, since createdAt) before archive becomes eligible. Default 90. */
-  archiveAfterDays: number;
-  /** Max access_count for a chunk to still count as "cold". Default 3. */
-  archiveBelowAccessCount: number;
-  /** Time constant (days) for exp(-Δt/τ) decay during fusion re-rank. Default 30. */
-  decayTauDays: number;
-  /** Max boost / penalty α the decay re-rank can apply. 0 disables. Default 0.3. */
-  decayAlpha: number;
-}
-
 export interface HelmConfig {
   server: { port: number };
   approval: { defaultTimeoutMs: number; waitPollMs: number };
   lark: { enabled: boolean; cliCommand?: string; env?: Record<string, string> };
   knowledge: {
     providers: KnowledgeProviderConfig[];
-    /** Phase 77: lifecycle block. Optional on the type so old configs parse;
-     * backend supplies defaults. */
-    lifecycle?: KnowledgeLifecycleConfig;
     /** Files-as-truth PR-2: <user> segment for chat-captured/ writes
      * into a subscribed llm-wiki repo. Empty/absent = DB-only promote. */
     wikiUsername?: string;

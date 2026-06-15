@@ -441,12 +441,12 @@ export function bumpChunkAccess(
 }
 
 /**
- * Phase 77: bulk-archive a set of chunks. Used by `runArchivalSweep`. Just
+ * Phase 77: bulk-archive a set of chunks. Just
  * flips `archived = 1`; the chunk row + embedding + FTS index entries all
  * remain in place — search-side readers filter them out by default.
  *
  * Returns the number of rows that changed (i.e. were not already
- * archived). Lets the sweep log a meaningful "archived N chunks" number.
+ * archived).
  */
 export function archiveChunks(
   db: Database.Database,
@@ -485,52 +485,6 @@ export function unarchiveChunk(
     WHERE id = ? AND archived = 1
   `).run(at, chunkId);
   return info.changes > 0;
-}
-
-/**
- * Phase 77: scan one role's chunks for "cold + old" candidates. The actual
- * archive-write happens in `runArchivalSweep` (which calls
- * `archiveChunks`); this helper just returns the id list so the sweep
- * orchestrator can log + report on what would change.
- *
- * Match rule:
- *   archived = 0
- *   AND created_at <= cutoffCreated
- *   AND access_count < maxAccessCount
- *   AND (last_accessed_at IS NULL OR last_accessed_at <= cutoffLastAccessed)
- *
- * The last clause is the "but did you use it lately?" gate — a chunk that
- * was queried 3 days ago but only twice ever still counts as warm. Pass
- * `cutoffLastAccessed = cutoffCreated` for the common "old by both
- * measures" sweep.
- */
-export function findArchiveCandidates(
-  db: Database.Database,
-  roleId: string,
-  cutoffCreated: string,
-  cutoffLastAccessed: string,
-  maxAccessCount: number,
-): string[] {
-  return (db.prepare(`
-    SELECT id FROM knowledge_chunks
-    WHERE role_id = ?
-      AND archived = 0
-      AND created_at <= ?
-      AND access_count < ?
-      AND (last_accessed_at IS NULL OR last_accessed_at <= ?)
-  `).all(roleId, cutoffCreated, maxAccessCount, cutoffLastAccessed) as Array<{ id: string }>)
-    .map((r) => String(r.id));
-}
-
-/**
- * Phase 77: list role ids that have at least one (non-archived) chunk.
- * Lets the orchestrator's 24h cron iterate only the roles that actually
- * have something to sweep, instead of pulling every roles row.
- */
-export function listRoleIdsWithChunks(db: Database.Database): string[] {
-  return (db.prepare(
-    `SELECT DISTINCT role_id FROM knowledge_chunks WHERE archived = 0`,
-  ).all() as Array<{ role_id: string }>).map((r) => String(r.role_id));
 }
 
 // ── AgentSession ───────────────────────────────────────────────────────────

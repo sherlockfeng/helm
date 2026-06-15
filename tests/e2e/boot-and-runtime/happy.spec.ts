@@ -138,12 +138,10 @@ describe('PUT /api/config provider hot-reload (Phase 27 / D4)', () => {
       knowledge: {
         providers: [
           {
-            id: 'depscope',
+            id: 'my-wiki',
             enabled: true,
-            config: {
-              endpoint: 'http://depscope-old.test',
-              mappings: [{ cwdPrefix: '/old', scmName: 'org/old' }],
-            },
+            kind: 'mcp-stdio',
+            config: { command: 'wiki-mcp-old' },
           },
         ],
       },
@@ -157,27 +155,25 @@ describe('PUT /api/config provider hot-reload (Phase 27 / D4)', () => {
       },
     });
     try {
-      // Boot lands depscope alongside the always-on LocalRoles +
+      // Boot lands my-wiki alongside the always-on LocalRoles +
       // RequirementsArchive. We use the in-process registry rather than HTTP
       // because the user's signal is "the providers list reflects the new
       // config" and the registry is the source of truth.
       const beforeIds = harness.app.knowledge.list().map((p) => p.id).sort();
-      expect(beforeIds).toContain('depscope');
+      expect(beforeIds).toContain('my-wiki');
       expect(beforeIds).toContain('local-roles');
 
-      // Save a config that drops depscope and adds it back with a different
-      // endpoint — exercises BOTH the unregister path and the new-provider
+      // Save a config that drops my-wiki and adds it back with a different
+      // command — exercises BOTH the unregister path and the new-provider
       // build path. PUT /api/config fires reconfigureKnowledgeProviders.
       const next: Partial<HelmConfig> = {
         knowledge: {
           providers: [
             {
-              id: 'depscope',
+              id: 'my-wiki',
               enabled: true,
-              config: {
-                endpoint: 'http://depscope-new.test',
-                mappings: [{ cwdPrefix: '/new', scmName: 'org/new' }],
-              },
+              kind: 'mcp-stdio',
+              config: { command: 'wiki-mcp-new' },
             },
           ],
         },
@@ -189,19 +185,16 @@ describe('PUT /api/config provider hot-reload (Phase 27 / D4)', () => {
       });
       expect(r.status).toBe(200);
 
-      // Provider id is still 'depscope' but the underlying instance was
-      // swapped — DepscopeProvider's id is fixed so we can't tell from id
-      // alone. We assert the registered list still shows depscope (would be
-      // missing if reconfigure dropped without re-adding) and the endpoint
-      // change is visible by inspecting healthcheck (DepscopeProvider exposes
-      // it). Cheaper: just assert the always-on providers stayed (no
-      // double-registration crashed the registry).
+      // Provider id is still 'my-wiki' but the underlying instance was
+      // swapped. We assert the registered list still shows my-wiki (would be
+      // missing if reconfigure dropped without re-adding) and the always-on
+      // providers stayed (no double-registration crashed the registry).
       const afterIds = harness.app.knowledge.list().map((p) => p.id).sort();
-      expect(afterIds).toContain('depscope');
+      expect(afterIds).toContain('my-wiki');
       expect(afterIds).toContain('local-roles');
       expect(afterIds).toContain('requirements-archive');
 
-      // Disabling depscope drops it — proves the unregister path runs.
+      // Disabling my-wiki drops it — proves the unregister path runs.
       const dropped: Partial<HelmConfig> = {
         knowledge: { providers: [] },
       };
@@ -213,7 +206,7 @@ describe('PUT /api/config provider hot-reload (Phase 27 / D4)', () => {
       expect(r2.status).toBe(200);
 
       const droppedIds = harness.app.knowledge.list().map((p) => p.id).sort();
-      expect(droppedIds).not.toContain('depscope');
+      expect(droppedIds).not.toContain('my-wiki');
       expect(droppedIds).toContain('local-roles'); // always-on stays
     } finally {
       await harness.shutdown();

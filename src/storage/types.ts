@@ -218,17 +218,14 @@ export interface KnowledgeChunk {
   accessCount?: number;
   /**
    * Phase 77: ISO timestamp of the most recent search hit. NULL for chunks
-   * that have never been accessed. The decay function (`scoreDecay`)
-   * substitutes `createdAt` when this is undefined so newly-trained chunks
-   * are not unfairly demoted before they have a chance to be queried.
+   * that have never been accessed.
    */
   lastAccessedAt?: string;
   /**
    * Phase 77: soft-archived flag. Archived chunks default OUT of every
-   * retrieval leg (BM25 / cosine / entity). Set by the background sweep
-   * when the chunk is both old and rarely accessed; cleared by the Roles
-   * UI's "unarchive" button. NEVER hard-deleted — hard deletion goes
-   * through `drop_knowledge_source` (user-explicit).
+   * retrieval leg (BM25 / cosine / entity). Set + cleared manually via the
+   * Roles UI's "archive" / "unarchive" buttons. NEVER hard-deleted — hard
+   * deletion goes through `drop_knowledge_source` (user-explicit).
    *
    * Optional on the type for the same reason as `accessCount` — SQL
    * DEFAULT (0 = false) covers the insert path; readers always populate.

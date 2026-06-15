@@ -2,7 +2,7 @@
  * Zod schema for `~/.helm/config.json`.
  *
  * Every config field is optional from the user's POV — sensible defaults
- * cover the `helm` zero-config local-only case. Users opt into Lark / Depscope
+ * cover the `helm` zero-config local-only case. Users opt into Lark
  * by adding the corresponding sections.
  *
  * Validation runs at boot. On parse failure the loader falls back to defaults
@@ -19,18 +19,12 @@ const LarkConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
 }).strict();
 
-const DepscopeMappingSchema = z.object({
-  cwdPrefix: z.string(),
-  scmName: z.string(),
-}).strict();
-
 const KnowledgeProviderConfigSchema = z.object({
-  /** Builtin provider id ('depscope') or any user-chosen id for kind='mcp-stdio'. */
+  /** Any user-chosen id for kind='mcp-stdio'. */
   id: z.string(),
   enabled: z.boolean().default(true),
   /**
-   * Provider implementation. Omitted = the id IS the implementation
-   * (built-ins like 'depscope'). 'mcp-stdio' = the generic config-driven
+   * Provider implementation. 'mcp-stdio' = the generic config-driven
    * MCP bridge — any id, vendor specifics live entirely in `config`
    * (which stays in ~/.helm/config.json, never in this repo).
    */
@@ -38,36 +32,8 @@ const KnowledgeProviderConfigSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
-/**
- * Phase 77 (knowledge lifecycle): user-tunable thresholds for the background
- * archival sweep and the in-search decay re-rank. All optional with sensible
- * defaults — zero-config users get the same behavior as if the block were
- * absent. Each field can be edited via Settings → Knowledge lifecycle.
- *
- * - `archiveAfterDays` — minimum age (since createdAt) before a chunk is
- *   eligible for archive. Default 90.
- * - `archiveBelowAccessCount` — max access_count for a chunk to still be
- *   considered "cold". 0/1/2 hits in 90+ days → archive. Default 3.
- * - `decayTauDays` — time constant for the `exp(-Δt/τ)` decay applied during
- *   the fusion re-rank. Smaller τ = sharper drop. Default 30.
- * - `decayAlpha` — max boost / penalty the decay multiplier can apply to
- *   the RRF score. `final = rrf * (1 + α * decay)`; α=0.3 caps influence
- *   at ±30%. Default 0.3.
- */
-const KnowledgeLifecycleConfigSchema = z.object({
-  archiveAfterDays: z.number().int().positive().default(90),
-  archiveBelowAccessCount: z.number().int().nonnegative().default(3),
-  decayTauDays: z.number().positive().default(30),
-  decayAlpha: z.number().min(0).max(1).default(0.3),
-}).strict();
-
 const KnowledgeConfigSchema = z.object({
   providers: z.array(KnowledgeProviderConfigSchema).default([]),
-  // Phase 77: optional so existing saved configs (without a `lifecycle`
-  // key) parse cleanly and the orchestrator's `liveConfig.knowledge?.lifecycle`
-  // read keeps the same null-safety. When the field is present, defaults
-  // for individual sub-fields are still filled by the inner schema.
-  lifecycle: KnowledgeLifecycleConfigSchema.optional(),
   // Files-as-truth PR-2: the <user> path segment promote writes under
   // chat-captured/<user>/<role>/ in the subscribed llm-wiki repo. The
   // directory name lands in company-repo MRs, so it's user-entered
@@ -225,23 +191,6 @@ export const HelmConfigSchema = z.object({
 export type HelmConfig = z.infer<typeof HelmConfigSchema>;
 export type LarkConfig = z.infer<typeof LarkConfigSchema>;
 export type KnowledgeProviderConfig = z.infer<typeof KnowledgeProviderConfigSchema>;
-export type DepscopeMapping = z.infer<typeof DepscopeMappingSchema>;
-export type KnowledgeLifecycleConfig = z.infer<typeof KnowledgeLifecycleConfigSchema>;
-
-/**
- * Schema slice for the per-provider `config` blob when id === 'depscope'.
- * Re-validated separately so adding new providers doesn't widen the
- * top-level schema.
- */
-export const DepscopeProviderConfigSchema = z.object({
-  endpoint: z.string().url(),
-  authToken: z.string().optional(),
-  mappings: z.array(DepscopeMappingSchema).default([]),
-  cacheTtlMs: z.number().int().positive().optional(),
-  requestTimeoutMs: z.number().int().positive().optional(),
-}).strict();
-
-export type DepscopeProviderConfig = z.infer<typeof DepscopeProviderConfigSchema>;
 
 /**
  * Schema slice for the per-provider `config` blob when kind === 'mcp-stdio':

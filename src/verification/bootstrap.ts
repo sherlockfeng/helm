@@ -25,11 +25,15 @@ import {
   loadProviderConfigFromFile,
   resolveProviders,
   type ProviderConfig,
+  type ProviderModel,
   type ResolvedConfig,
+  type ResolvedProvider,
 } from './provider-config.js';
 import { HttpLlmClient } from './http-llm-client.js';
+import { makeEngineCompletionClient } from './engine-llm-client.js';
 import {
   runCase,
+  type CompletionClient,
   type RepoStateProbe,
   type Retriever,
 } from './runner.js';
@@ -50,6 +54,14 @@ export interface BootstrapInput {
    * absent we instantiate the real one.
    */
   llmClient?: import('./runner.js').CompletionClient;
+  /**
+   * Run-now fallback: when there's NO providers.json, build the runner
+   * against the app's configured engine (the same `LlmClient` the
+   * summarizer uses). Lazy getter so it picks up the current engine.
+   */
+  engineLlm?: () => import('../summarizer/campaign.js').LlmClient;
+  /** Model id passed to the engine client when `engineLlm` is used. */
+  engineModel?: string;
 }
 
 export type VerificationRunnerFn = (caseId: string) => Promise<BenchmarkRun | null>;
@@ -82,15 +94,48 @@ export function defaultProviderConfigPath(): string {
  * Production paths SHOULD wrap this in try/catch so a misconfigured
  * machine still boots — verification is opt-in.
  */
+/** True when the engine getter resolves without throwing (an engine is
+ *  actually configured). The getter throws when no adapter is wired. */
+function engineAvailable(getLlm: () => import('../summarizer/campaign.js').LlmClient): boolean {
+  try { getLlm(); return true; } catch { return false; }
+}
+
 export function buildVerificationRunner(input: BootstrapInput): BootstrapResult | null {
   const path = input.providerConfigPath ?? defaultProviderConfigPath();
-  let cfg = input.rawConfig;
-  if (!cfg) {
-    if (!existsSync(path)) return null;
-    cfg = loadProviderConfigFromFile(path);
+  let providers: ResolvedConfig;
+  let llm: CompletionClient;
+
+  // Path A (preferred when present): providers.json on disk or rawConfig.
+  // This is unchanged — the file path always wins so an explicit
+  // benchmark config keeps overriding the app engine.
+  const cfg = input.rawConfig ?? (existsSync(path) ? loadProviderConfigFromFile(path) : undefined);
+  if (cfg) {
+    providers = resolveProviders(cfg, input.env);
+    llm = input.llmClient ?? new HttpLlmClient();
+  } else if (input.engineLlm && engineAvailable(input.engineLlm)) {
+    // Path B (Run-now fallback): no providers.json, but the app has a
+    // configured engine. engineAvailable() probes the getter — it throws
+    // when no engine is wired (CI/e2e, fresh installs), in which case we
+    // fall through to null so /run still reports 503 "no runner" rather
+    // than building a runner that 500s at call time. Synthesize a
+    // ResolvedConfig whose answer/judge both point at a dummy provider —
+    // the engine client ignores it.
+    const model = input.engineModel ?? 'auto';
+    const dummyModel: ProviderModel = {
+      id: model,
+      api: 'engine',
+      provider: 'engine',
+      baseUrl: 'n/a',
+      contextWindow: 0,
+      maxTokens: 1024,
+    };
+    const engineProvider: ResolvedProvider = { id: 'engine', model: dummyModel, apiKey: 'n/a' };
+    providers = { answer: engineProvider, judge: engineProvider };
+    llm = input.llmClient ?? makeEngineCompletionClient(input.engineLlm, model);
+  } else {
+    // Neither providers.json NOR engineLlm — leave the runner unconfigured.
+    return null;
   }
-  const providers = resolveProviders(cfg, input.env);
-  const llm = input.llmClient ?? new HttpLlmClient();
 
   const embedFn = input.embedFn ?? (async (): Promise<Float32Array> => new Float32Array());
   const localProvider = new LocalRolesProvider({ db: input.db, embedFn });

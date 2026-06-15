@@ -62,6 +62,7 @@ export function useEventStream(
         'binding.removed',
         'channel.message_enqueued',
         'channel.message_consumed',
+        'verification.changed',
       ];
       for (const t of knownTypes) wireType(t);
 

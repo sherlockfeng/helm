@@ -9,6 +9,7 @@
 
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import { getRole, listRoles, upsertRole } from './roles.js';
 
 export type ChatKnowledgeKind =
   | 'spec' | 'example' | 'warning' | 'runbook' | 'glossary' | 'other';
@@ -63,6 +64,52 @@ export function topicIdFromName(name: string, fallback: string): string {
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
   return id.length >= 1 ? id : fallback;
+}
+
+/**
+ * Resolve the home topic (role id) for accepting a knowledge point.
+ * Precedence: explicit existing id → suggested existing id → a topic by
+ * NAME (explicit newTopicName, else suggestedTopicName).
+ *
+ * The name path REUSES an existing topic with the same name
+ * (case-insensitive) — so several points routed to the same suggested/typed
+ * "归类" land together instead of spawning name-duplicate roles
+ * (og-…/-2/-3). Only when no same-name topic exists is a new one created
+ * (plain, non-bindable). Returns null when nothing resolves a name.
+ */
+export function resolveOrCreateTopic(
+  db: Database.Database,
+  input: {
+    targetRoleId?: string | null;
+    suggestedRoleId?: string | null;
+    newTopicName?: string | null;
+    suggestedTopicName?: string | null;
+    now: string;
+    fallbackSeed: string;
+  },
+): string | null {
+  const explicit = input.targetRoleId?.trim();
+  if (explicit) return explicit;
+  if (input.suggestedRoleId) return input.suggestedRoleId;
+
+  const name = (input.newTopicName?.trim() || input.suggestedTopicName?.trim() || '');
+  if (!name) return null;
+
+  const existing = listRoles(db).find(
+    (r) => r.name.trim().toLowerCase() === name.toLowerCase(),
+  );
+  if (existing) return existing.id;
+
+  const base = topicIdFromName(name, `topic-${input.fallbackSeed.slice(0, 8)}`);
+  let id = base;
+  for (let n = 2; getRole(db, id); n += 1) {
+    if (n > 99) { id = `topic-${input.fallbackSeed.slice(0, 8)}`; break; }
+    id = `${base}-${n}`;
+  }
+  upsertRole(db, {
+    id, name, systemPrompt: '', isBuiltin: false, bindable: false, createdAt: input.now,
+  });
+  return id;
 }
 
 /**

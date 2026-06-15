@@ -97,6 +97,9 @@ describe('MCP server — tool registration', () => {
     expect(names).toContain('summarize_campaign');
     // Phase 26: spawner
     expect(names).toContain('start_relay_chat_session');
+    // Benchmark/eval cases (always-on)
+    expect(names).toContain('propose_benchmark_case');
+    expect(names).toContain('update_benchmark_case');
   });
 });
 

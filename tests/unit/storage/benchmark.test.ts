@@ -27,6 +27,7 @@ import {
   listRunsForCase,
   recordCostDelta,
   updateAlertStatus,
+  updateCase,
 } from '../../../src/storage/repos/benchmark.js';
 import { upsertRole } from '../../../src/storage/repos/roles.js';
 
@@ -140,6 +141,72 @@ describe('benchmark_case', () => {
     expect(listCases(db, { roleId: 'r-1' }).map((c) => c.id)).toEqual(['c-a']);
     const proposed = listCases(db, { status: 'proposed' });
     expect(proposed.map((c) => c.id)).toEqual(['c-c']);
+  });
+});
+
+describe('updateCase', () => {
+  let db: BetterSqlite3.Database;
+  beforeEach(() => {
+    db = openDb();
+    seedRoleAndChunk(db, 'r-1', 'p-1');
+    seedRoleAndChunk(db, 'r-2', 'p-2');
+  });
+  afterEach(() => { db.close(); });
+
+  it('returns false for an unknown case id and writes nothing', () => {
+    expect(updateCase(db, 'nope', { name: 'x' })).toBe(false);
+  });
+
+  it('patches only the provided scalar fields and bumps updated_at', () => {
+    insertCase(db, {
+      id: 'c-1', name: 'orig', question: 'q-orig', expectedTruth: 't-orig',
+      proposedSource: 'llm-on-edit',
+    });
+    const before = getCase(db, 'c-1')!;
+    const ok = updateCase(db, 'c-1', { question: 'q-new' });
+    expect(ok).toBe(true);
+    const after = getCase(db, 'c-1')!;
+    expect(after.question).toBe('q-new');
+    expect(after.name).toBe('orig');         // untouched
+    expect(after.expectedTruth).toBe('t-orig'); // untouched
+    expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
+  it('replaces golden + target role joins when provided', () => {
+    insertCase(db, {
+      id: 'c-2', name: 'n', question: 'q', expectedTruth: 't',
+      goldenPointIds: ['p-1'], targetRoleIds: ['r-1'],
+      proposedSource: 'llm-on-edit',
+    });
+    const ok = updateCase(db, 'c-2', {
+      goldenPointIds: ['p-2'], targetRoleIds: ['r-2'],
+    });
+    expect(ok).toBe(true);
+    const after = getCase(db, 'c-2')!;
+    expect(after.goldenPointIds).toEqual(['p-2']);
+    expect(after.targetRoleIds).toEqual(['r-2']);
+  });
+
+  it('leaves joins intact when those fields are omitted', () => {
+    insertCase(db, {
+      id: 'c-3', name: 'n', question: 'q', expectedTruth: 't',
+      goldenPointIds: ['p-1'], targetRoleIds: ['r-1'],
+      proposedSource: 'llm-on-edit',
+    });
+    updateCase(db, 'c-3', { name: 'renamed' });
+    const after = getCase(db, 'c-3')!;
+    expect(after.name).toBe('renamed');
+    expect(after.goldenPointIds).toEqual(['p-1']);
+    expect(after.targetRoleIds).toEqual(['r-1']);
+  });
+
+  it('can clear joins by passing an empty array', () => {
+    insertCase(db, {
+      id: 'c-4', name: 'n', question: 'q', expectedTruth: 't',
+      goldenPointIds: ['p-1'], proposedSource: 'llm-on-edit',
+    });
+    updateCase(db, 'c-4', { goldenPointIds: [] });
+    expect(getCase(db, 'c-4')!.goldenPointIds).toEqual([]);
   });
 });
 

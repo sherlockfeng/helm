@@ -109,6 +109,59 @@ export function insertCase(db: Database.Database, input: InsertCaseInput): void 
 }
 
 /**
+ * Patch an existing case in place. Only columns present in `patch` are
+ * touched; absent fields are left as-is. When `goldenPointIds` /
+ * `targetRoleIds` are provided they fully REPLACE the existing join rows
+ * (DELETE then INSERT, mirroring how insertCase writes them). Returns false
+ * when the case id doesn't exist (nothing written).
+ *
+ * Used by the MCP `update_benchmark_case` tool: still-proposed cases are
+ * file-less, so editing them is a pure DB mutation — no file writes, no LLM.
+ */
+export function updateCase(
+  db: Database.Database,
+  id: string,
+  patch: {
+    name?: string;
+    question?: string;
+    expectedTruth?: string;
+    goldenPointIds?: readonly string[];
+    targetRoleIds?: readonly string[];
+  },
+): boolean {
+  const exists = db.prepare(`SELECT 1 FROM benchmark_case WHERE id = ?`).get(id);
+  if (!exists) return false;
+
+  db.transaction(() => {
+    const sets: string[] = [];
+    const params: Record<string, unknown> = { id };
+    if (patch.name !== undefined)          { sets.push('name = @name');                     params['name'] = patch.name; }
+    if (patch.question !== undefined)      { sets.push('question = @question');             params['question'] = patch.question; }
+    if (patch.expectedTruth !== undefined) { sets.push('expected_truth = @expected_truth'); params['expected_truth'] = patch.expectedTruth; }
+    // Always bump updated_at so the row reflects the edit.
+    sets.push('updated_at = @updated_at');
+    params['updated_at'] = Date.now();
+    db.prepare(`UPDATE benchmark_case SET ${sets.join(', ')} WHERE id = @id`).run(params);
+
+    if (patch.goldenPointIds !== undefined) {
+      db.prepare(`DELETE FROM benchmark_case_golden WHERE case_id = ?`).run(id);
+      const insert = db.prepare(
+        `INSERT INTO benchmark_case_golden (case_id, point_id) VALUES (?, ?)`,
+      );
+      for (const pid of patch.goldenPointIds) insert.run(id, pid);
+    }
+    if (patch.targetRoleIds !== undefined) {
+      db.prepare(`DELETE FROM benchmark_case_target_role WHERE case_id = ?`).run(id);
+      const insert = db.prepare(
+        `INSERT INTO benchmark_case_target_role (case_id, role_id) VALUES (?, ?)`,
+      );
+      for (const rid of patch.targetRoleIds) insert.run(id, rid);
+    }
+  })();
+  return true;
+}
+
+/**
  * DEDUP guard for auto-proposed cases: true when a non-terminal case
  * (proposed or confirmed) already references this knowledge point as its
  * proposal source. Used to avoid drafting a second case for the same chunk.

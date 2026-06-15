@@ -925,6 +925,76 @@ export class KnowledgeRepoManager {
     safeRemoveDir(repo.localPath);
   }
 
+  /**
+   * Topic-merge companion to `mergeRole` (storage side): physically move the
+   * chat-captured files from the old topic's dir into the new topic's dir so
+   * files-as-truth keeps pointing at the merged topic, AND so the next import
+   * can't resurrect the old role from a leftover directory.
+   *
+   * Source dir = chat-captured/<user>/<fromRole>; target dir = …/<toRole>.
+   * Every file (incl. the `cases/` subtree) is moved, sub-structure preserved;
+   * an existing target file is overwritten. The now-empty source tree is
+   * removed. Best-effort per file (a single failure doesn't abort the rest).
+   *
+   * Returns {moved:0} when the source dir doesn't exist (nothing to merge).
+   * Runs under the repo lock so it can't interleave with a concurrent
+   * fetch/import touching the same working copy.
+   */
+  async moveCapturedFilesForMerge(input: {
+    repoId: string;
+    fromRoleId: string;
+    toRoleId: string;
+    username: string;
+  }): Promise<{ moved: number }> {
+    const repo = getKnowledgeRepo(this.db, input.repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${input.repoId}`);
+    }
+    const user = sanitizePathSegment(input.username);
+    const fromRole = sanitizePathSegment(input.fromRoleId);
+    const toRole = sanitizePathSegment(input.toRoleId);
+    if (!user || !fromRole || !toRole) {
+      throw new KnowledgeRepoManagerError(
+        `cannot build chat-captured paths from username=${JSON.stringify(input.username)} fromRoleId=${JSON.stringify(input.fromRoleId)} toRoleId=${JSON.stringify(input.toRoleId)}`,
+      );
+    }
+    return this.withRepoLock(input.repoId, async () => {
+      const sourceDir = join(repo.localPath, 'chat-captured', user, fromRole);
+      const targetDir = join(repo.localPath, 'chat-captured', user, toRole);
+      if (!existsSync(sourceDir)) return { moved: 0 };
+
+      let moved = 0;
+      // Recursive walk: collect every file relative to sourceDir, preserving
+      // sub-structure (e.g. cases/<slug>.md).
+      const walk = (rel: string): void => {
+        const absDir = rel ? join(sourceDir, rel) : sourceDir;
+        for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+          const childRel = rel ? join(rel, entry.name) : entry.name;
+          if (entry.isDirectory()) {
+            walk(childRel);
+          } else {
+            try {
+              const srcAbs = join(sourceDir, childRel);
+              const dstAbs = join(targetDir, childRel);
+              mkdirSync(dirname(dstAbs), { recursive: true });
+              // renameSync overwrites an existing target file on POSIX; on
+              // collision we still want last-writer-wins, so remove first.
+              if (existsSync(dstAbs)) rmSync(dstAbs, { force: true });
+              renameSync(srcAbs, dstAbs);
+              moved++;
+            } catch { /* best-effort per file; keep going */ }
+          }
+        }
+      };
+      walk('');
+
+      // Drop the now-empty source tree so a leftover dir can't resurrect the
+      // old role on the next import.
+      try { rmSync(sourceDir, { recursive: true, force: true }); } catch { /* swallow */ }
+      return { moved };
+    });
+  }
+
   private withRepoLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
     // FIFO chain: every caller chains off the previous *tail* — not the
     // current head — so three concurrent callers run strictly in

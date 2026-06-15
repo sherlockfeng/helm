@@ -94,6 +94,12 @@ export function defaultProviderConfigPath(): string {
  * Production paths SHOULD wrap this in try/catch so a misconfigured
  * machine still boots — verification is opt-in.
  */
+/** True when the engine getter resolves without throwing (an engine is
+ *  actually configured). The getter throws when no adapter is wired. */
+function engineAvailable(getLlm: () => import('../summarizer/campaign.js').LlmClient): boolean {
+  try { getLlm(); return true; } catch { return false; }
+}
+
 export function buildVerificationRunner(input: BootstrapInput): BootstrapResult | null {
   const path = input.providerConfigPath ?? defaultProviderConfigPath();
   let providers: ResolvedConfig;
@@ -106,10 +112,14 @@ export function buildVerificationRunner(input: BootstrapInput): BootstrapResult 
   if (cfg) {
     providers = resolveProviders(cfg, input.env);
     llm = input.llmClient ?? new HttpLlmClient();
-  } else if (input.engineLlm) {
+  } else if (input.engineLlm && engineAvailable(input.engineLlm)) {
     // Path B (Run-now fallback): no providers.json, but the app has a
-    // configured engine. Synthesize a ResolvedConfig whose answer/judge
-    // both point at a dummy provider — the engine client ignores it.
+    // configured engine. engineAvailable() probes the getter — it throws
+    // when no engine is wired (CI/e2e, fresh installs), in which case we
+    // fall through to null so /run still reports 503 "no runner" rather
+    // than building a runner that 500s at call time. Synthesize a
+    // ResolvedConfig whose answer/judge both point at a dummy provider —
+    // the engine client ignores it.
     const model = input.engineModel ?? 'auto';
     const dummyModel: ProviderModel = {
       id: model,

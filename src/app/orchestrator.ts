@@ -1247,25 +1247,41 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // null; malformed JSON / unresolvable env → caught + logged) leave
   // the API surface running with verificationRunner=undefined, which
   // the candidate-accept hook + POST /run path treat as 503 / no-op.
-  let bootstrappedRunner: ((caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>) | undefined;
-  if (!deps.verificationRunner) {
-    try {
-      // Run-now fallback: when there's no providers.json, build the
-      // runner against the app's configured engine (same LlmClient the
-      // summarizer uses). providers.json still wins when present.
-      const bootstrapped = buildVerificationRunner({
-        db: deps.db,
-        engineLlm: () => engineRouter.current().summarize,
-        engineModel: liveConfig.cursor.model,
-      });
-      if (bootstrapped) bootstrappedRunner = bootstrapped.runner;
-    } catch (err) {
-      deps.loggers.module('verification').warn('bootstrap_failed', {
-        data: { message: (err as Error).message },
-      });
+  // Run-now: build the verification runner LAZILY on first use. At boot the
+  // engine adapters aren't wired yet (refreshEngineRouter runs after httpApi
+  // is created below), so probing the engine here would always fail and the
+  // engine fallback would never activate. Deferring to the first /run — by
+  // which time the engine is available — lets it bind. Memoize only on
+  // success so a transient "engine not ready" doesn't stick. providers.json
+  // still wins inside buildVerificationRunner. When neither a providers.json
+  // nor an engine resolves, throw a NO_RUNNER-coded error the API maps to 503.
+  let builtRunner: ((caseId: string) => Promise<import('../storage/types.js').BenchmarkRun | null>) | undefined;
+  const lazyVerificationRunner = async (
+    caseId: string,
+  ): Promise<import('../storage/types.js').BenchmarkRun | null> => {
+    if (!builtRunner) {
+      try {
+        const b = buildVerificationRunner({
+          db: deps.db,
+          engineLlm: () => engineRouter.current().summarize,
+          engineModel: liveConfig.cursor.model,
+        });
+        builtRunner = b?.runner;
+      } catch (err) {
+        deps.loggers.module('verification').warn('bootstrap_failed', {
+          data: { message: (err as Error).message },
+        });
+      }
     }
-  }
-  const effectiveVerificationRunner = deps.verificationRunner ?? bootstrappedRunner;
+    if (!builtRunner) {
+      throw Object.assign(
+        new Error('Verification runner unavailable: no engine configured and no ~/.helm/benchmark/providers.json.'),
+        { code: 'NO_RUNNER' as const },
+      );
+    }
+    return builtRunner(caseId);
+  };
+  const effectiveVerificationRunner = deps.verificationRunner ?? lazyVerificationRunner;
 
   // R-18 wire-up helpers — cursor hooks-installed probe + path getter
   // used by the hostInstaller dep. Pulled out of the deps object so

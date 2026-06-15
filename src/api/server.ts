@@ -1245,6 +1245,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           }
           return send(res, 200, { run });
         } catch (err) {
+          // The lazy runner throws NO_RUNNER when neither an engine nor a
+          // providers.json resolved — that's a 503 (configuration), not a
+          // 500 (genuine run failure).
+          if ((err as { code?: string }).code === 'NO_RUNNER') {
+            return send(res, 503, { error: 'no_runner', message: (err as Error).message });
+          }
           deps.logger?.warn('verification_run_failed', {
             data: { caseId, message: (err as Error).message },
           });

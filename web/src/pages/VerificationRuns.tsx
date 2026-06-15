@@ -13,7 +13,7 @@
  * helpers landing in PR 5.5).
  */
 
-import { useMemo, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { helmApi } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
@@ -139,7 +139,17 @@ function GlobalRunsView(): ReactElement {
   );
 }
 
+/** Parse the judge verdict JSON for a human summary; fall back to raw text. */
+function judgeSummary(run: BenchmarkRun): string {
+  try {
+    const v = JSON.parse(run.judgeVerdictJson) as { summary?: string; aligned?: boolean; score?: number };
+    if (v && typeof v.summary === 'string' && v.summary.trim()) return v.summary.trim();
+  } catch { /* fall through */ }
+  return run.judgeVerdictText || '(no verdict text)';
+}
+
 function RunCard({ run, delta }: { run: BenchmarkRun; delta?: number }): ReactElement {
+  const [open, setOpen] = useState(false);
   const shortSha = run.knowledgeStateSha.startsWith('local-')
     ? run.knowledgeStateSha.slice(0, 14)
     : run.knowledgeStateSha.slice(0, 8);
@@ -169,6 +179,35 @@ function RunCard({ run, delta }: { run: BenchmarkRun; delta?: number }): ReactEl
           <div>{triggered}</div>
         </div>
       </div>
+      <button
+        type="button"
+        className="helm-conv-link-button"
+        onClick={() => setOpen((v) => !v)}
+        style={{ marginTop: 8, fontSize: 12 }}
+      >
+        {open ? '收起详情' : '展开详情（答案 + 裁判打分）'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
+              AI 答案（用召回的 golden 知识点作答）
+            </div>
+            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>{run.answerText || '(empty)'}</pre>
+          </div>
+          <div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>
+              裁判判定（对比 expected truth → 对齐分 {run.alignmentPct.toFixed(0)}）
+            </div>
+            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0 }}>{judgeSummary(run)}</pre>
+          </div>
+          <div className="muted" style={{ fontSize: 11 }}>
+            {run.answerProviderId} / {run.judgeProviderId}
+            {typeof run.llmCallCount === 'number' && <> · {run.llmCallCount} LLM calls</>}
+            {typeof run.durationMs === 'number' && <> · {(run.durationMs / 1000).toFixed(1)}s</>}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

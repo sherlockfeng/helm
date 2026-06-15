@@ -64,6 +64,7 @@ import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
 import { curateChatEntities } from '../knowledge/entity-curation.js';
 import { extractChatKnowledge } from '../summarizer/chat-knowledge-extract.js';
+import { proposeBenchmarkCaseFromChunk } from '../summarizer/benchmark-propose.js';
 import {
   getLastExtractedAgentChars,
   setLastExtractedAgentChars,
@@ -1438,6 +1439,14 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           llm: adapter.summarize,
           model: liveConfig.cursor.model,
         });
+      },
+      proposeBenchmarkCase: async ({ roleId, chunkId, event }) => {
+        const a = engineRouter.current();
+        return proposeBenchmarkCaseFromChunk(
+          deps.db,
+          { roleId, chunkId, ...(event ? { event } : {}) },
+          { llm: a.summarize, model: liveConfig.cursor.model },
+        );
       },
       // PR-C (Path B): spawn a brand-new role from this chat's unknown
       // entities. Pipeline:

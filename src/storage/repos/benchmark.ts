@@ -108,6 +108,21 @@ export function insertCase(db: Database.Database, input: InsertCaseInput): void 
   })();
 }
 
+/**
+ * DEDUP guard for auto-proposed cases: true when a non-terminal case
+ * (proposed or confirmed) already references this knowledge point as its
+ * proposal source. Used to avoid drafting a second case for the same chunk.
+ */
+export function caseExistsForPoint(db: Database.Database, pointId: string): boolean {
+  const row = db.prepare(`
+    SELECT 1 FROM benchmark_case
+     WHERE proposed_from_point_id = ?
+       AND status IN ('proposed', 'confirmed')
+     LIMIT 1
+  `).get(pointId);
+  return row !== undefined;
+}
+
 export function getCase(db: Database.Database, id: string): BenchmarkCase | undefined {
   const row = db.prepare(`SELECT * FROM benchmark_case WHERE id = ?`).get(id) as
     Record<string, unknown> | undefined;

@@ -54,6 +54,8 @@ import {
   serializePoint,
   type SerializerProfile,
 } from './serializer.js';
+import { serializeCase } from './case-file.js';
+import { getCase } from '../storage/repos/benchmark.js';
 import {
   PublishError,
   addAndCommit,
@@ -740,6 +742,66 @@ export class KnowledgeRepoManager {
       // round-trips into this exact file from now on.
       this.db.prepare(`UPDATE knowledge_chunks SET source_file = ? WHERE id = ?`)
         .run(relPath, chunk.id);
+      return { relPath, absPath };
+    });
+  }
+
+  /**
+   * Files-as-truth (benchmark): write a benchmark case into helm's
+   * exclusive zone of the llm-wiki working copy —
+   * `chat-captured/<user>/<role>/cases/<slug>.md` — so it rides the same
+   * batch-MR publish + import flow as captured knowledge points. The
+   * role is the case's first target role (fallback to 'imported' when
+   * the case lists none). The importer re-keys by the fence id, so
+   * there's no DB source_file column to maintain for cases.
+   *
+   * Runs under the repo lock so it can't interleave with a concurrent
+   * fetch/import touching the same working copy.
+   */
+  async writeCaseFile(input: {
+    repoId: string;
+    caseId: string;
+    /** Settings-provided wiki username — the <user> path segment. */
+    username: string;
+  }): Promise<{ relPath: string; absPath: string }> {
+    const repo = getKnowledgeRepo(this.db, input.repoId);
+    if (!repo) {
+      throw new KnowledgeRepoManagerError(`unknown repo: ${input.repoId}`);
+    }
+    if (repo.profile !== 'llm-wiki') {
+      throw new KnowledgeRepoManagerError(
+        `writeCaseFile requires an llm-wiki repo (got profile=${repo.profile})`,
+      );
+    }
+    const benchmarkCase = getCase(this.db, input.caseId);
+    if (!benchmarkCase) {
+      throw new KnowledgeRepoManagerError(`unknown case: ${input.caseId}`);
+    }
+    const user = sanitizePathSegment(input.username);
+    const role = sanitizePathSegment(benchmarkCase.targetRoleIds[0] ?? 'imported');
+    const slug = slugifyPointId(
+      benchmarkCase.name,
+      `case-${sha256Short(benchmarkCase.id).slice(0, 8)}`,
+    );
+    const file = sanitizePathSegment(slug);
+    if (!user || !role || !file) {
+      throw new KnowledgeRepoManagerError(
+        `cannot build a cases path from username=${JSON.stringify(input.username)} role=${JSON.stringify(role)} caseId=${JSON.stringify(benchmarkCase.id)}`,
+      );
+    }
+    const relPath = `chat-captured/${user}/${role}/cases/${file}.md`;
+    return this.withRepoLock(input.repoId, async () => {
+      const text = serializeCase({
+        id: benchmarkCase.id,
+        name: benchmarkCase.name,
+        question: benchmarkCase.question,
+        expectedTruth: benchmarkCase.expectedTruth,
+        goldenPointIds: [...benchmarkCase.goldenPointIds],
+        targetRoleIds: [...benchmarkCase.targetRoleIds],
+      });
+      const absPath = join(repo.localPath, relPath);
+      mkdirSync(dirname(absPath), { recursive: true });
+      writeFileSync(absPath, text, 'utf8');
       return { relPath, absPath };
     });
   }

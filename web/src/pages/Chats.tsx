@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { ApiError, helmApi } from '../api/client.js';
+import { openAssistant } from '../components/assistant-bus.js';
 import { useApi } from '../hooks/useApi.js';
 import { useEventStream } from '../hooks/useEventStream.js';
 import { EmptyState } from '../components/EmptyState.js';
@@ -663,15 +664,27 @@ export function KnowledgePointsSection({
         >
           可沉淀的知识
         </span>
-        <button
-          type="button"
-          className="helm-conv-link-button"
-          disabled={extracting}
-          onClick={() => { void extract(); }}
-          title="用 LLM 立刻读这条对话，提取可沉淀为 topic 的知识点（不必等自动触发）"
-        >
-          {extracting ? '提取中…' : '✨ 提取知识点'}
-        </button>
+        <span style={{ display: 'flex', gap: 12 }}>
+          {points.length > 0 && (
+            <button
+              type="button"
+              className="helm-conv-link-button"
+              onClick={() => openAssistant(seedReorganize(hostSessionId, points, roles))}
+              title="打开右下角 helm 助手，让它通读这条对话、把要沉淀的知识和 case 重新整理：找出重叠/冲突、提合并去重方案（确认后再动手）"
+            >
+              ✨ 让助手整理
+            </button>
+          )}
+          <button
+            type="button"
+            className="helm-conv-link-button"
+            disabled={extracting}
+            onClick={() => { void extract(); }}
+            title="用 LLM 立刻读这条对话，提取可沉淀为 topic 的知识点（不必等自动触发）"
+          >
+            {extracting ? '提取中…' : '✨ 提取知识点'}
+          </button>
+        </span>
       </div>
       {points.length === 0 ? (
         <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
@@ -711,6 +724,26 @@ interface TopicGroupModel {
  * by role id; new-topic suggestions key by proposed name. Groups keep
  * first-appearance order so the list is stable across refetches.
  */
+/**
+ * Build the seed message for "✨ 让助手整理" on a chat's candidate panel —
+ * the user's original ask: re-organize this chat's to-be-deposited knowledge +
+ * cases, surfacing overlaps/conflicts before accepting. Names the chat + the
+ * suggested topics so the agent knows the scope.
+ */
+export function seedReorganize(
+  hostSessionId: string,
+  points: ChatKnowledgePoint[],
+  roles: { id: string; name: string }[],
+): string {
+  const topics = [...new Set(points.map((p) => (p.suggestedRoleId
+    ? (roles.find((r) => r.id === p.suggestedRoleId)?.name ?? p.suggestedRoleId)
+    : (p.suggestedTopicName ?? '新 topic'))))];
+  return `这条对话(host session ${hostSessionId})里有 ${points.length} 条待沉淀的知识点，`
+    + `建议归入：${topics.join('、')}。请帮我重新整理这些要沉淀的知识和对应的 case：`
+    + `先读相关 topic 的现有知识，找出与之重叠或冲突的地方，提出合并 / 去重 / 改写方案；`
+    + `涉及修改先征求我同意，我确认后再动手。`;
+}
+
 export function groupPointsByTopic(
   points: ChatKnowledgePoint[],
   roles: { id: string; name: string }[],

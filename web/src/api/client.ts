@@ -190,6 +190,12 @@ export const helmApi = {
     request<{ roleId: string; deleted: true }>(
       'DELETE', `/api/roles/${encodeURIComponent(roleId)}`,
     ),
+  // Topics merge: fold `fromId` into `targetRoleId` — knowledge / candidates /
+  // cases all transfer, then the source topic is deleted.
+  mergeRole: (fromId: string, targetRoleId: string) =>
+    request<{ merged: boolean; from: string; to: string; chunksMoved?: number }>(
+      'POST', `/api/roles/${encodeURIComponent(fromId)}/merge`, { targetRoleId },
+    ),
   // Phase 55: rename / clear the user-facing chat label. Pass null or empty
   // string to clear back to the firstPrompt-based fallback.
   setChatLabel: (hostSessionId: string, label: string | null) =>

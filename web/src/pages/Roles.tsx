@@ -26,6 +26,7 @@ import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
+import { Combobox } from '../components/Combobox.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 import {
@@ -939,6 +940,8 @@ function RoleCard({
   onToggleBindable,
   onPromote,
   onDelete,
+  mergeTargets,
+  onMerge,
 }: {
   role: RoleSummary;
   expanded: boolean;
@@ -952,6 +955,10 @@ function RoleCard({
   onPromote: () => void;
   /** Topics cleanup: delete this collection (confirm handled by page). */
   onDelete: () => void;
+  /** Topics merge: other non-builtin topics this one can be folded into. */
+  mergeTargets: { value: string; label: string }[];
+  /** Topics merge: user picked a target; page opens the confirm dialog. */
+  onMerge: (targetRoleId: string, targetName: string) => void;
 }) {
   return (
     <Card>
@@ -1027,6 +1034,18 @@ function RoleCard({
               删除
             </button>
           )}
+          {!role.isBuiltin && mergeTargets.length > 0 && (
+            <Combobox
+              value=""
+              placeholder="合并到…"
+              items={mergeTargets}
+              emptyMessage="没有其它可合并的主题"
+              onValueChange={(targetId) => {
+                const t = mergeTargets.find((m) => m.value === targetId);
+                if (t) onMerge(t.value, t.label);
+              }}
+            />
+          )}
           {!role.isBuiltin && (
             <button
               onClick={onToggleBindable}
@@ -1064,6 +1083,22 @@ function RolesPageBase() {
   // PR-γ: promote modal target.
   const [promoteTarget, setPromoteTarget] = useState<{ roleId: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ roleId: string; name: string } | null>(null);
+  // Topics merge: holds {from, to} while the confirm dialog is open.
+  const [mergeTarget, setMergeTarget] = useState<
+    { fromId: string; fromName: string; toId: string; toName: string } | null
+  >(null);
+
+  const doMerge = async (): Promise<void> => {
+    if (!mergeTarget) return;
+    try {
+      await helmApi.mergeRole(mergeTarget.fromId, mergeTarget.toId);
+      toast.success(`已并入 ${mergeTarget.toName}`);
+      setMergeTarget(null);
+      reload();
+    } catch (err) {
+      toast.error(`合并失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    }
+  };
 
   const doDelete = async (): Promise<void> => {
     if (!deleteTarget) return;
@@ -1159,6 +1194,11 @@ function RolesPageBase() {
           onToggleBindable={() => { void toggleBindable(r); }}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
+          mergeTargets={allRoles
+            .filter((o) => o.id !== r.id)
+            .map((o) => ({ value: o.id, label: o.name }))}
+          onMerge={(toId, toName) =>
+            setMergeTarget({ fromId: r.id, fromName: r.name, toId, toName })}
           onTrained={() => reload()}
         />
       ))}
@@ -1176,6 +1216,11 @@ function RolesPageBase() {
           onToggleBindable={() => { void toggleBindable(r); }}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
+          mergeTargets={allRoles
+            .filter((o) => o.id !== r.id)
+            .map((o) => ({ value: o.id, label: o.name }))}
+          onMerge={(toId, toName) =>
+            setMergeTarget({ fromId: r.id, fromName: r.name, toId, toName })}
           onTrained={() => reload()}
         />
       ))}
@@ -1188,6 +1233,17 @@ function RolesPageBase() {
           description="topic 及其全部知识点将被删除，不可恢复。chat-captured 里的文件不受影响。"
           confirmLabel="删除"
           onConfirm={() => { void doDelete(); }}
+        />
+      )}
+
+      {mergeTarget && (
+        <ConfirmDialog
+          open
+          onOpenChange={(o) => { if (!o) setMergeTarget(null); }}
+          title={`合并主题`}
+          description={`把『${mergeTarget.fromName}』并入『${mergeTarget.toName}』？本主题将被删除，知识点/候选/case 全部转移。`}
+          confirmLabel="合并"
+          onConfirm={() => { void doMerge(); }}
         />
       )}
 

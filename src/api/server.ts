@@ -89,6 +89,7 @@ import {
   getChunksForRole,
   getRole as getRoleRow,
   getSource,
+  mergeRole as mergeRoleRepo,
   listRoles as listRolesRepo,
   listSourcesForRole,
   unarchiveChunk as unarchiveChunkRepo,
@@ -891,6 +892,57 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
         deleteRoleRepo(deps.db, role.id);
         return send(res, 200, { roleId: role.id, deleted: true });
+      }
+      // Topics merge: POST /api/roles/:id/merge  body { targetRoleId }
+      // Folds source topic (:id) into target — knowledge/candidates/cases all
+      // move, then the source role is deleted. Accepting knowledge points can
+      // create duplicate same-name topics; this is the dedup escape hatch.
+      const roleMergeMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/merge$/);
+      if (roleMergeMatch && req.method === 'POST') {
+        const fromId = roleMergeMatch[1]!;
+        let body: { targetRoleId?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        if (typeof body.targetRoleId !== 'string' || !body.targetRoleId) {
+          return badRequest(res, 'targetRoleId must be a non-empty string');
+        }
+        const targetRoleId = body.targetRoleId;
+        const result = mergeRoleRepo(deps.db, fromId, targetRoleId);
+        if (!result.ok) {
+          if (result.reason === 'same') {
+            return send(res, 400, { error: 'same', message: 'Source and target topics are the same.' });
+          }
+          if (result.reason === 'from_missing' || result.reason === 'to_missing') {
+            return notFound(res);
+          }
+          if (result.reason === 'from_builtin') {
+            return send(res, 403, { error: 'builtin', message: 'Built-in topics cannot be merged away.' });
+          }
+          return send(res, 400, { error: 'merge_failed' });
+        }
+        // Best-effort: move the chat-captured files so files-as-truth points
+        // at the merged topic and the next import can't resurrect the old role.
+        const wikiRepo = deps.knowledgeRepoManager
+          ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
+          : undefined;
+        const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+        if (deps.knowledgeRepoManager && wikiRepo && wikiUsername) {
+          try {
+            await deps.knowledgeRepoManager.moveCapturedFilesForMerge({
+              repoId: wikiRepo.id,
+              fromRoleId: fromId,
+              toRoleId: targetRoleId,
+              username: wikiUsername,
+            });
+          } catch (err) {
+            deps.logger?.warn('merge_file_move_failed', {
+              data: { fromId, targetRoleId, message: (err as Error).message },
+            });
+          }
+        }
+        return send(res, 200, {
+          merged: true, from: fromId, to: targetRoleId, chunksMoved: result.chunksMoved,
+        });
       }
       // PR-δ: flip Expert / Collection.
       //   PATCH /api/roles/:id/bindable  body { bindable: boolean }

@@ -109,6 +109,90 @@ export function deleteRole(db: Database.Database, id: string): void {
   db.prepare(`DELETE FROM roles WHERE id = ?`).run(id);
 }
 
+/**
+ * Merge one topic (role) into another: reassign all of `fromId`'s knowledge
+ * (chunks + entities + candidates + sources + chat-point suggestions + bench
+ * targets + chat bindings) onto `toId`, then delete the now-empty `from` role.
+ *
+ * This exists because accepting knowledge points produced duplicate same-name
+ * topics; the user needs to fold them back into one.
+ *
+ * DB-only. The chat-captured files on disk are moved separately by the
+ * KnowledgeRepoManager (the API route calls both). Everything here runs in a
+ * single transaction so a partial merge can never leave dangling role_ids.
+ *
+ * Tables touched (verified against migrations.ts):
+ *   - knowledge_chunks         (role_id + source_file path segment)
+ *   - knowledge_chunk_entities (role_id)
+ *   - knowledge_candidates     (role_id; partial-unique on (role_id,text_hash))
+ *   - knowledge_sources        (role_id)
+ *   - host_session_roles       (role_id; PK (host_session_id, role_id))
+ *   - benchmark_case_target_role (role_id; PK (case_id, role_id))
+ *   - chat_knowledge_points    (suggested_role_id)
+ *   - roles                    (DELETE from)
+ */
+export function mergeRole(
+  db: Database.Database,
+  fromId: string,
+  toId: string,
+): { ok: boolean; reason?: 'same' | 'from_missing' | 'to_missing' | 'from_builtin'; chunksMoved?: number } {
+  if (fromId === toId) return { ok: false, reason: 'same' };
+  const from = getRole(db, fromId);
+  if (!from) return { ok: false, reason: 'from_missing' };
+  const to = getRole(db, toId);
+  if (!to) return { ok: false, reason: 'to_missing' };
+  if (from.isBuiltin) return { ok: false, reason: 'from_builtin' };
+
+  const run = db.transaction((): number => {
+    // knowledge_chunks: move + rewrite the chat-captured/<user>/<from>/… path
+    // segment so files-as-truth keeps pointing at the merged topic.
+    const chunkInfo = db.prepare(`
+      UPDATE knowledge_chunks
+         SET role_id = @to,
+             source_file = REPLACE(source_file, '/' || @from || '/', '/' || @to || '/')
+       WHERE role_id = @from
+    `).run({ from: fromId, to: toId });
+    const chunksMoved = chunkInfo.changes;
+
+    // knowledge_chunk_entities: plain column, no collision (PK is chunk_id,entity).
+    db.prepare(`UPDATE knowledge_chunk_entities SET role_id = @to WHERE role_id = @from`)
+      .run({ from: fromId, to: toId });
+
+    // knowledge_candidates: partial UNIQUE(role_id, text_hash) WHERE pending/rejected.
+    // Move what we can; drop the ones that would collide with an existing to-row.
+    db.prepare(`UPDATE OR IGNORE knowledge_candidates SET role_id = @to WHERE role_id = @from`)
+      .run({ from: fromId, to: toId });
+    db.prepare(`DELETE FROM knowledge_candidates WHERE role_id = @from`)
+      .run({ from: fromId });
+
+    // knowledge_sources: plain reassign.
+    db.prepare(`UPDATE knowledge_sources SET role_id = @to WHERE role_id = @from`)
+      .run({ from: fromId, to: toId });
+
+    // host_session_roles: PK (host_session_id, role_id) — move, drop collisions.
+    db.prepare(`UPDATE OR IGNORE host_session_roles SET role_id = @to WHERE role_id = @from`)
+      .run({ from: fromId, to: toId });
+    db.prepare(`DELETE FROM host_session_roles WHERE role_id = @from`)
+      .run({ from: fromId });
+
+    // benchmark_case_target_role: PK (case_id, role_id) — move, drop collisions.
+    db.prepare(`UPDATE OR IGNORE benchmark_case_target_role SET role_id = @to WHERE role_id = @from`)
+      .run({ from: fromId, to: toId });
+    db.prepare(`DELETE FROM benchmark_case_target_role WHERE role_id = @from`)
+      .run({ from: fromId });
+
+    // chat_knowledge_points: the suggestion pointer.
+    db.prepare(`UPDATE chat_knowledge_points SET suggested_role_id = @to WHERE suggested_role_id = @from`)
+      .run({ from: fromId, to: toId });
+
+    db.prepare(`DELETE FROM roles WHERE id = @from`).run({ from: fromId });
+    return chunksMoved;
+  });
+
+  const chunksMoved = run();
+  return { ok: true, chunksMoved };
+}
+
 // ── KnowledgeSource (Phase 73) ─────────────────────────────────────────────
 
 function rowToSource(row: Record<string, unknown>): KnowledgeSource {

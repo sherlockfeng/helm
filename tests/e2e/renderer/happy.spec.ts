@@ -104,7 +104,9 @@ describe('renderer smoke', () => {
     // Every primary nav entry must be present. Catches a Layout refactor
     // that silently drops a route.
     const navText = await page.locator('nav.helm-nav').textContent();
-    for (const label of ['Conversations', 'Knowledge', 'Library', 'Review', 'Sources', 'Verification', 'Cases', 'Runs', 'Coverage', 'Settings']) {
+    // Knowledge group is Topics / Contribute / Sources (was Library / Review
+    // pre role→topic sweep — see web/src/components/Layout.tsx).
+    for (const label of ['Conversations', 'Knowledge', 'Topics', 'Contribute', 'Sources', 'Verification', 'Cases', 'Runs', 'Coverage', 'Settings']) {
       expect(navText, `nav missing "${label}"`).toContain(label);
     }
 
@@ -146,8 +148,8 @@ describe('renderer smoke', () => {
     // ── 3. Walk through the new primary surfaces so a screenshot
     //      lands per page; HashRouter so navigation by hash change. ────
     const primaryRoutes = [
-      '/knowledge/library',
-      '/knowledge/review',
+      '/knowledge/topics',
+      '/knowledge/promote',
       '/knowledge/sources',
       '/verification/cases',
       '/verification/runs',

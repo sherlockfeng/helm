@@ -32,7 +32,7 @@ describe('renderer visual regression', () => {
   it('empty-state pages match their committed baselines', async () => {
     const pages: Array<{ route: string; name: string }> = [
       { route: '/conversations', name: 'conversations-empty' },
-      { route: '/knowledge/library', name: 'knowledge-library-empty' },
+      { route: '/knowledge/topics', name: 'knowledge-topics-empty' },
       { route: '/verification/cases', name: 'verification-cases-empty' },
       { route: '/settings', name: 'settings' },
     ];

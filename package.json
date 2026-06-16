@@ -30,7 +30,7 @@
     "test:unit": "vitest run tests/unit",
     "test:web": "pnpm --filter helm-web test",
     "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
-    "test:e2e:renderer": "./node_modules/.bin/electron-rebuild && ./node_modules/.bin/vitest run --config tests/e2e/renderer/vitest.config.ts; pnpm rebuild better-sqlite3",
+    "test:e2e:renderer": "node scripts/run-renderer-e2e.mjs",
     "typecheck": "tsc --noEmit && pnpm --filter helm-web typecheck",
     "lint": "echo \"(lint not yet configured)\"",
     "clean": "rm -rf dist node_modules/.cache"

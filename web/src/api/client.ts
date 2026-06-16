@@ -75,10 +75,13 @@ export const helmApi = {
       `/api/conversations/${encodeURIComponent(hostSessionId)}/extract-knowledge`,
     ),
 
-  /** v35: accept a knowledge point into a topic (existing or new). */
+  /**
+   * v35: accept a knowledge point into a topic (existing or new). Pass
+   * force=true to add it anyway after a near-duplicate (409) warning.
+   */
   acceptKnowledgePoint: (
     id: string,
-    target: { targetRoleId?: string; newTopicName?: string } = {},
+    target: { targetRoleId?: string; newTopicName?: string; force?: boolean } = {},
   ) =>
     request<{ pointId: string; status: string; roleId: string }>(
       'POST',

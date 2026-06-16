@@ -517,12 +517,16 @@ async function depositDocumentToTopic(
   deps: HttpApiDeps,
   roleId: string,
   doc: { title: string; body: string; kind: string; origin: string; sourceLabel: string },
+  // force=true bypasses the near-duplicate guard (user reviewed the overlap
+  // and chose to add it anyway).
+  force = false,
 ): Promise<
   | { status: 'ok'; chunkIds: string[]; chunksAdded: number }
   | { status: 'conflicts'; conflicts: unknown }
 > {
   const result = await updateRoleLibrary(deps.db, {
     roleId,
+    force,
     appendDocuments: [{
       filename: doc.origin,
       content: doc.body,
@@ -2322,11 +2326,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
 
         // Resolve the home topic: explicit override → suggested existing →
         // create from explicit/suggested new-topic name.
-        let body: { targetRoleId?: unknown; newTopicName?: unknown } = {};
+        let body: { targetRoleId?: unknown; newTopicName?: unknown; force?: unknown } = {};
         if (ctx.body) {
           try { body = JSON.parse(ctx.body) as typeof body; }
           catch { return badRequest(res, 'invalid JSON body'); }
         }
+        const force = body.force === true;
         // Resolve the home topic: explicit id → suggested id → by NAME
         // (typed newTopicName or suggested), reusing a same-name topic so
         // repeated accepts into the same 归类 don't spawn duplicates.
@@ -2347,7 +2352,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
             kind: point.kind,
             origin: `ckp-${pointId}`,
             sourceLabel: `Extracted from chat ${point.hostSessionId.slice(0, 8)}`,
-          });
+          }, force);
           if (result.status === 'conflicts') {
             return send(res, 409, {
               error: 'conflicts',

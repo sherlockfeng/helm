@@ -3,14 +3,31 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // Mock the API client + toast so the component renders without a backend.
-const depositTopicKnowledge = vi.fn();
-vi.mock('../api/client.js', () => ({
-  ApiError: class ApiError extends Error {},
-  helmApi: {
-    depositTopicKnowledge: (...args: unknown[]) => depositTopicKnowledge(...args),
-    extractKnowledge: vi.fn(),
+// vi.hoisted: vi.mock is hoisted above imports, so anything its factory
+// references (the spies + the ApiError stand-in) must be created here, not as
+// plain top-level vars (those hit the TDZ when the factory runs).
+const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, MockApiError } = vi.hoisted(() => {
+  class MockApiError extends Error {
+    status: number;
+    body?: unknown;
+    constructor(status: number, message: string, body?: unknown) {
+      super(message); this.status = status; this.body = body;
+    }
+  }
+  return {
+    depositTopicKnowledge: vi.fn(),
     acceptKnowledgePoint: vi.fn(),
     dismissKnowledgePoint: vi.fn(),
+    MockApiError,
+  };
+});
+vi.mock('../api/client.js', () => ({
+  ApiError: MockApiError,
+  helmApi: {
+    depositTopicKnowledge,
+    extractKnowledge: vi.fn(),
+    acceptKnowledgePoint,
+    dismissKnowledgePoint,
   },
 }));
 vi.mock('sonner', () => ({
@@ -47,7 +64,11 @@ describe('groupPointsByTopic', () => {
 });
 
 describe('KnowledgePointsSection', () => {
-  beforeEach(() => { depositTopicKnowledge.mockReset(); });
+  beforeEach(() => {
+    depositTopicKnowledge.mockReset();
+    acceptKnowledgePoint.mockReset();
+    dismissKnowledgePoint.mockReset();
+  });
 
   function renderSection(points: ChatKnowledgePoint[]) {
     render(
@@ -89,5 +110,31 @@ describe('KnowledgePointsSection', () => {
     renderSection([pt({ id: '9', suggestedTopicName: 'CONSTANTS' })]);
     await userEvent.click(screen.getByRole('button', { name: /沉淀全部到此 topic/ }));
     expect(depositTopicKnowledge).toHaveBeenCalledWith('s1', { newTopicName: 'CONSTANTS' });
+  });
+
+  it('on a near-duplicate (409), offers 仍然采纳 instead of dead-ending, then force-accepts', async () => {
+    acceptKnowledgePoint
+      .mockRejectedValueOnce(new MockApiError(409, 'dup', { error: 'conflicts' }))
+      .mockResolvedValueOnce({ pointId: '1', status: 'accepted', roleId: 'svc' });
+    renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
+
+    await userEvent.click(screen.getByRole('button', { name: /采纳/ }));
+    // Inline conflict prompt appears (no dead-end error).
+    expect(await screen.findByText(/该 topic 里已有近似的知识/)).toBeInTheDocument();
+    expect(acceptKnowledgePoint).toHaveBeenLastCalledWith('1', { targetRoleId: 'svc' });
+
+    await userEvent.click(screen.getByRole('button', { name: '仍然采纳' }));
+    // Retries with force, preserving the original target.
+    expect(acceptKnowledgePoint).toHaveBeenLastCalledWith('1', { targetRoleId: 'svc', force: true });
+  });
+
+  it('on a near-duplicate, 忽略 dismisses the point', async () => {
+    acceptKnowledgePoint.mockRejectedValueOnce(new MockApiError(409, 'dup', { error: 'conflicts' }));
+    dismissKnowledgePoint.mockResolvedValue({ pointId: '1', status: 'dismissed' });
+    renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
+
+    await userEvent.click(screen.getByRole('button', { name: /采纳/ }));
+    await userEvent.click(await screen.findByRole('button', { name: '忽略' }));
+    expect(dismissKnowledgePoint).toHaveBeenCalledWith('1');
   });
 });

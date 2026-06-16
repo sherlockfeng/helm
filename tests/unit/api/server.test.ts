@@ -1759,3 +1759,44 @@ describe('PATCH /api/roles/:id/name (rename topic)', () => {
     expect(builtin.status).toBe(404); // renameRole won't touch a built-in
   });
 });
+
+describe('POST /api/chat-knowledge/:id/accept — near-duplicate force', () => {
+  it('409 on a near-duplicate, then force:true adds it anyway', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('svc', '服务容灾专家', '', 0, ?)`).run(now);
+    db.prepare(`INSERT INTO host_sessions (id, host, first_seen_at, last_seen_at) VALUES ('s1', 'claude-code', ?, ?)`).run(now, now);
+    const body = 'SSR 800ms 默认超时常量定义在 faasLatencyTimeout，单位是毫秒。';
+    insertChatKnowledgePoint(db, {
+      id: 'p1', hostSessionId: 's1', title: '原始', body,
+      kind: 'spec', suggestedRoleId: 'svc', suggestedTopicName: null, createdAt: now,
+    });
+    insertChatKnowledgePoint(db, {
+      id: 'p2', hostSessionId: 's1', title: '重复', body, // identical body → near-dup
+      kind: 'spec', suggestedRoleId: 'svc', suggestedTopicName: null, createdAt: now,
+    });
+
+    // First accept lands the chunk.
+    const a1 = await fetchJson('/api/chat-knowledge/p1/accept', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+    });
+    expect(a1.status).toBe(200);
+
+    // The duplicate is blocked with a 409 conflicts.
+    const a2 = await fetchJson('/api/chat-knowledge/p2/accept', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+    });
+    expect(a2.status).toBe(409);
+    expect((a2.body as { error: string }).error).toBe('conflicts');
+    // …and the point stays pending so it can be retried.
+    expect((db.prepare(`SELECT status FROM chat_knowledge_points WHERE id='p2'`).get() as { status: string }).status).toBe('pending');
+
+    // force:true adds it despite the overlap.
+    const a3 = await fetchJson('/api/chat-knowledge/p2/accept', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force: true }),
+    });
+    expect(a3.status).toBe(200);
+    expect((a3.body as { status: string }).status).toBe('accepted');
+    const chunks = db.prepare(`SELECT COUNT(*) AS c FROM knowledge_chunks WHERE role_id='svc'`).get() as { c: number };
+    expect(chunks.c).toBe(2);
+  });
+});

@@ -808,20 +808,31 @@ function KnowledgePointRow({
   const [expanded, setExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  // When accept hits a near-duplicate (409), we stash the attempted target so
+  // the row can offer "仍然采纳(强制)" / "忽略" instead of a dead-end error.
+  const [conflict, setConflict] = useState<{ targetRoleId?: string; newTopicName?: string } | null>(null);
   const isNew = !point.suggestedRoleId;
   const suggestedName = point.suggestedRoleId
     ? (roles.find((r) => r.id === point.suggestedRoleId)?.name ?? point.suggestedRoleId)
     : (point.suggestedTopicName ?? '新 topic');
 
-  async function accept(target: { targetRoleId?: string; newTopicName?: string }): Promise<void> {
+  async function accept(target: { targetRoleId?: string; newTopicName?: string; force?: boolean }): Promise<void> {
     setBusy(true);
     try {
       const r = await helmApi.acceptKnowledgePoint(point.id, target);
       const name = roles.find((x) => x.id === r.roleId)?.name ?? r.roleId;
       toast.success(`已采纳到 ${name}`);
+      setConflict(null);
       onDecided();
     } catch (err) {
-      toast.error(`采纳失败：${err instanceof ApiError ? err.message : String(err)}`);
+      // Near-duplicate: don't dead-end — surface an inline choice.
+      if (err instanceof ApiError && err.status === 409
+        && (err.body as { error?: string } | undefined)?.error === 'conflicts') {
+        const { force: _f, ...attempted } = target;
+        setConflict(attempted);
+      } else {
+        toast.error(`采纳失败：${err instanceof ApiError ? err.message : String(err)}`);
+      }
     } finally { setBusy(false); }
   }
 
@@ -847,6 +858,23 @@ function KnowledgePointRow({
           <span className="helm-conv-candidate-headline">{point.title}</span>
         </div>
         {expanded && <div className="helm-conv-candidate-excerpt-full">{point.body}</div>}
+        {conflict && (
+          <div className="helm-conv-conflict">
+            <span>⚠️ 该 topic 里已有近似的知识。</span>
+            <button type="button" className="helm-conv-link-button" disabled={busy}
+              onClick={() => { void accept({ ...conflict, force: true }); }}
+              title="忽略相似度提醒，仍然把这条加进去">
+              仍然采纳
+            </button>
+            <button type="button" className="helm-conv-link-button helm-conv-link-danger" disabled={busy}
+              onClick={() => { void dismiss(); }} title="这条已存在，直接丢弃">
+              忽略
+            </button>
+            <button type="button" className="helm-conv-link-button" onClick={() => setConflict(null)}>
+              取消
+            </button>
+          </div>
+        )}
         <div className="helm-conv-candidate-foot">
           <span className="muted">
             {/* When grouped under a topic header the suggestion is redundant —

@@ -207,6 +207,37 @@ export interface PorcelainEntry {
 }
 
 /**
+ * Decode git's C-style quoted path (the `"…"` form): octal byte escapes
+ * (\NNN) reassembled into a UTF-8 buffer, plus the common single-char
+ * escapes. Only needed when a path still arrives quoted despite
+ * core.quotePath=false (genuinely special chars like quote/backslash/control).
+ */
+export function unquoteGitPath(quoted: string): string {
+  const inner = quoted.startsWith('"') && quoted.endsWith('"')
+    ? quoted.slice(1, -1) : quoted;
+  const bytes: number[] = [];
+  const ESC: Record<string, number> = {
+    a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92,
+  };
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i]!;
+    if (c !== '\\') {
+      for (const b of Buffer.from(c, 'utf8')) bytes.push(b);
+      continue;
+    }
+    const next = inner[i + 1] ?? '';
+    if (next >= '0' && next <= '7') {
+      bytes.push(parseInt(inner.slice(i + 1, i + 4), 8) & 0xff);
+      i += 3;
+    } else {
+      bytes.push(ESC[next] ?? next.charCodeAt(0));
+      i += 1;
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/**
  * Files-as-truth PR-3: `git status --porcelain -uall [-- pathspec]`.
  * `-uall` matters: without it a fully-untracked directory collapses to
  * one `?? dir/` line and individual captured files are invisible.
@@ -216,7 +247,13 @@ export async function statusPorcelain(
   cwd: string,
   pathspec?: string,
 ): Promise<PorcelainEntry[]> {
-  const args = ['status', '--porcelain', '-uall'];
+  // core.quotePath=false: without it git renders non-ASCII path bytes as
+  // octal escapes inside quotes (e.g. a CJK topic dir → "…/og-\347\275\221…").
+  // That octal string then never matches the UTF-8 source_file stored in the
+  // index, so every chunk under a Chinese-named topic shows as "未入索引" and
+  // gets skipped from personal-sync — and the path renders garbled in the UI.
+  // Turning it off makes git emit real UTF-8 paths.
+  const args = ['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'];
   if (pathspec) args.push('--', pathspec);
   const r = await run(args, cwd);
   if (r.exitCode !== 0) {
@@ -230,9 +267,10 @@ export async function statusPorcelain(
     if (line.length < 4) continue;
     const status = line.slice(0, 2);
     let p = line.slice(3);
-    // Porcelain quotes paths with special chars; our slugs never need
-    // it, but unquote defensively so a quoted path doesn't 404 later.
-    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+    // With quotePath=false git only quotes paths with genuinely special
+    // chars (quote/backslash/control); our slugs never have those, but
+    // unquote defensively so such a path doesn't 404 later.
+    if (p.startsWith('"') && p.endsWith('"')) p = unquoteGitPath(p);
     out.push({ status, path: p });
   }
   return out;

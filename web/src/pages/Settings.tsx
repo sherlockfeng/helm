@@ -36,6 +36,7 @@ import { CopyButton } from '../components/CopyButton.js';
 import { toast } from 'sonner';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
+import { TrainViaCliPanel } from '../components/TrainViaCliPanel.js';
 import { ConfirmDialog } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
@@ -420,6 +421,14 @@ function EnginesSection({
       {tab === 'cursor' && <CursorPane draft={draft} update={update} />}
       {tab === 'claude-code' && <ClaudeCodePane draft={draft} update={update} />}
       {tab === 'codex' && <CodexPane draft={draft} update={update} />}
+      <div style={{ marginTop: 20 }}>
+        <h3 style={{ marginTop: 0 }}>从你的 CLI / IDE 训练 topic</h3>
+        <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 12 }}>
+          一次性把 helm 的 <code>train_role</code> MCP 工具注册到 Claude Code / Cursor，
+          之后在自己的终端聊天里就能把对话沉淀成 topic。
+        </p>
+        <TrainViaCliPanel />
+      </div>
     </>
   );
 }

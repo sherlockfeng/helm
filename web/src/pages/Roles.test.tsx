@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+const { openAssistant } = vi.hoisted(() => ({ openAssistant: vi.fn() }));
+vi.mock('../components/assistant-bus.js', () => ({ openAssistant, onOpenAssistant: () => () => {} }));
+
 import { RoleActionsMenu } from './Roles.js';
 import type { RoleSummary } from '../api/types.js';
 
@@ -62,6 +66,15 @@ describe('RoleActionsMenu', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: '卸下人格' }));
     expect(h.onToggleBindable).toHaveBeenCalledTimes(1);
     expect(h.onConfigurePersona).not.toHaveBeenCalled();
+  });
+
+  it('「让助手整理」opens the assistant seeded with the topic name', async () => {
+    openAssistant.mockClear();
+    setup(makeRole({ name: '服务容灾专家' }));
+    await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: /让助手整理/ }));
+    expect(openAssistant).toHaveBeenCalledTimes(1);
+    expect(String(openAssistant.mock.calls[0]![0])).toContain('服务容灾专家');
   });
 
   it('renames via the inline input, calling onRename with the new name', async () => {

@@ -21,6 +21,7 @@ import { useApi } from '../hooks/useApi.js';
 import { EmptyState } from '../components/EmptyState.js';
 import { Button } from '../components/Button.js';
 import { Card } from '../components/Card.js';
+import { openAssistant } from '../components/assistant-bus.js';
 import { ConfirmDialog, Dialog, DialogContent } from '../components/Dialog.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
@@ -1080,6 +1081,17 @@ export function RoleActionsMenu({
       </button>
       {open && (
         <div role="menu" className="helm-conv-overflow-menu">
+          <button type="button" role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              openAssistant(
+                `帮我整理「${role.name}」这个 topic 的知识：找出重叠或冲突的知识点，`
+                + `提出合并 / 去重 / 改写方案；我确认后再动手。`,
+              );
+            }}
+            title="打开右下角 helm 助手，带着这个 topic 的上下文帮你整理重叠/冲突的知识">
+            ✨ 让助手整理…
+          </button>
           {renaming ? (
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '4px 6px' }}>
               <input
@@ -1353,20 +1365,19 @@ function RolesPageBase() {
         actions={
           <Button
             variant="primary"
-            onClick={() => setChatTarget({ mode: 'create' })}
-            title="打开对话式训练：用本机 CLI 聊出一个新 topic（带 prompt 即成专家），自动蒸馏知识点"
+            onClick={() => openAssistant(
+              '我想新建一个知识 topic。请先问清楚领域和要点，等我确认后用 train_role 保存。',
+            )}
+            title="打开右下角 helm 助手，聊着把一个新 topic 建出来（确认后用 train_role 保存）"
           >
-            + Train a new topic via chat
+            + 用助手新建 topic
           </Button>
         }
       />
       <p className="muted" style={{ marginTop: -4, marginBottom: 16, fontSize: 12 }}>
-        Coach an LLM through a conversation — it asks clarifying questions,
-        then distills your answers into a role.
+        点上方按钮会打开右下角的 helm 助手，聊几句就能蒸馏出一个 topic。想从自己的 CLI /
+        IDE（Claude Code、Cursor）里训练？到 Settings 里做一次 MCP 设置。
       </p>
-
-      <TrainViaCliPanel />
-
 
       {loading && <CardSkeletonList n={4} />}
 
@@ -1702,107 +1713,6 @@ function RoleTrainChatModal({
  */
 
 // ─── Mirror panel — auto-push to remote (Phase 80 / helm-design PR B) ──
-
-function TrainViaCliPanel() {
-  const HELM_MCP_URL = 'http://127.0.0.1:17317/mcp/sse';
-  const examplePrompt = '把刚才的对话沉淀成 helm 的 TCE 专家 topic';
-  // Phase 63: state per target so the user can see "Set up Claude Code" and
-  // "Set up Cursor" results independently.
-  const [busy, setBusy] = useState<'claude' | 'cursor' | null>(null);
-  const [results, setResults] = useState<Partial<Record<'claude' | 'cursor', {
-    ok: boolean; message: string;
-  }>>>({});
-
-  async function setup(target: 'claude' | 'cursor'): Promise<void> {
-    setBusy(target);
-    try {
-      const r = await helmApi.setupMcp(target);
-      setResults((prev) => ({
-        ...prev,
-        [target]: { ok: true, message: r.message },
-      }));
-    } catch (err) {
-      const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : (err as Error).message;
-      setResults((prev) => ({ ...prev, [target]: { ok: false, message: msg } }));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <details
-      style={{
-        marginBottom: 16,
-        padding: '12px 14px',
-        borderRadius: 8,
-        background: 'var(--bg-pre)',
-        border: '1px solid var(--border)',
-      }}
-    >
-      <summary style={{ cursor: 'pointer', fontWeight: 500 }}>
-        Or train a role from your existing CLI / IDE chat (Claude Code, Cursor)
-      </summary>
-      <p className="muted" style={{ marginTop: 10 }}>
-        Helm exposes a <code>train_role</code> tool over MCP at{' '}
-        <code>{HELM_MCP_URL}</code>. After registering helm with your CLI, end
-        any conversation by saying e.g.{' '}
-        <em>&quot;{examplePrompt}&quot;</em> — the agent calls{' '}
-        <code>train_role</code> and the topic appears below automatically.
-      </p>
-
-      <p className="muted" style={{ marginTop: 12, marginBottom: 4, fontWeight: 500 }}>
-        One-time setup (click the target you use):
-      </p>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button
-          type="button"
-          variant="primary"
-          disabled={busy !== null}
-          aria-busy={busy === 'claude'}
-          onClick={() => { void setup('claude'); }}
-        >
-          {busy === 'claude' ? 'Setting up…' : 'Set up Claude Code'}
-        </Button>
-        <button
-          type="button"
-          disabled={busy !== null}
-          aria-busy={busy === 'cursor'}
-          onClick={() => { void setup('cursor'); }}
-        >
-          {busy === 'cursor' ? 'Setting up…' : 'Set up Cursor'}
-        </button>
-      </div>
-
-      {(['claude', 'cursor'] as const).map((target) => {
-        const r = results[target];
-        if (!r) return null;
-        return (
-          <p
-            key={target}
-            style={{
-              marginTop: 10, fontSize: 12,
-              color: r.ok ? 'var(--success)' : 'var(--danger)',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            <strong>{target}</strong>: {r.message}
-          </p>
-        );
-      })}
-
-      <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
-        Claude Code uses <code>claude mcp add --scope user</code>; Cursor edits{' '}
-        <code>~/.cursor/mcp.json</code>. Both are idempotent — running again is
-        a no-op when already registered. <strong>Restart Claude Code / Cursor
-        after the first setup</strong> so it picks the new MCP server up.
-      </p>
-    </details>
-  );
-}
-
-// Phase 63 dropped CodeRow — the panel now uses a button-driven flow that
-// hits POST /api/setup-mcp directly, so the user doesn't have to copy any
-// shell commands.
 
 /** P1 (de-redundancy): one unified Topics page — expert topics
  *  (bindable persona) and plain topics live in one list. */

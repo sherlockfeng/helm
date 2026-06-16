@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 // vi.hoisted: vi.mock is hoisted above imports, so anything its factory
 // references (the spies + the ApiError stand-in) must be created here, not as
 // plain top-level vars (those hit the TDZ when the factory runs).
-const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, MockApiError } = vi.hoisted(() => {
+const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, appendPointsToRole, MockApiError } = vi.hoisted(() => {
   class MockApiError extends Error {
     status: number;
     body?: unknown;
@@ -18,6 +18,7 @@ const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, Mock
     depositTopicKnowledge: vi.fn(),
     acceptKnowledgePoint: vi.fn(),
     dismissKnowledgePoint: vi.fn(),
+    appendPointsToRole: vi.fn(),
     MockApiError,
   };
 });
@@ -28,6 +29,7 @@ vi.mock('../api/client.js', () => ({
     extractKnowledge: vi.fn(),
     acceptKnowledgePoint,
     dismissKnowledgePoint,
+    appendPointsToRole,
   },
 }));
 vi.mock('sonner', () => ({
@@ -68,6 +70,7 @@ describe('KnowledgePointsSection', () => {
     depositTopicKnowledge.mockReset();
     acceptKnowledgePoint.mockReset();
     dismissKnowledgePoint.mockReset();
+    appendPointsToRole.mockReset();
   });
 
   function renderSection(points: ChatKnowledgePoint[]) {
@@ -93,7 +96,7 @@ describe('KnowledgePointsSection', () => {
 
   it('one-click 沉淀全部 deposits the whole topic via the API', async () => {
     depositTopicKnowledge.mockResolvedValue({
-      roleId: 'svc', topicName: '服务容灾专家', found: 5, deposited: 5, skipped: 0, cleared: 2,
+      roleId: 'svc', topicName: '服务容灾专家', found: 5, deposited: 5, conflicts: [], cleared: 2,
     });
     renderSection([
       pt({ id: '1', suggestedRoleId: 'svc' }),
@@ -105,7 +108,7 @@ describe('KnowledgePointsSection', () => {
 
   it('deposits a new-topic suggestion by name', async () => {
     depositTopicKnowledge.mockResolvedValue({
-      roleId: 'constants', topicName: 'CONSTANTS', found: 1, deposited: 1, skipped: 0, cleared: 1,
+      roleId: 'constants', topicName: 'CONSTANTS', found: 1, deposited: 1, conflicts: [], cleared: 1,
     });
     renderSection([pt({ id: '9', suggestedTopicName: 'CONSTANTS' })]);
     await userEvent.click(screen.getByRole('button', { name: /沉淀全部到此 topic/ }));
@@ -136,5 +139,29 @@ describe('KnowledgePointsSection', () => {
     await userEvent.click(screen.getByRole('button', { name: /采纳/ }));
     await userEvent.click(await screen.findByRole('button', { name: '忽略' }));
     expect(dismissKnowledgePoint).toHaveBeenCalledWith('1');
+  });
+
+  it('surfaces deposit conflicts for confirmation (with the similar knowledge), then writes the chosen', async () => {
+    depositTopicKnowledge.mockResolvedValue({
+      roleId: 'svc', topicName: '服务容灾专家', found: 2, deposited: 1, cleared: 0,
+      conflicts: [{
+        title: 'SSR 超时常量', body: 'SSR 800ms…', kind: 'runbook',
+        similarTo: { title: 'goofy SSR 超时', snippet: '…', similarity: 0.93 },
+      }],
+    });
+    appendPointsToRole.mockResolvedValue({ roleId: 'svc', added: 1 });
+    renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
+
+    await userEvent.click(screen.getByRole('button', { name: /沉淀全部到此 topic/ }));
+    // Conflict surfaced (not silently dropped) with the similar existing knowledge + %.
+    expect(await screen.findByText(/1 条与已有知识相似/)).toBeInTheDocument();
+    expect(screen.getByText(/已有「goofy SSR 超时」（93% 相似）/)).toBeInTheDocument();
+
+    // Nothing forced until the user picks one + confirms.
+    await userEvent.click(screen.getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: /仍然写入选中/ }));
+    expect(appendPointsToRole).toHaveBeenCalledWith('svc', [
+      { title: 'SSR 超时常量', body: 'SSR 800ms…', kind: 'runbook' },
+    ]);
   });
 });

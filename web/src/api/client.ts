@@ -105,10 +105,25 @@ export const helmApi = {
     hostSessionId: string,
     target: { targetRoleId?: string; newTopicName?: string },
   ) =>
-    request<{ roleId: string; topicName: string; found: number; deposited: number; skipped: number }>(
+    request<{
+      roleId: string; topicName: string; found: number; deposited: number; cleared: number;
+      conflicts: Array<{
+        title: string; body: string; kind: string;
+        similarTo: { title: string; snippet: string; similarity: number } | null;
+      }>;
+    }>(
       'POST',
       `/api/conversations/${encodeURIComponent(hostSessionId)}/deposit-topic`,
       target,
+    ),
+
+  // Force-write points the user confirmed past a near-duplicate warning.
+  appendPointsToRole: (
+    roleId: string,
+    points: Array<{ title: string; body: string; kind: string }>,
+  ) =>
+    request<{ roleId: string; added: number }>(
+      'POST', `/api/roles/${encodeURIComponent(roleId)}/append-points`, { points },
     ),
 
   scanHistory: (host: 'claude-code' | 'cursor' | 'codex' | 'all' = 'all') =>

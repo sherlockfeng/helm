@@ -749,6 +749,13 @@ function TopicGroup({
   onMutated: () => void;
 }): ReactElement {
   const [depositing, setDepositing] = useState(false);
+  // After a deposit, points that collided with existing knowledge land here
+  // for the user to confirm (write anyway) or skip — never silently dropped.
+  const [review, setReview] = useState<{
+    roleId: string;
+    items: DepositConflict[];
+    chosen: Set<number>;
+  } | null>(null);
   const isNew = !group.targetRoleId;
 
   async function depositAll(): Promise<void> {
@@ -758,15 +765,40 @@ function TopicGroup({
         ? { targetRoleId: group.targetRoleId }
         : { newTopicName: group.newTopicName ?? group.label };
       const r = await helmApi.depositTopicKnowledge(hostSessionId, target);
-      if (r.deposited === 0) {
-        toast.message(`没有新增 —— 这条 chat 里没找到更多「${r.topicName}」的知识，或都已存在。`);
+      const head = r.deposited > 0 ? `已沉淀 ${r.deposited} 条` : '没有新增';
+      if (r.conflicts.length > 0) {
+        toast.message(`${head}；另有 ${r.conflicts.length} 条与已有知识相似，请确认。`);
+        setReview({ roleId: r.roleId, items: r.conflicts, chosen: new Set() });
       } else {
-        toast.success(`已把 ${r.deposited} 条「${r.topicName}」的知识沉淀进去`);
+        toast[r.deposited > 0 ? 'success' : 'message'](
+          r.deposited > 0 ? `${head}「${r.topicName}」` : `没找到更多「${r.topicName}」的知识`,
+        );
       }
       onMutated();
     } catch (err) {
       toast.error(`沉淀失败：${err instanceof ApiError ? err.message : String(err)}`);
     } finally { setDepositing(false); }
+  }
+
+  async function writeChosen(): Promise<void> {
+    if (!review || review.chosen.size === 0) return;
+    const picked = [...review.chosen].map((i) => review.items[i]!)
+      .map((c) => ({ title: c.title, body: c.body, kind: c.kind }));
+    try {
+      const r = await helmApi.appendPointsToRole(review.roleId, picked);
+      toast.success(`已写入 ${r.added} 条`);
+      setReview(null);
+      onMutated();
+    } catch (err) {
+      toast.error(`写入失败：${err instanceof ApiError ? err.message : String(err)}`);
+    }
+  }
+
+  function toggle(i: number): void {
+    if (!review) return;
+    const next = new Set(review.chosen);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    setReview({ ...review, chosen: next });
   }
 
   return (
@@ -786,6 +818,31 @@ function TopicGroup({
           {depositing ? '沉淀中…' : '⤵ 沉淀全部到此 topic'}
         </button>
       </div>
+      {review && (
+        <div className="helm-conv-conflict">
+          <div style={{ flexBasis: '100%', fontWeight: 600 }}>
+            {review.items.length} 条与已有知识相似 —— 勾选要仍然写入的：
+          </div>
+          {review.items.map((c, i) => (
+            <label key={i} style={{ flexBasis: '100%', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+              <input type="checkbox" checked={review.chosen.has(i)} onChange={() => toggle(i)} />
+              <span>{c.title}</span>
+              {c.similarTo && (
+                <span className="muted" title={c.similarTo.snippet}>
+                  ↔ 已有「{c.similarTo.title}」（{Math.round(c.similarTo.similarity * 100)}% 相似）
+                </span>
+              )}
+            </label>
+          ))}
+          <button type="button" className="helm-conv-link-button" disabled={review.chosen.size === 0}
+            onClick={() => { void writeChosen(); }}>
+            仍然写入选中（{review.chosen.size}）
+          </button>
+          <button type="button" className="helm-conv-link-button" onClick={() => setReview(null)}>
+            全部跳过
+          </button>
+        </div>
+      )}
       <ul className="helm-conv-candidates">
         {group.points.map((p) => (
           <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} hideSuggestion />
@@ -793,6 +850,13 @@ function TopicGroup({
       </ul>
     </div>
   );
+}
+
+interface DepositConflict {
+  title: string;
+  body: string;
+  kind: string;
+  similarTo: { title: string; snippet: string; similarity: number } | null;
 }
 
 function KnowledgePointRow({
@@ -808,9 +872,13 @@ function KnowledgePointRow({
   const [expanded, setExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  // When accept hits a near-duplicate (409), we stash the attempted target so
-  // the row can offer "仍然采纳(强制)" / "忽略" instead of a dead-end error.
-  const [conflict, setConflict] = useState<{ targetRoleId?: string; newTopicName?: string } | null>(null);
+  // When accept hits a near-duplicate (409), we stash the attempted target +
+  // the similar existing knowledge so the row can show what it clashes with and
+  // offer "仍然采纳(强制)" / "忽略" instead of a dead-end error.
+  const [conflict, setConflict] = useState<{
+    target: { targetRoleId?: string; newTopicName?: string };
+    similar: { title: string; similarity: number } | null;
+  } | null>(null);
   const isNew = !point.suggestedRoleId;
   const suggestedName = point.suggestedRoleId
     ? (roles.find((r) => r.id === point.suggestedRoleId)?.name ?? point.suggestedRoleId)
@@ -825,11 +893,20 @@ function KnowledgePointRow({
       setConflict(null);
       onDecided();
     } catch (err) {
-      // Near-duplicate: don't dead-end — surface an inline choice.
+      // Near-duplicate: don't dead-end — surface an inline choice + what it clashes with.
       if (err instanceof ApiError && err.status === 409
         && (err.body as { error?: string } | undefined)?.error === 'conflicts') {
         const { force: _f, ...attempted } = target;
-        setConflict(attempted);
+        const c = (err.body as { conflicts?: Array<{ existingChunkText?: string; similarity?: number }> })
+          ?.conflicts?.[0];
+        const similar = c?.existingChunkText
+          ? {
+            title: (c.existingChunkText.split('\n').find((l) => l.trim()) ?? '')
+              .replace(/^#+\s*/, '').trim().slice(0, 80),
+            similarity: c.similarity ?? 0,
+          }
+          : null;
+        setConflict({ target: attempted, similar });
       } else {
         toast.error(`采纳失败：${err instanceof ApiError ? err.message : String(err)}`);
       }
@@ -860,9 +937,15 @@ function KnowledgePointRow({
         {expanded && <div className="helm-conv-candidate-excerpt-full">{point.body}</div>}
         {conflict && (
           <div className="helm-conv-conflict">
-            <span>⚠️ 该 topic 里已有近似的知识。</span>
+            <span>
+              ⚠️ 该 topic 里已有近似的知识
+              {conflict.similar && (
+                <span className="muted">：「{conflict.similar.title}」（{Math.round(conflict.similar.similarity * 100)}% 相似）</span>
+              )}
+              。
+            </span>
             <button type="button" className="helm-conv-link-button" disabled={busy}
-              onClick={() => { void accept({ ...conflict, force: true }); }}
+              onClick={() => { void accept({ ...conflict.target, force: true }); }}
               title="忽略相似度提醒，仍然把这条加进去">
               仍然采纳
             </button>

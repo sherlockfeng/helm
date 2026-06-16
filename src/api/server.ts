@@ -49,6 +49,7 @@ import {
   KnowledgeRepoManager,
   KnowledgeRepoManagerError,
 } from '../knowledge-repo/manager.js';
+import { moveCapturedFilesForMergeBestEffort } from '../knowledge-repo/merge-files.js';
 import {
   deleteKnowledgeRepo,
   getKnowledgeRepo,
@@ -1007,24 +1008,16 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         }
         // Best-effort: move the chat-captured files so files-as-truth points
         // at the merged topic and the next import can't resurrect the old role.
-        const wikiRepo = deps.knowledgeRepoManager
-          ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
-          : undefined;
-        const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
-        if (deps.knowledgeRepoManager && wikiRepo && wikiUsername) {
-          try {
-            await deps.knowledgeRepoManager.moveCapturedFilesForMerge({
-              repoId: wikiRepo.id,
-              fromRoleId: fromId,
-              toRoleId: targetRoleId,
-              username: wikiUsername,
-            });
-          } catch (err) {
-            deps.logger?.warn('merge_file_move_failed', {
-              data: { fromId, targetRoleId, message: (err as Error).message },
-            });
-          }
-        }
+        await moveCapturedFilesForMergeBestEffort({
+          db: deps.db,
+          ...(deps.knowledgeRepoManager ? { manager: deps.knowledgeRepoManager } : {}),
+          ...(deps.getConfig ? { wikiUsername: deps.getConfig().knowledge.wikiUsername?.trim() } : {}),
+          fromRoleId: fromId,
+          toRoleId: targetRoleId,
+          onError: (message) => deps.logger?.warn('merge_file_move_failed', {
+            data: { fromId, targetRoleId, message },
+          }),
+        });
         return send(res, 200, {
           merged: true, from: fromId, to: targetRoleId, chunksMoved: result.chunksMoved,
         });
@@ -3585,18 +3578,17 @@ const AGENT_CHAT_SYSTEM_PROMPT = [
   '  - read freely to ground answers in the user\'s real data: list_roles, get_role,',
   '    search_knowledge, query_knowledge, list_knowledge_sources, list_role_candidates,',
   '    list_knowledge_providers. Use read_lark_doc when the user pastes a Lark URL.',
-  '  - write/delete: train_role, update_role, delete_role_chunk, drop_knowledge_source.',
+  '  - knowledge edits: train_role, update_role, delete_role_chunk, drop_knowledge_source.',
+  '  - topic structure: rename_role (rename a topic), merge_role (fold one topic into another —',
+  '    for de-duping topics that cover the same thing), configure_persona (give a topic a system',
+  '    prompt + make it a bindable expert).',
   '',
   'Mutation etiquette (IMPORTANT):',
-  '  - Before ANY write/delete tool call, state exactly what you will change and WAIT for the user',
-  '    to confirm in their next message. Never mutate on the same turn you propose it.',
+  '  - Before ANY write/delete/merge tool call, state exactly what you will change and WAIT for the',
+  '    user to confirm in their next message. Never mutate on the same turn you propose it.',
   '  - For dedup/overlap requests: search/list first, show the duplicates and your proposed',
-  '    consolidation, then act only after the user says yes.',
-  '',
-  'Known limits — be honest about these:',
-  '  - Topic-level merge / rename / 配置人格 are done from the Topics ⋯ menu, not via your tools.',
-  '    For those, walk the user to that menu; you can still consolidate at the chunk level',
-  '    (update_role / delete_role_chunk).',
+  '    consolidation (which topics merge, which chunks drop), then act only after the user says yes.',
+  '  - merge_role is destructive (the source topic is deleted) — always show both topics first.',
   '',
   'Style: mirror the user\'s language (Chinese ↔ Chinese). Keep turns short — this is a chat box.',
 ].join('\n');

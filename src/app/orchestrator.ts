@@ -138,6 +138,7 @@ import type {
 } from '../bridge/protocol.js';
 import { buildVerificationRunner } from '../verification/bootstrap.js';
 import { KnowledgeRepoManager } from '../knowledge-repo/manager.js';
+import { moveCapturedFilesForMergeBestEffort } from '../knowledge-repo/merge-files.js';
 import { createNodeGitRunner } from '../knowledge-repo/git-runner.js';
 import { createNodePrRunner } from '../knowledge-repo/pr-runner.js';
 
@@ -1185,6 +1186,21 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // global Settings field (helm Settings → Harness Conventions). Read
       // lazily so a Settings save updates the next review without restart.
       harnessConventions: () => liveConfig.harness?.conventions ?? '',
+      // Phase 2 (assistant): pre-bound best-effort file mover for merge_role.
+      // Closure resolves knowledgeRepoManager at call time (it's constructed
+      // after this builder runs), so init order is fine.
+      mergeCapturedFiles: async (fromRoleId, toRoleId) => {
+        await moveCapturedFilesForMergeBestEffort({
+          db: deps.db,
+          manager: knowledgeRepoManager,
+          ...(liveConfig.knowledge?.wikiUsername?.trim()
+            ? { wikiUsername: liveConfig.knowledge.wikiUsername.trim() } : {}),
+          fromRoleId, toRoleId,
+          onError: (message) => log.warn('merge_file_move_failed', {
+            data: { fromRoleId, toRoleId, message },
+          }),
+        });
+      },
     });
   }
 

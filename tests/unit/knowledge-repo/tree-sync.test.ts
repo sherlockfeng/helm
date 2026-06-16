@@ -84,7 +84,8 @@ describe('files-as-truth PR-3', () => {
       const calls: Array<readonly string[]> = [];
       const run: GitRunner = async (args) => {
         calls.push(args);
-        const cmd = args[0];
+        // statusPorcelain prefixes `-c core.quotePath=false`; skip it to read the subcommand.
+        const cmd = args[0] === '-c' ? args[2] : args[0];
         if (cmd === 'rev-parse') {
           revParseCount += 1;
           return { stdout: revParseCount === 1 ? 'aaa\n' : 'bbb\n', stderr: '', exitCode: 0 };
@@ -147,14 +148,15 @@ describe('files-as-truth PR-3', () => {
       const repoId = makeRepo();
       let revParseCount = 0;
       const run: GitRunner = async (args) => {
-        if (args[0] === 'rev-parse') {
+        const a0 = args[0] === '-c' ? args[2] : args[0];
+        if (a0 === 'rev-parse') {
           revParseCount += 1;
           return { stdout: revParseCount === 1 ? 'aaa\n' : 'bbb\n', stderr: '', exitCode: 0 };
         }
-        if (args[0] === 'fetch') return { stdout: '', stderr: '', exitCode: 0 };
-        if (args[0] === 'diff') return { stdout: '', stderr: '', exitCode: 0 };
-        if (args[0] === 'status') return { stdout: '', stderr: '', exitCode: 0 };
-        if (args[0] === 'merge') return { stdout: '', stderr: 'cannot ff', exitCode: 1 };
+        if (a0 === 'fetch') return { stdout: '', stderr: '', exitCode: 0 };
+        if (a0 === 'diff') return { stdout: '', stderr: '', exitCode: 0 };
+        if (a0 === 'status') return { stdout: '', stderr: '', exitCode: 0 };
+        if (a0 === 'merge') return { stdout: '', stderr: 'cannot ff', exitCode: 1 };
         throw new Error(`unexpected git ${JSON.stringify(args)}`);
       };
       const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot });
@@ -173,7 +175,7 @@ describe('files-as-truth PR-3', () => {
       const repoId = makeRepo();
       seedCapturedChunk('dr', 'og-v5', 'chat-captured/hyf/dr/og-v5.md');
       const run: GitRunner = async (args) => {
-        if (args[0] === 'status') {
+        if ((args[0] === '-c' ? args[2] : args[0]) === 'status') {
           return {
             stdout: [
               '?? chat-captured/hyf/dr/og-v5.md',
@@ -219,7 +221,7 @@ describe('files-as-truth PR-3', () => {
       let worktreePath: string | null = null;
       const run: GitRunner = async (args) => {
         calls.push(args);
-        if (args[0] === 'status') {
+        if ((args[0] === '-c' ? args[2] : args[0]) === 'status') {
           return { stdout: '?? chat-captured/hyf/dr/og-v5.md\n', stderr: '', exitCode: 0 };
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
@@ -248,7 +250,7 @@ describe('files-as-truth PR-3', () => {
     it('errors when nothing under chat-captured/ is indexed', async () => {
       const repoId = makeRepo();
       const run: GitRunner = async (args) => {
-        if (args[0] === 'status') return { stdout: '', stderr: '', exitCode: 0 };
+        if ((args[0] === '-c' ? args[2] : args[0]) === 'status') return { stdout: '', stderr: '', exitCode: 0 };
         throw new Error(`unexpected git ${JSON.stringify(args)}`);
       };
       const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot });

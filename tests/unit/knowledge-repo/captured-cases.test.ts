@@ -52,7 +52,8 @@ describe('listUnpublishedCaptured — case files', () => {
 
     // Fake git: status lists one point file + one case file, both untracked.
     const fakeGit: GitRunner = async (args) => {
-      if (args[0] === 'status') {
+      // statusPorcelain prefixes `-c core.quotePath=false`.
+      if ((args[0] === '-c' ? args[2] : args[0]) === 'status') {
         return {
           exitCode: 0,
           stdout: '?? chat-captured/u/dr/pt1.md\n?? chat-captured/u/dr/cases/c1.md\n',

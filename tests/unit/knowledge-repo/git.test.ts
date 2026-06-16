@@ -195,12 +195,13 @@ describe('PR-3 helpers: listChangedFiles / statusPorcelain / showFileAtRef / mer
 
   it('statusPorcelain uses -uall, scopes by pathspec and parses XY codes', async () => {
     const run = scriptedRunner([{
-      match: (args) => args[0] === 'status',
+      match: (args) => args.includes('status'),
       result: { stdout: '?? chat-captured/u/r/new.md\n M chat-captured/u/r/edited.md\n' },
     }]);
     const entries = await statusPorcelain(run, '/repo', 'chat-captured');
+    // -c core.quotePath=false: emit UTF-8 paths, not octal-escaped bytes.
     expect(run.calls[0]!.args).toEqual(
-      ['status', '--porcelain', '-uall', '--', 'chat-captured'],
+      ['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall', '--', 'chat-captured'],
     );
     expect(entries).toEqual([
       { status: '??', path: 'chat-captured/u/r/new.md' },

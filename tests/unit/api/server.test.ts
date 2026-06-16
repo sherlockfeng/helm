@@ -1183,6 +1183,30 @@ describe('/api/roles (B3)', () => {
     expect(body.roles.find((x) => x.id === 'stability')?.tier).toBe('team');
   });
 
+  it('merges a CJK-id topic via the URL-encoded route (decode regression)', async () => {
+    const now = new Date().toISOString();
+    const A = 'og-网关与-decc-打标-2';
+    const B = 'og-网关与-decc-打标';
+    for (const id of [A, B]) {
+      db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, 'OG', '', 0, ?)`).run(id, now);
+    }
+    db.prepare(`INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at) VALUES ('k1', ?, ?, 'x', ?, ?)`)
+      .run(A, `chat-captured/u/${A}/k1.md`, new Uint8Array(0), now);
+
+    // The CJK id is percent-encoded in the URL; the route must decode it.
+    const r = await fetchJson(`/api/roles/${encodeURIComponent(A)}/merge`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ targetRoleId: B }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { merged: boolean }).merged).toBe(true);
+    expect(db.prepare(`SELECT 1 FROM roles WHERE id = ?`).get(A)).toBeUndefined();
+    const chunk = db.prepare(`SELECT role_id, source_file FROM knowledge_chunks WHERE id = 'k1'`)
+      .get() as { role_id: string; source_file: string };
+    expect(chunk.role_id).toBe(B);
+    expect(chunk.source_file).toBe(`chat-captured/u/${B}/k1.md`);
+  });
+
   it('GET /api/roles/:id returns role + chunks (no embedding)', async () => {
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES (?, ?, ?, ?, ?)`)

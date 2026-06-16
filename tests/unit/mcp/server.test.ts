@@ -100,6 +100,57 @@ describe('MCP server — tool registration', () => {
     // Benchmark/eval cases (always-on)
     expect(names).toContain('propose_benchmark_case');
     expect(names).toContain('update_benchmark_case');
+    // Phase 2 (assistant): topic-structure tools
+    expect(names).toContain('rename_role');
+    expect(names).toContain('configure_persona');
+    expect(names).toContain('merge_role');
+  });
+});
+
+describe('MCP server — topic-structure tools (Phase 2)', () => {
+  const now = new Date().toISOString();
+  function insertRole(id: string, opts: { builtin?: boolean; bindable?: boolean } = {}): void {
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, bindable, created_at) VALUES (?, ?, '', ?, ?, ?)`)
+      .run(id, id, opts.builtin ? 1 : 0, opts.bindable === false ? 0 : 1, now);
+  }
+
+  it('rename_role changes the name; rejects built-ins', async () => {
+    await bootServer();
+    insertRole('svc');
+    insertRole('bi', { builtin: true });
+
+    const ok = await client.callTool({ name: 'rename_role', arguments: { roleId: 'svc', name: '服务容灾专家' } });
+    expect((parseJsonContent(ok as never) as { name: string }).name).toBe('服务容灾专家');
+    expect((db.prepare(`SELECT name FROM roles WHERE id='svc'`).get() as { name: string }).name).toBe('服务容灾专家');
+
+    const bad = await client.callTool({ name: 'rename_role', arguments: { roleId: 'bi', name: 'x' } });
+    expect((bad as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('configure_persona sets the prompt + makes the topic bindable', async () => {
+    await bootServer();
+    insertRole('og', { bindable: false });
+    const r = await client.callTool({ name: 'configure_persona', arguments: { roleId: 'og', systemPrompt: '你是 OG 专家。' } });
+    expect((parseJsonContent(r as never) as { bindable: boolean }).bindable).toBe(true);
+    const row = db.prepare(`SELECT system_prompt, bindable FROM roles WHERE id='og'`).get() as { system_prompt: string; bindable: number };
+    expect(row.system_prompt).toContain('OG 专家');
+    expect(row.bindable).toBe(1);
+  });
+
+  it('merge_role folds one topic into another and deletes the source', async () => {
+    await bootServer();
+    insertRole('a');
+    insertRole('b');
+    db.prepare(`INSERT INTO knowledge_chunks (id, role_id, source_file, chunk_text, embedding, created_at) VALUES ('k1','a','chat-captured/u/a/k1.md','x',?,?)`)
+      .run(new Uint8Array(0), now);
+
+    const r = await client.callTool({ name: 'merge_role', arguments: { fromRoleId: 'a', toRoleId: 'b' } });
+    expect((parseJsonContent(r as never) as { merged: boolean }).merged).toBe(true);
+    expect(db.prepare(`SELECT 1 FROM roles WHERE id='a'`).get()).toBeUndefined();
+    expect((db.prepare(`SELECT role_id FROM knowledge_chunks WHERE id='k1'`).get() as { role_id: string }).role_id).toBe('b');
+
+    const same = await client.callTool({ name: 'merge_role', arguments: { fromRoleId: 'b', toRoleId: 'b' } });
+    expect((same as { isError?: boolean }).isError).toBe(true);
   });
 });
 

@@ -50,6 +50,9 @@ import {
   getChunksForRole,
   getSource,
   listSourcesForRole,
+  mergeRole,
+  renameRole,
+  setRoleBindable,
 } from '../storage/repos/roles.js';
 import { listCampaigns } from '../storage/repos/campaigns.js';
 import { listCandidatesForRole } from '../storage/repos/knowledge-candidates.js';
@@ -113,6 +116,13 @@ export interface McpServerDeps {
    * to `claude`.
    */
   runReviewOverride?: typeof runReview;
+  /**
+   * Phase 2 (assistant): best-effort move of a topic's chat-captured files
+   * when merge_role folds it into another. The orchestrator pre-binds this
+   * (it owns the KnowledgeRepoManager + wiki username, created after the MCP
+   * server). Absent → merge still updates the index, files just aren't moved.
+   */
+  mergeCapturedFiles?: (fromRoleId: string, toRoleId: string) => Promise<void>;
 }
 
 export interface McpServerInfo {
@@ -345,6 +355,52 @@ export function createMcpServer(
     description: 'Get the full details and system prompt of an agent role.',
     inputSchema: { roleId: z.string() },
   }, async ({ roleId }) => jsonResult(getRole(deps.db, roleId)));
+
+  server.registerTool('rename_role', {
+    description:
+      'Rename a topic\'s display name. Only the name changes — the id (and thus its files / '
+      + 'source paths / URLs) stays the same, so nothing is stranded. Built-in topics cannot '
+      + 'be renamed. Confirm the new name with the user before calling.',
+    inputSchema: { roleId: z.string(), name: z.string() },
+  }, async ({ roleId, name }) => {
+    const trimmed = name.trim();
+    if (!trimmed) return errorResult('name must be non-empty');
+    const ok = renameRole(deps.db, roleId, trimmed);
+    if (!ok) return errorResult(`cannot rename: ${roleId} not found or is a built-in topic`);
+    return jsonResult({ roleId, name: trimmed });
+  });
+
+  server.registerTool('configure_persona', {
+    description:
+      'Give a pure-knowledge topic an expert persona: set its system prompt AND make it '
+      + 'bindable (an expert). Use when the user wants a topic to become a persona they can '
+      + 'bind to conversations. Confirm the prompt text with the user first.',
+    inputSchema: { roleId: z.string(), systemPrompt: z.string() },
+  }, async ({ roleId, systemPrompt }) => {
+    const trimmed = systemPrompt.trim();
+    if (!trimmed) return errorResult('systemPrompt must be non-empty');
+    if (!getRole(deps.db, roleId)) return errorResult(`role not found: ${roleId}`);
+    await updateRole(deps.db, { roleId, baseSystemPrompt: trimmed, embedFn });
+    setRoleBindable(deps.db, roleId, true);
+    return jsonResult({ roleId, bindable: true });
+  });
+
+  server.registerTool('merge_role', {
+    description:
+      'Merge one topic into another: moves all of `fromRoleId`\'s knowledge chunks, candidates, '
+      + 'and cases into `toRoleId`, then deletes `fromRoleId`. Use for de-duplicating topics that '
+      + 'cover the same thing. Built-in topics cannot be merged away, and a topic cannot merge into '
+      + 'itself. ALWAYS confirm with the user (show both topics) before calling — this is destructive.',
+    inputSchema: { fromRoleId: z.string(), toRoleId: z.string() },
+  }, async ({ fromRoleId, toRoleId }) => {
+    const result = mergeRole(deps.db, fromRoleId, toRoleId);
+    if (!result.ok) return errorResult(`merge failed: ${result.reason}`);
+    // Best-effort: move chat-captured files so files-as-truth follows the merge.
+    if (deps.mergeCapturedFiles) {
+      try { await deps.mergeCapturedFiles(fromRoleId, toRoleId); } catch { /* index already merged */ }
+    }
+    return jsonResult({ merged: true, from: fromRoleId, to: toRoleId, chunksMoved: result.chunksMoved });
+  });
 
   server.registerTool('train_role', {
     description:

@@ -885,7 +885,9 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // FK). Guarded: built-ins are seeded from src and must stay.
       const roleDeleteMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
       if (roleDeleteMatch && req.method === 'DELETE') {
-        const role = getRoleRow(deps.db, roleDeleteMatch[1]!);
+        // Role ids can be CJK (topicIdFromName keeps Unicode); the path
+        // segment arrives percent-encoded, so decode before the DB lookup.
+        const role = getRoleRow(deps.db, decodeURIComponent(roleDeleteMatch[1]!));
         if (!role) return notFound(res);
         if (role.isBuiltin) {
           return send(res, 403, { error: 'builtin', message: 'Built-in roles cannot be deleted.' });
@@ -899,7 +901,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       // create duplicate same-name topics; this is the dedup escape hatch.
       const roleMergeMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/merge$/);
       if (roleMergeMatch && req.method === 'POST') {
-        const fromId = roleMergeMatch[1]!;
+        const fromId = decodeURIComponent(roleMergeMatch[1]!);
         let body: { targetRoleId?: unknown };
         try { body = JSON.parse(ctx.body) as typeof body; }
         catch { return badRequest(res, 'invalid JSON body'); }
@@ -955,9 +957,10 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (typeof body.bindable !== 'boolean') {
           return badRequest(res, 'bindable must be a boolean');
         }
-        const ok = setRoleBindable(deps.db, roleBindableMatch[1]!, body.bindable);
+        const bindableRoleId = decodeURIComponent(roleBindableMatch[1]!);
+        const ok = setRoleBindable(deps.db, bindableRoleId, body.bindable);
         if (!ok) return notFound(res);
-        return send(res, 200, { roleId: roleBindableMatch[1]!, bindable: body.bindable });
+        return send(res, 200, { roleId: bindableRoleId, bindable: body.bindable });
       }
       const roleTrainMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/train$/);
       if (roleTrainMatch) {
@@ -974,7 +977,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       const roleMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
       if (roleMatch) {
         if (req.method !== 'GET') return methodNotAllowed(res);
-        const role = getRoleRow(deps.db, roleMatch[1]!);
+        const role = getRoleRow(deps.db, decodeURIComponent(roleMatch[1]!));
         if (!role) return notFound(res);
         // Phase 77: also load archived chunks so the Roles page can render
         // them in a folded "Archived (N)" section. The repo's

@@ -28,7 +28,7 @@
  * version (output-format=text); the user sees the agent's narrative.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,6 +50,8 @@ export interface ClaudeAgentOptions {
   claudeBin?: string;
   /** Override the spawner (testing). */
   exec?: typeof execFileAsync;
+  /** Override the streaming spawner (testing). */
+  spawn?: typeof spawn;
   /** Per-turn timeout. Long enough to absorb a multi-step tool flow. */
   timeoutMs?: number;
   /** When true, do NOT pass `--strict-mcp-config` (still pass `--mcp-config`).
@@ -97,6 +99,7 @@ export class ClaudeCodeAgent {
   private readonly cwd: string;
   private readonly claudeBin: string;
   private readonly exec: typeof execFileAsync;
+  private readonly spawn: typeof spawn;
   private readonly timeoutMs: number;
   private readonly mcpConfigPath: string;
   private readonly mcpConfigDir: string;
@@ -106,6 +109,7 @@ export class ClaudeCodeAgent {
     this.cwd = options.cwd ?? process.cwd();
     this.claudeBin = options.claudeBin ?? 'claude';
     this.exec = options.exec ?? execFileAsync;
+    this.spawn = options.spawn ?? spawn;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.allowGlobalMcp = options.allowGlobalMcp ?? false;
     const url = options.helmMcpUrl ?? DEFAULT_HELM_MCP_URL;
@@ -166,6 +170,86 @@ export class ClaudeCodeAgent {
       stderr: stderr.toString(),
       sessionId: this.sessionId,
     };
+  }
+
+  /**
+   * Streaming sibling of sendConversation (Phase: in-app assistant). Spawns
+   * `claude -p --output-format stream-json --verbose --include-partial-messages`
+   * and forwards assistant text token-by-token via `onDelta` as it arrives, so
+   * the renderer can render like ChatGPT/Claude Code. Tool calls still run
+   * inside the subprocess (against helm's MCP); only their narrated text is
+   * streamed (tool-step chips are future work). Resolves with the full text.
+   */
+  streamConversation(
+    messages: readonly ChatMessage[],
+    options: { systemPrompt?: string; onDelta?: (text: string) => void } = {},
+  ): Promise<ClaudeAgentTurnResult> {
+    if (messages.length === 0) {
+      throw new Error('ClaudeCodeAgent.streamConversation: empty messages');
+    }
+    const last = messages[messages.length - 1]!;
+    if (last.role !== 'user') {
+      throw new Error('ClaudeCodeAgent.streamConversation: last message must be from user');
+    }
+
+    const args: string[] = [
+      '--print',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--mcp-config', this.mcpConfigPath,
+    ];
+    if (!this.allowGlobalMcp) args.push('--strict-mcp-config');
+    if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt);
+    args.push(serializeTranscript(messages));
+
+    return new Promise<ClaudeAgentTurnResult>((resolve, reject) => {
+      const child = this.spawn(this.claudeBin, args, { cwd: this.cwd, env: process.env });
+      let acc = '';
+      let resultText: string | null = null;
+      let stderr = '';
+      let buf = '';
+      let settled = false;
+      const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
+
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(() => reject(new Error(`claude stream timed out after ${this.timeoutMs}ms`)));
+      }, this.timeoutMs);
+
+      const handleLine = (line: string): void => {
+        if (!line.trim()) return;
+        let obj: unknown;
+        try { obj = JSON.parse(line); } catch { return; }
+        const delta = parseStreamJsonDelta(obj);
+        if (delta) { acc += delta; options.onDelta?.(delta); return; }
+        const o = obj as { type?: string; result?: unknown };
+        if (o.type === 'result' && typeof o.result === 'string') resultText = o.result;
+      };
+
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        buf += chunk;
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          handleLine(buf.slice(0, nl));
+          buf = buf.slice(nl + 1);
+        }
+      });
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (c: string) => { stderr += c; });
+      child.on('error', (err) => finish(() => reject(err)));
+      child.on('close', (code) => finish(() => {
+        if (buf.trim()) handleLine(buf); // flush trailing partial line
+        const text = (acc.trim().length > 0 ? acc : (resultText ?? '')).trim();
+        if (code !== 0 && text.length === 0) {
+          const e = new Error(`claude exited with code ${code}`) as Error & { stderr: string; code: number | null };
+          e.stderr = stderr; e.code = code;
+          return reject(e);
+        }
+        resolve({ text, stderr, sessionId: this.sessionId });
+      }));
+    });
   }
 
   /** Delete the tmp MCP-config dir. Idempotent. */
@@ -231,6 +315,24 @@ export function interpretClaudeError(err: unknown): InterpretedClaudeError {
     };
   }
   return { message: rawMessage, hint: 'unknown', raw };
+}
+
+/**
+ * Pull the text delta out of one parsed `claude --output-format stream-json
+ * --include-partial-messages` NDJSON object. Returns the incremental text for
+ * a `stream_event` → `content_block_delta` → `text_delta`, else null (init,
+ * tool_use, result, message-complete lines are ignored here). Exported + pure
+ * for unit testing the stream parser without spawning claude.
+ */
+export function parseStreamJsonDelta(obj: unknown): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  const o = obj as { type?: string; event?: { type?: string; delta?: { type?: string; text?: unknown } } };
+  if (o.type !== 'stream_event') return null;
+  const ev = o.event;
+  if (!ev || ev.type !== 'content_block_delta') return null;
+  const d = ev.delta;
+  if (!d || d.type !== 'text_delta' || typeof d.text !== 'string') return null;
+  return d.text;
 }
 
 /** Format a conversation as a single text prompt. Exported for tests. */

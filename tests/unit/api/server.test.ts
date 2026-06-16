@@ -1876,3 +1876,65 @@ describe('persona configuration (配置人格)', () => {
     expect(r.status).toBe(503);
   });
 });
+
+describe('POST /api/agent-chat (in-app assistant)', () => {
+  const hdr = { 'content-type': 'application/json' };
+
+  it('503 when no streaming engine is wired', async () => {
+    const r = await fetchJson('/api/agent-chat', {
+      method: 'POST', headers: hdr, body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(503);
+    expect((r.body as { error: string }).error).toBe('no_engine');
+  });
+
+  it('streams the assistant text back and uses the agent system prompt', async () => {
+    let captured: { systemPrompt?: string; messages: unknown[] } | null = null;
+    const stub = createHttpApi({
+      db, registry,
+      streamConversation: async (input) => {
+        captured = { systemPrompt: input.systemPrompt, messages: input.messages as unknown[] };
+        input.onDelta('Hello'); input.onDelta(', '); input.onDelta('helm');
+        return { text: 'Hello, helm', stderr: '', sessionId: 's1' };
+      },
+    });
+    await stub.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${stub.port()}/api/agent-chat`, {
+        method: 'POST', headers: hdr,
+        body: JSON.stringify({ messages: [{ role: 'user', content: '你好' }] }),
+      });
+      const text = await res.text();
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/plain');
+      expect(text).toBe('Hello, helm'); // streamed deltas concatenated
+      expect(captured!.systemPrompt).toContain('helm'); // agent prompt, not train prompt
+      expect(captured!.messages).toHaveLength(1);
+    } finally { await stub.stop(); }
+  });
+
+  it('falls back to the final text when no deltas were streamed', async () => {
+    const stub = createHttpApi({
+      db, registry,
+      streamConversation: async () => ({ text: 'final only', stderr: '', sessionId: 's2' }),
+    });
+    await stub.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${stub.port()}/api/agent-chat`, {
+        method: 'POST', headers: hdr, body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      expect(await res.text()).toBe('final only');
+    } finally { await stub.stop(); }
+  });
+
+  it('400 on missing messages (engine wired)', async () => {
+    const stub = createHttpApi({ db, registry, streamConversation: async () => ({ text: 'x', stderr: '', sessionId: 's' }) });
+    await stub.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${stub.port()}/api/agent-chat`, {
+        method: 'POST', headers: hdr, body: JSON.stringify({ notMessages: true }),
+      });
+      expect(res.status).toBe(400);
+    } finally { await stub.stop(); }
+  });
+});

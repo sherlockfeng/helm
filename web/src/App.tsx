@@ -17,6 +17,7 @@
 import { HashRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { Layout } from './components/Layout.js';
+import { AssistantWidget } from './components/AssistantWidget.js';
 import { useProposalBootToast } from './lib/proposal-notifications.js';
 
 // Primary surfaces (new IA)
@@ -101,6 +102,8 @@ export default function App() {
           <Route path="*" element={<Navigate to="/conversations" replace />} />
         </Route>
       </Routes>
+      {/* Global in-app assistant: floating button + chat panel on every page. */}
+      <AssistantWidget />
     </Router>
   );
 }

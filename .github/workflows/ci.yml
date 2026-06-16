@@ -53,6 +53,12 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      # Layer-1 UI tests: render React components in happy-dom and assert
+      # behavior (no Electron). Catches the "change page A, silently break
+      # page B / a control / a handler" class that tsc can't see.
+      - name: Web component tests
+        run: pnpm test:web
+
       - name: E2e tests
         run: pnpm test:e2e
 

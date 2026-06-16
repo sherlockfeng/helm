@@ -7,6 +7,7 @@ import { ApprovalRegistry } from '../../../src/approval/registry.js';
 import { ApprovalPolicyEngine } from '../../../src/approval/policy.js';
 import { WorkflowEngine } from '../../../src/workflow/engine.js';
 import { createHttpApi, type HttpApiHandle } from '../../../src/api/server.js';
+import { insertChatKnowledgePoint } from '../../../src/storage/repos/chat-knowledge.js';
 
 let db: BetterSqlite3.Database;
 let registry: ApprovalRegistry;
@@ -1652,3 +1653,64 @@ describe('POST /api/roles/train-chat (Phase 60b)', () => {
   });
 });
 
+
+describe('POST /api/conversations/:id/deposit-topic', () => {
+  it('503 when no LLM engine is wired', async () => {
+    const r = await fetchJson('/api/conversations/s1/deposit-topic', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ targetRoleId: 'svc' }),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it('re-extracts the topic, writes every point into it, and clears its pending candidates', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('svc', '服务容灾专家', '', 0, ?)`).run(now);
+    // Two pending candidates that suggest this topic — should be cleared after deposit.
+    insertChatKnowledgePoint(db, {
+      id: 'p1', hostSessionId: 's1', title: 'recovery-500 body', body: '规格',
+      kind: 'spec', suggestedRoleId: 'svc', suggestedTopicName: null, createdAt: now,
+    });
+    insertChatKnowledgePoint(db, {
+      id: 'p2', hostSessionId: 's1', title: 'recovery 响应头', body: '说明',
+      kind: 'glossary', suggestedRoleId: 'svc', suggestedTopicName: null, createdAt: now,
+    });
+
+    let sawTopicName = '';
+    const stub = createHttpApi({
+      db, registry,
+      extractTopicKnowledge: async ({ topicName }) => {
+        sawTopicName = topicName;
+        return [
+          { title: 'p-a', body: 'body-a', kind: 'spec' },
+          { title: 'p-b', body: 'body-b', kind: 'runbook' },
+          { title: 'p-c', body: 'body-c', kind: 'other' },
+        ];
+      },
+    });
+    await stub.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${stub.port()}/api/conversations/s1/deposit-topic`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ targetRoleId: 'svc' }),
+      });
+      const body = await res.json() as { found: number; deposited: number; cleared: number; roleId: string };
+      expect(res.status).toBe(200);
+      expect(sawTopicName).toBe('服务容灾专家'); // scoped to the topic's display name
+      expect(body.roleId).toBe('svc');
+      expect(body.found).toBe(3);
+      expect(body.deposited).toBeGreaterThanOrEqual(3);
+
+      // Knowledge written under the topic.
+      const chunks = db.prepare(`SELECT COUNT(*) AS c FROM knowledge_chunks WHERE role_id = 'svc'`).get() as { c: number };
+      expect(chunks.c).toBeGreaterThanOrEqual(3);
+
+      // The individually-suggested candidates are no longer pending.
+      expect(body.cleared).toBe(2);
+      const pending = db.prepare(`SELECT COUNT(*) AS c FROM chat_knowledge_points WHERE host_session_id = 's1' AND status = 'pending'`).get() as { c: number };
+      expect(pending.c).toBe(0);
+    } finally {
+      await stub.stop();
+    }
+  });
+});

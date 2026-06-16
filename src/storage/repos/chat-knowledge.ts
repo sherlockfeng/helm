@@ -172,6 +172,31 @@ export function setChatKnowledgePointStatus(
   ).run(status, decidedAt, id);
 }
 
+/**
+ * Mark a chat's pending points for one topic as accepted after a topic-scoped
+ * bulk deposit — the deposit re-extracts the whole chat into the topic, so the
+ * individually-suggested candidates are now represented there and shouldn't
+ * keep showing as pending. Matches by suggested existing-topic id, plus (for a
+ * just-created topic) by suggested new-topic name. Returns the count cleared.
+ */
+export function markPointsDepositedForTopic(
+  db: Database.Database,
+  hostSessionId: string,
+  roleId: string,
+  topicName: string,
+  decidedAt: string,
+): number {
+  const info = db.prepare(
+    `UPDATE chat_knowledge_points
+        SET status = 'accepted', decided_at = ?
+      WHERE host_session_id = ?
+        AND status = 'pending'
+        AND (suggested_role_id = ?
+             OR (suggested_role_id IS NULL AND suggested_topic_name = ?))`,
+  ).run(decidedAt, hostSessionId, roleId, topicName);
+  return info.changes;
+}
+
 // ── extraction throttle marker (host_sessions.last_extracted_agent_chars) ───
 // We gate on accumulated ASSISTANT output chars, not turn count — that's the
 // best proxy for "how much new extractable knowledge appeared" (knowledge

@@ -1977,6 +1977,24 @@ button.helm-conv-unknown-chip.is-amber.is-selected {
   flex-direction: column;
   gap: 8px;
 }
+
+/* Knowledge points grouped by suggested topic: each topic shows once, with a
+   "沉淀全部" action, and its points nested under the header. */
+.helm-conv-topic-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.helm-conv-topic-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.helm-conv-topic-group-title { font-size: 13px; }
 .helm-conv-candidate-row {
   display: flex;
   gap: 8px;

@@ -15,7 +15,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { LlmClient } from './campaign.js';
-import { listRoles } from '../storage/repos/roles.js';
+import { listRoles, getRole } from '../storage/repos/roles.js';
 import { listHostEvents } from '../storage/repos/host-event-log.js';
 import { groupEventsIntoTurns } from '../api/conversation-detail.js';
 import {
@@ -80,6 +80,106 @@ export async function extractChatKnowledge(
     if (ok) inserted += 1;
   }
   return { inserted };
+}
+
+// ── topic-scoped deposit (one-shot "把这条 chat 里所有 X 的知识沉淀进 X") ──────
+
+export interface TopicPoint {
+  title: string;
+  body: string;
+  kind: ChatKnowledgeKind;
+}
+
+/**
+ * Re-read the WHOLE conversation and extract every durable knowledge point
+ * that belongs to ONE specific topic. Unlike extractChatKnowledge (which
+ * surfaces a routed, throttled set of candidates for review across all
+ * topics), this is the "deposit all of topic X from this chat" pass: scoped
+ * to a single topic, exhaustive, and its result is written straight into the
+ * topic by the caller — no candidate step.
+ *
+ * Best-effort: any LLM/parse failure returns []. The caller owns the writes.
+ */
+export async function extractTopicKnowledge(
+  db: Database.Database,
+  hostSessionId: string,
+  topicName: string,
+  deps: ExtractDeps,
+): Promise<TopicPoint[]> {
+  const events = listHostEvents(db, hostSessionId, { limit: 500 });
+  const turns = groupEventsIntoTurns(events);
+  if (turns.length === 0) return [];
+
+  const prompt = buildTopicPrompt(topicName, renderChat(turns));
+  let raw: string;
+  try {
+    raw = await deps.llm.generate(prompt, {
+      model: deps.model ?? DEFAULT_MODEL,
+      maxTokens: deps.maxTokens ?? DEFAULT_MAX_TOKENS,
+    });
+  } catch { return []; }
+  return parseTopicPoints(raw);
+}
+
+/** Resolve a topic's display name from its id, falling back to the id. */
+export function topicNameForId(db: Database.Database, roleId: string): string {
+  return getRole(db, roleId)?.name ?? roleId;
+}
+
+function buildTopicPrompt(topicName: string, chatBlob: string): string {
+  return [
+    `You extract durable, reusable KNOWLEDGE POINTS that belong to ONE topic: "${topicName}".`,
+    '',
+    'Read the whole conversation and pull out EVERY distinct fact / decision /',
+    `how-to / spec / gotcha that belongs under "${topicName}". Ignore anything`,
+    'that belongs to a different topic, and ignore chat scaffolding (questions,',
+    'plans, status, apologies, raw tool output).',
+    '',
+    'Conversation:',
+    '---',
+    chatBlob,
+    '---',
+    '',
+    'Return ONLY JSON — no preamble — shaped like:',
+    '{',
+    '  "points": [',
+    '    {',
+    '      "title": "<short headline in the chat\'s language, ≤80 chars>",',
+    '      "body": "<the knowledge as a self-contained note, markdown OK>",',
+    '      "kind": "spec|example|warning|runbook|glossary|other"',
+    '    }',
+    '  ]',
+    '}',
+    '',
+    'Rules:',
+    `- Only points that genuinely belong to "${topicName}". Quality over quantity.`,
+    '- Use the conversation\'s own language (Chinese chat → Chinese title/body).',
+    '- Merge duplicates; emit each distinct point once.',
+    '- Return {"points": []} if nothing in this chat belongs to this topic.',
+  ].join('\n');
+}
+
+/** Parse the topic-scoped LLM output: points with no routing (all → the topic). */
+export function parseTopicPoints(raw: string): TopicPoint[] {
+  const json = extractJsonObject(raw);
+  if (!json) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(json); }
+  catch { return []; }
+  if (!parsed || typeof parsed !== 'object') return [];
+  const arr = (parsed as Record<string, unknown>)['points'];
+  if (!Array.isArray(arr)) return [];
+
+  const out: TopicPoint[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const title = typeof r['title'] === 'string' ? r['title'].trim().slice(0, 120) : '';
+    const body = typeof r['body'] === 'string' ? r['body'].trim() : '';
+    if (!title || !body) continue;
+    out.push({ title, body, kind: sanitizeKind(r['kind']) });
+  }
+  return out;
 }
 
 // ── prompt ──────────────────────────────────────────────────────────────

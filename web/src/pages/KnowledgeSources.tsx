@@ -438,7 +438,7 @@ function ImportDirsPanel({
  * the working copy that the remote hasn't seen. One click opens a
  * single batch MR for all of them (公司仓库必须走 MR).
  */
-function CapturedPanel({
+export function CapturedPanel({
   repo, busyParent,
 }: { repo: KnowledgeRepo; busyParent: boolean }): ReactElement | null {
   const capturedQuery = useApi(() => helmApi.listCapturedUnpublished(repo.id), [repo.id]);
@@ -447,7 +447,10 @@ function CapturedPanel({
 
   const files: UnpublishedCapturedFile[] = capturedQuery.data?.files ?? [];
   if (capturedQuery.loading || files.length === 0) return null;
-  const indexed = files.filter((f) => f.pointId);
+  // Publishable = indexed knowledge points + benchmark-case files (the latter
+  // ride the MR as extraFiles even without a DB pointId). Only files that are
+  // neither are genuinely skipped.
+  const publishable = files.filter((f) => f.pointId || f.isCase);
 
   const openMr = async (): Promise<void> => {
     setPublishing(true);
@@ -473,10 +476,10 @@ function CapturedPanel({
           {files.length} 条已沉淀未发布
         </span>
         <Button
-          disabled={publishing || busyParent || indexed.length === 0}
+          disabled={publishing || busyParent || publishable.length === 0}
           aria-busy={publishing}
           onClick={() => { void openMr(); }}
-          title="批量序列化 chat-captured 知识点，推分支并创建 MR"
+          title="批量序列化 chat-captured 知识点 + case 文件，推分支并创建 MR"
         >
           {publishing ? '开 MR 中…' : '开 MR'}
         </Button>
@@ -492,7 +495,8 @@ function CapturedPanel({
             <code>{f.relPath}</code>
             {f.title && <span className="muted"> — {f.title}</span>}
             {!f.isNew && <span style={{ color: '#92400e' }}> · 已修改</span>}
-            {!f.pointId && <span style={{ color: '#dc2626' }}> · 未入索引（将跳过）</span>}
+            {f.isCase && <span className="muted"> · case</span>}
+            {!f.pointId && !f.isCase && <span style={{ color: '#dc2626' }}> · 未入索引（将跳过）</span>}
           </li>
         ))}
       </ul>

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AssistantWidget } from './AssistantWidget.js';
+import { openAssistant } from './assistant-bus.js';
 
 // Fake a streaming text/plain Response (what /api/agent-chat returns).
 function streamResponse(chunks: string[]): Response {
@@ -49,6 +50,23 @@ describe('AssistantWidget', () => {
 
     // The streamed assistant reply accumulates into one bubble.
     expect(await screen.findByText('整理完成✓')).toBeInTheDocument();
+  });
+
+  it('openAssistant(seed) opens the panel and sends the seed as the first turn', async () => {
+    const fetchMock = vi.fn(async () => streamResponse(['好的，', '我来看看']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { act } = await import('react');
+    render(<AssistantWidget />);
+    // Triggered from elsewhere (e.g. a topic card button).
+    await act(async () => { openAssistant('帮我整理「服务容灾专家」'); });
+
+    expect(screen.getByRole('dialog', { name: 'helm 助手' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    const body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content: string }> };
+    expect(body.messages.at(-1)).toEqual({ role: 'user', content: '帮我整理「服务容灾专家」' });
+    expect(await screen.findByText('好的，我来看看')).toBeInTheDocument();
   });
 
   it('surfaces a backend error (e.g. no engine) without crashing', async () => {

@@ -1,6 +1,7 @@
-import { useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import { useAgentChat } from '../hooks/useAgentChat.js';
 import { ChatPanel } from './ChatPanel.js';
+import { onOpenAssistant } from './assistant-bus.js';
 
 /**
  * Global in-app assistant: a floating circular button pinned bottom-right on
@@ -11,6 +12,13 @@ import { ChatPanel } from './ChatPanel.js';
 export function AssistantWidget(): ReactElement {
   const [open, setOpen] = useState(false);
   const { messages, busy, error, send, reset } = useAgentChat();
+
+  // Let any page open the assistant (optionally pre-seeded with a first turn),
+  // e.g. a topic card's "让助手整理" button.
+  useEffect(() => onOpenAssistant((seed) => {
+    setOpen(true);
+    if (seed && seed.trim()) void send(seed.trim());
+  }), [send]);
 
   return (
     <>

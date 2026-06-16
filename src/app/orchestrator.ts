@@ -64,6 +64,7 @@ import { summarizeCampaign } from '../summarizer/campaign.js';
 import { generateChatTldr } from '../summarizer/chat-tldr.js';
 import { curateChatEntities } from '../knowledge/entity-curation.js';
 import { extractChatKnowledge, extractTopicKnowledge } from '../summarizer/chat-knowledge-extract.js';
+import { draftPersona } from '../summarizer/persona-draft.js';
 import { proposeBenchmarkCaseFromChunk } from '../summarizer/benchmark-propose.js';
 import { proposeCasesForTopic } from '../summarizer/benchmark-backfill.js';
 import {
@@ -1467,6 +1468,13 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       extractTopicKnowledge: async ({ hostSessionId, topicName }) => {
         const adapter = engineRouter.current();
         return extractTopicKnowledge(deps.db, hostSessionId, topicName, {
+          llm: adapter.summarize,
+          model: liveConfig.cursor.model,
+        });
+      },
+      draftPersona: async ({ roleId }) => {
+        const adapter = engineRouter.current();
+        return draftPersona(deps.db, roleId, {
           llm: adapter.summarize,
           model: liveConfig.cursor.model,
         });

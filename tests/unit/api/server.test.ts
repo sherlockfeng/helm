@@ -1826,3 +1826,53 @@ describe('POST /api/roles/:id/append-points (force-write confirmed conflicts)', 
     expect(r.status).toBe(404);
   });
 });
+
+describe('persona configuration (配置人格)', () => {
+  it('configure-persona sets the system prompt AND makes the topic bindable', async () => {
+    const now = new Date().toISOString();
+    // A pure topic: bindable = 0, empty prompt.
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, bindable, created_at) VALUES ('og', 'OG 与 DECC', '', 0, 0, ?)`).run(now);
+    const r = await fetchJson('/api/roles/og/configure-persona', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: '你是 OG 与 DECC 专家，熟悉网关打标。' }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { bindable: boolean }).bindable).toBe(true);
+    const row = db.prepare(`SELECT system_prompt, bindable FROM roles WHERE id='og'`).get() as { system_prompt: string; bindable: number };
+    expect(row.system_prompt).toContain('OG 与 DECC 专家');
+    expect(row.bindable).toBe(1);
+  });
+
+  it('configure-persona rejects a blank prompt', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, bindable, created_at) VALUES ('og', 'OG', '', 0, 0, ?)`).run(now);
+    const r = await fetchJson('/api/roles/og/configure-persona', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: '   ' }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('draft-persona returns an editable prompt from the engine', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, bindable, created_at) VALUES ('og', 'OG 与 DECC', '', 0, 0, ?)`).run(now);
+    const stub = createHttpApi({
+      db, registry,
+      draftPersona: async ({ roleId }) => `你是「${roleId}」专家。`,
+    });
+    await stub.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${stub.port()}/api/roles/og/draft-persona`, { method: 'POST' });
+      const body = await res.json() as { prompt: string };
+      expect(res.status).toBe(200);
+      expect(body.prompt).toContain('专家');
+    } finally { await stub.stop(); }
+  });
+
+  it('draft-persona is 503 when no engine is wired', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, bindable, created_at) VALUES ('og', 'OG', '', 0, 0, ?)`).run(now);
+    const r = await fetchJson('/api/roles/og/draft-persona', { method: 'POST' });
+    expect(r.status).toBe(503);
+  });
+});

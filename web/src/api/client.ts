@@ -710,6 +710,16 @@ export const helmApi = {
     request<{ roleId: string; name: string }>(
       'PATCH', `/api/roles/${encodeURIComponent(roleId)}/name`, { name },
     ),
+  // 配置人格: LLM-draft an editable persona prompt from the topic's knowledge.
+  draftPersona: (roleId: string) =>
+    request<{ roleId: string; prompt: string }>(
+      'POST', `/api/roles/${encodeURIComponent(roleId)}/draft-persona`,
+    ),
+  // 配置人格 save: set the persona prompt + make the topic an expert (bindable).
+  configurePersona: (roleId: string, systemPrompt: string) =>
+    request<{ roleId: string; bindable: boolean }>(
+      'POST', `/api/roles/${encodeURIComponent(roleId)}/configure-persona`, { systemPrompt },
+    ),
   // PR-β: candidate external-context cache.
   getCandidateContexts: (candidateIds: string[]) =>
     request<{ contexts: Record<string, CandidateExternalContext> }>(

@@ -27,7 +27,8 @@ function makeRole(overrides: Partial<RoleSummary> = {}): RoleSummary {
 function setup(role: RoleSummary, mergeTargets: { value: string; label: string }[] = []) {
   const handlers = {
     onUpdateViaChat: vi.fn(), onPromote: vi.fn(),
-    onToggleBindable: vi.fn(), onDelete: vi.fn(), onMerge: vi.fn(), onRename: vi.fn(),
+    onToggleBindable: vi.fn(), onConfigurePersona: vi.fn(),
+    onDelete: vi.fn(), onMerge: vi.fn(), onRename: vi.fn(),
   };
   render(<RoleActionsMenu role={role} mergeTargets={mergeTargets} {...handlers} />);
   return handlers;
@@ -40,10 +41,27 @@ describe('RoleActionsMenu', () => {
         role={makeRole({ isBuiltin: true })}
         mergeTargets={[]}
         onUpdateViaChat={vi.fn()} onPromote={vi.fn()}
-        onToggleBindable={vi.fn()} onDelete={vi.fn()} onMerge={vi.fn()} onRename={vi.fn()}
+        onToggleBindable={vi.fn()} onConfigurePersona={vi.fn()}
+        onDelete={vi.fn()} onMerge={vi.fn()} onRename={vi.fn()}
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('配置人格 (pure topic) calls onConfigurePersona, not the plain bindable flip', async () => {
+    const h = setup(makeRole({ bindable: false }));
+    await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '配置人格…' }));
+    expect(h.onConfigurePersona).toHaveBeenCalledTimes(1);
+    expect(h.onToggleBindable).not.toHaveBeenCalled();
+  });
+
+  it('卸下人格 (expert) calls onToggleBindable', async () => {
+    const h = setup(makeRole({ bindable: true }));
+    await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '卸下人格' }));
+    expect(h.onToggleBindable).toHaveBeenCalledTimes(1);
+    expect(h.onConfigurePersona).not.toHaveBeenCalled();
   });
 
   it('renames via the inline input, calling onRename with the new name', async () => {
@@ -85,7 +103,7 @@ describe('RoleActionsMenu', () => {
   it('shows 配置人格 (not 通过对话更新) for a pure topic', async () => {
     setup(makeRole({ bindable: false }));
     await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    expect(screen.getByRole('menuitem', { name: '配置人格' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '配置人格…' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: '通过对话更新' })).not.toBeInTheDocument();
   });
 

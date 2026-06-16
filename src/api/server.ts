@@ -288,6 +288,11 @@ export interface HttpApiDeps {
     topicName: string;
   }) => Promise<Array<{ title: string; body: string; kind: string }>>;
   /**
+   * Draft an expert persona (system prompt) for a topic from its knowledge,
+   * for the 配置人格 flow. Returns editable prompt text.
+   */
+  draftPersona?: (input: { roleId: string }) => Promise<string>;
+  /**
    * Auto-propose ONE benchmark case from a freshly-accepted knowledge
    * chunk. Fired fire-and-forget on candidate/chat-knowledge accept; the
    * drafted case is inserted as `proposed` (no file write until confirm).
@@ -1046,6 +1051,45 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!ok) return notFound(res);
         return send(res, 200, { roleId: renameRoleId, name });
       }
+      //   POST /api/roles/:id/draft-persona → { prompt }
+      // LLM-draft an editable persona system prompt from the topic's knowledge.
+      const draftPersonaMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/draft-persona$/);
+      if (draftPersonaMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.draftPersona) {
+          return send(res, 503, { error: 'no_engine', message: 'No LLM engine wired.' });
+        }
+        const dpRoleId = decodeURIComponent(draftPersonaMatch[1]!);
+        if (!getRoleRow(deps.db, dpRoleId)) return notFound(res);
+        try {
+          const prompt = await deps.draftPersona({ roleId: dpRoleId });
+          return send(res, 200, { roleId: dpRoleId, prompt });
+        } catch (err) { return internalError(res, err); }
+      }
+
+      //   POST /api/roles/:id/configure-persona  body { systemPrompt }
+      // Set the persona prompt AND make the topic an expert (bindable) in one
+      // step — the 配置人格 save. Without this, a configured topic would be an
+      // expert with an empty prompt.
+      const configurePersonaMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/configure-persona$/);
+      if (configurePersonaMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const cpRoleId = decodeURIComponent(configurePersonaMatch[1]!);
+        if (!getRoleRow(deps.db, cpRoleId)) return notFound(res);
+        let body: { systemPrompt?: unknown } = {};
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.trim() : '';
+        if (!systemPrompt) return badRequest(res, 'systemPrompt must be a non-empty string');
+        try {
+          await updateRoleLibrary(deps.db, {
+            roleId: cpRoleId, baseSystemPrompt: systemPrompt, embedFn: makePseudoEmbedFn(),
+          });
+          setRoleBindable(deps.db, cpRoleId, true);
+          return send(res, 200, { roleId: cpRoleId, bindable: true });
+        } catch (err) { return internalError(res, err); }
+      }
+
       //   POST /api/roles/:id/append-points  body { points: [{title,body,kind}] }
       // Force-write a set of points the user confirmed past a near-duplicate
       // warning (the "仍然写入" choice from a deposit-all conflict review).

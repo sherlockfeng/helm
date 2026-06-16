@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 // vi.hoisted: vi.mock is hoisted above imports, so anything its factory
 // references (the spies + the ApiError stand-in) must be created here, not as
 // plain top-level vars (those hit the TDZ when the factory runs).
-const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, appendPointsToRole, MockApiError } = vi.hoisted(() => {
+const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, appendPointsToRole, openAssistant, MockApiError } = vi.hoisted(() => {
   class MockApiError extends Error {
     status: number;
     body?: unknown;
@@ -19,6 +19,7 @@ const { depositTopicKnowledge, acceptKnowledgePoint, dismissKnowledgePoint, appe
     acceptKnowledgePoint: vi.fn(),
     dismissKnowledgePoint: vi.fn(),
     appendPointsToRole: vi.fn(),
+    openAssistant: vi.fn(),
     MockApiError,
   };
 });
@@ -32,11 +33,12 @@ vi.mock('../api/client.js', () => ({
     appendPointsToRole,
   },
 }));
+vi.mock('../components/assistant-bus.js', () => ({ openAssistant, onOpenAssistant: () => () => {} }));
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() },
 }));
 
-import { KnowledgePointsSection, groupPointsByTopic } from './Chats.js';
+import { KnowledgePointsSection, groupPointsByTopic, seedReorganize } from './Chats.js';
 import type { ChatKnowledgePoint } from '../api/types.js';
 
 function pt(over: Partial<ChatKnowledgePoint> & { id: string }): ChatKnowledgePoint {
@@ -48,6 +50,18 @@ function pt(over: Partial<ChatKnowledgePoint> & { id: string }): ChatKnowledgePo
 }
 
 const ROLES = [{ id: 'svc', name: '服务容灾专家' }, { id: 'goofy', name: 'goofy_ssr' }];
+
+describe('seedReorganize', () => {
+  it('names the chat + its suggested topics in the assistant seed', () => {
+    const seed = seedReorganize('sess-9', [
+      pt({ id: '1', suggestedRoleId: 'svc' }),
+      pt({ id: '2', suggestedTopicName: 'CONSTANTS' }),
+    ], ROLES);
+    expect(seed).toContain('sess-9');
+    expect(seed).toContain('服务容灾专家');
+    expect(seed).toContain('CONSTANTS');
+  });
+});
 
 describe('groupPointsByTopic', () => {
   it('aggregates points by suggested topic, each topic once, order preserved', () => {
@@ -71,6 +85,16 @@ describe('KnowledgePointsSection', () => {
     acceptKnowledgePoint.mockReset();
     dismissKnowledgePoint.mockReset();
     appendPointsToRole.mockReset();
+    openAssistant.mockReset();
+  });
+
+  it('「让助手整理」opens the assistant seeded with this chat\'s context', async () => {
+    renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
+    await userEvent.click(screen.getByRole('button', { name: '✨ 让助手整理' }));
+    expect(openAssistant).toHaveBeenCalledTimes(1);
+    const seed = String(openAssistant.mock.calls[0]![0]);
+    expect(seed).toContain('s1'); // hostSessionId
+    expect(seed).toContain('服务容灾专家');
   });
 
   function renderSection(points: ChatKnowledgePoint[]) {

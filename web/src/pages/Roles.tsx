@@ -937,8 +937,11 @@ function RoleCandidates({
  * stays inline; everything else folds into a single ⋯ overflow menu so the
  * row footprint shrinks to two small controls. Reuses the .helm-conv-overflow
  * idiom from Chats.tsx (click-outside to close).
+ *
+ * Exported for the component test (web/src/pages/Roles.test.tsx) — it's the
+ * piece with the most conditional wiring, so it gets the interaction suite.
  */
-function RoleActionsMenu({
+export function RoleActionsMenu({
   role,
   onUpdateViaChat,
   onPromote,

@@ -77,6 +77,20 @@ export function setRoleBindable(db: Database.Database, id: string, bindable: boo
 }
 
 /**
+ * Rename a topic's display name. Only the name changes — the id (and thus
+ * chat-captured/ paths, source_file values, URLs) is deliberately left
+ * untouched so a rename can't strand files or trigger a path migration.
+ * Built-ins are seeded from src and not renamable. Bumps the version so the
+ * change shows in the role's history marker.
+ */
+export function renameRole(db: Database.Database, id: string, name: string): boolean {
+  const info = db.prepare(
+    `UPDATE roles SET name = ?, version = version + 1 WHERE id = ? AND is_builtin = 0`,
+  ).run(name, id);
+  return info.changes > 0;
+}
+
+/**
  * Phase 80 (helm-design PR A): bump a role's monotonic version counter.
  * Call this from any path that mutates the role's user-visible content
  * (trainRole, updateRole, deleteChunkById, deleteSource, etc.) AFTER

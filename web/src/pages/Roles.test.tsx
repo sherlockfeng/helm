@@ -27,7 +27,7 @@ function makeRole(overrides: Partial<RoleSummary> = {}): RoleSummary {
 function setup(role: RoleSummary, mergeTargets: { value: string; label: string }[] = []) {
   const handlers = {
     onUpdateViaChat: vi.fn(), onPromote: vi.fn(),
-    onToggleBindable: vi.fn(), onDelete: vi.fn(), onMerge: vi.fn(),
+    onToggleBindable: vi.fn(), onDelete: vi.fn(), onMerge: vi.fn(), onRename: vi.fn(),
   };
   render(<RoleActionsMenu role={role} mergeTargets={mergeTargets} {...handlers} />);
   return handlers;
@@ -40,10 +40,30 @@ describe('RoleActionsMenu', () => {
         role={makeRole({ isBuiltin: true })}
         mergeTargets={[]}
         onUpdateViaChat={vi.fn()} onPromote={vi.fn()}
-        onToggleBindable={vi.fn()} onDelete={vi.fn()} onMerge={vi.fn()}
+        onToggleBindable={vi.fn()} onDelete={vi.fn()} onMerge={vi.fn()} onRename={vi.fn()}
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renames via the inline input, calling onRename with the new name', async () => {
+    const h = setup(makeRole({ name: 'Goofy 专家' }));
+    await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '重命名…' }));
+    const input = screen.getByPlaceholderText('新名称') as HTMLInputElement;
+    expect(input.value).toBe('Goofy 专家'); // seeded with the current name
+    await userEvent.clear(input);
+    await userEvent.type(input, '服务容灾专家');
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(h.onRename).toHaveBeenCalledWith('服务容灾专家');
+  });
+
+  it('does not call onRename when the name is unchanged or blank', async () => {
+    const h = setup(makeRole({ name: 'Goofy 专家' }));
+    await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '重命名…' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存' })); // unchanged
+    expect(h.onRename).not.toHaveBeenCalled();
   });
 
   it('keeps the menu closed until the ⋯ trigger is clicked', async () => {

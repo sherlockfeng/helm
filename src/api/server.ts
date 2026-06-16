@@ -86,6 +86,7 @@ import {
   deleteSource,
   getChunkById as getChunkByIdRepo,
   setRoleBindable,
+  renameRole,
   getChunksForRole,
   getRole as getRoleRow,
   getSource,
@@ -1025,6 +1026,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         const ok = setRoleBindable(deps.db, bindableRoleId, body.bindable);
         if (!ok) return notFound(res);
         return send(res, 200, { roleId: bindableRoleId, bindable: body.bindable });
+      }
+      //   PATCH /api/roles/:id/name  body { name: string }
+      const roleNameMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/name$/);
+      if (roleNameMatch) {
+        if (req.method !== 'PATCH') return methodNotAllowed(res);
+        let body: { name?: unknown };
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (!name) return badRequest(res, 'name must be a non-empty string');
+        const renameRoleId = decodeURIComponent(roleNameMatch[1]!);
+        const ok = renameRole(deps.db, renameRoleId, name);
+        // Not found OR a built-in (renameRole rejects builtins): 404 either way.
+        if (!ok) return notFound(res);
+        return send(res, 200, { roleId: renameRoleId, name });
       }
       const roleTrainMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/train$/);
       if (roleTrainMatch) {

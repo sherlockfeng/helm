@@ -1718,3 +1718,44 @@ describe('POST /api/conversations/:id/deposit-topic', () => {
     }
   });
 });
+
+describe('PATCH /api/roles/:id/name (rename topic)', () => {
+  it('renames a topic; id/paths unchanged', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('svc', '服务容灾', '', 0, ?)`).run(now);
+    const r = await fetchJson('/api/roles/svc/name', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '服务容灾专家' }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { name: string }).name).toBe('服务容灾专家');
+    const row = db.prepare(`SELECT name FROM roles WHERE id = 'svc'`).get() as { name: string };
+    expect(row.name).toBe('服务容灾专家');
+  });
+
+  it('decodes a percent-encoded CJK id', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('og-网关', '旧名', '', 0, ?)`).run(now);
+    const r = await fetchJson(`/api/roles/${encodeURIComponent('og-网关')}/name`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '新名' }),
+    });
+    expect(r.status).toBe(200);
+    expect((db.prepare(`SELECT name FROM roles WHERE id = 'og-网关'`).get() as { name: string }).name).toBe('新名');
+  });
+
+  it('rejects a blank name and a built-in role', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('bi', 'Built', '', 1, ?)`).run(now);
+    const blank = await fetchJson('/api/roles/bi/name', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '   ' }),
+    });
+    expect(blank.status).toBe(400);
+    const builtin = await fetchJson('/api/roles/bi/name', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'whatever' }),
+    });
+    expect(builtin.status).toBe(404); // renameRole won't touch a built-in
+  });
+});

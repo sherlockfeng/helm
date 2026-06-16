@@ -400,6 +400,15 @@ export interface HttpApiDeps {
     input: import('../engine/types.js').RunConversationInput,
   ) => Promise<import('../engine/types.js').RunConversationResult | null>;
   /**
+   * In-app assistant streaming runner used by handleAgentChat. Same engine
+   * as runConversation, but forwards assistant text token-by-token via
+   * `input.onDelta`. Returns null when no streaming-capable engine is wired
+   * (only claude streams today) → the endpoint 503s with an actionable message.
+   */
+  streamConversation?: (
+    input: import('../engine/types.js').StreamConversationInput,
+  ) => Promise<import('../engine/types.js').RunConversationResult | null>;
+  /**
    * Phase 68: GET /api/engine/health returns whatever this resolves to.
    * Orchestrator wires `detectEngines()`. Tests substitute fakes. When
    * absent, the endpoint returns 501 so the Settings UI can fall back
@@ -1132,6 +1141,11 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
       if (url.pathname === '/api/roles/train-chat') {
         if (req.method !== 'POST') return methodNotAllowed(res);
         return handleRoleTrainChat(ctx, deps);
+      }
+      // In-app assistant (bottom-right chat). Streams text/plain.
+      if (url.pathname === '/api/agent-chat') {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        return handleAgentChat(ctx, deps);
       }
       const roleMatch = url.pathname.match(/^\/api\/roles\/([^/]+)$/);
       if (roleMatch) {
@@ -3540,6 +3554,144 @@ function handleRoleTrainChat(ctx: RouteContext, deps: HttpApiDeps): void {
         message: interpreted.message,
         hint: interpreted.hint,
       });
+    }
+  })();
+}
+
+/**
+ * System prompt for the in-app assistant (the bottom-right chat). Teaches the
+ * agent what helm is + how the user works in it (so it can answer "how do I
+ * use this"), which helm MCP tools it may call to act on knowledge, and the
+ * propose-then-confirm rule before any mutation.
+ */
+const AGENT_CHAT_SYSTEM_PROMPT = [
+  'You are helm\'s in-app assistant (a chat box in the corner of the app).',
+  'helm is a desktop app that captures the user\'s coding-agent chats, distills them into reusable',
+  '"topics" (an expert persona = a system prompt + knowledge chunks), and lets the user organize,',
+  'verify, and share that knowledge.',
+  '',
+  'Your two jobs:',
+  '  1. Answer "how do I use helm" questions from what you know below.',
+  '  2. Act on the user\'s knowledge by calling helm\'s MCP tools.',
+  '',
+  'How the user works in helm:',
+  '  - Conversations: imported chats; helm extracts candidate knowledge points from them.',
+  '  - Knowledge › Topics: the personas. Each has a system prompt + knowledge chunks. Users train,',
+  '    update, rename, merge, "配置人格" (give a topic a persona prompt), and delete topics.',
+  '  - Knowledge › Sources: external knowledge repos the user subscribes to.',
+  '  - Verification: benchmark cases that test whether a topic answers correctly.',
+  '',
+  'Tools you can call (helm MCP):',
+  '  - read freely to ground answers in the user\'s real data: list_roles, get_role,',
+  '    search_knowledge, query_knowledge, list_knowledge_sources, list_role_candidates,',
+  '    list_knowledge_providers. Use read_lark_doc when the user pastes a Lark URL.',
+  '  - write/delete: train_role, update_role, delete_role_chunk, drop_knowledge_source.',
+  '',
+  'Mutation etiquette (IMPORTANT):',
+  '  - Before ANY write/delete tool call, state exactly what you will change and WAIT for the user',
+  '    to confirm in their next message. Never mutate on the same turn you propose it.',
+  '  - For dedup/overlap requests: search/list first, show the duplicates and your proposed',
+  '    consolidation, then act only after the user says yes.',
+  '',
+  'Known limits — be honest about these:',
+  '  - Topic-level merge / rename / 配置人格 are done from the Topics ⋯ menu, not via your tools.',
+  '    For those, walk the user to that menu; you can still consolidate at the chunk level',
+  '    (update_role / delete_role_chunk).',
+  '',
+  'Style: mirror the user\'s language (Chinese ↔ Chinese). Keep turns short — this is a chat box.',
+].join('\n');
+
+/**
+ * POST /api/agent-chat — the in-app assistant. Streams the assistant's text
+ * back as `text/plain` (chunked) so the renderer can render token-by-token.
+ * Mirrors handleRoleTrainChat's validation; uses deps.streamConversation.
+ */
+function handleAgentChat(ctx: RouteContext, deps: HttpApiDeps): void {
+  const stream = deps.streamConversation;
+  if (!stream) {
+    return send(ctx.response, 503, {
+      error: 'no_engine',
+      message:
+        'helm 助手需要一个可流式的引擎（Claude Code）。安装 Claude Code 并 `claude login` 后，'
+        + '到 Settings → Default engine 选 claude，再重试。',
+    });
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(ctx.body); }
+  catch { return badRequest(ctx.response, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object') {
+    return badRequest(ctx.response, 'body must be a JSON object');
+  }
+  const { messages, projectPath } = parsed as { messages?: unknown; projectPath?: unknown };
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return badRequest(ctx.response, 'messages must be a non-empty array of {role,content}');
+  }
+  if (projectPath !== undefined && typeof projectPath !== 'string') {
+    return badRequest(ctx.response, 'projectPath must be a string when provided');
+  }
+  const validated: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== 'object') return badRequest(ctx.response, 'each message must be an object');
+    const m = raw as Record<string, unknown>;
+    if (m['role'] !== 'user' && m['role'] !== 'assistant') {
+      return badRequest(ctx.response, 'message.role must be "user" or "assistant"');
+    }
+    if (typeof m['content'] !== 'string' || !m['content']) {
+      return badRequest(ctx.response, 'message.content must be a non-empty string');
+    }
+    validated.push({ role: m['role'], content: m['content'] });
+  }
+
+  const res = ctx.response;
+  let headersSent = false;
+  let anyDelta = false;
+  const ensureHeaders = (): void => {
+    if (headersSent) return;
+    headersSent = true;
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no', // disable proxy buffering so tokens flush
+    });
+  };
+
+  void (async () => {
+    try {
+      const input: import('../engine/types.js').StreamConversationInput = {
+        messages: validated,
+        systemPrompt: AGENT_CHAT_SYSTEM_PROMPT,
+        onDelta: (t: string) => { ensureHeaders(); anyDelta = true; res.write(t); },
+      };
+      if (projectPath) input.cwd = projectPath;
+      const r = await stream(input);
+      if (r === null) {
+        if (!headersSent) {
+          return send(res, 503, {
+            error: 'no_engine',
+            message:
+              'No streaming engine is available. Open helm Settings → Default engine and pick claude.',
+          });
+        }
+        return res.end();
+      }
+      ensureHeaders();
+      // Result-only fallback: if nothing streamed (no text deltas) but the run
+      // produced a final text, send it once.
+      if (!anyDelta && r.text) res.write(r.text);
+      deps.logger?.info('agent_chat_turn', {
+        data: { sessionId: r.sessionId, msgs: validated.length, stderrLen: r.stderr.length },
+      });
+      res.end();
+    } catch (err) {
+      const { interpretClaudeError } = await import('../cli-agent/claude.js');
+      const interpreted = interpretClaudeError(err);
+      deps.logger?.warn('agent_chat_failed', { data: { error: interpreted.raw, hint: interpreted.hint } });
+      if (!headersSent) {
+        return send(res, 502, { error: 'cli_failed', message: interpreted.message, hint: interpreted.hint });
+      }
+      // Mid-stream failure: append a short marker so the user sees it, then end.
+      res.write(`\n\n[助手出错：${interpreted.message}]`);
+      res.end();
     }
   })();
 }

@@ -1549,6 +1549,20 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
         }
         return adapter.runConversation(input);
       },
+      // In-app assistant: same trainer engine, streaming variant. Returns null
+      // when the trainer adapter isn't wired OR doesn't support streaming
+      // (only claude does today) so /api/agent-chat 503s with a clear message.
+      streamConversation: async (input) => {
+        let adapter;
+        try {
+          adapter = engineRouter.trainer();
+        } catch (err) {
+          if (err instanceof EngineNotAvailableError) return null;
+          throw err;
+        }
+        if (!adapter.streamConversation) return null;
+        return adapter.streamConversation(input);
+      },
       // Phase 68: engine health report for the Settings page. Re-runs the
       // detection probes each call (cheap — two `--version` execs) so the
       // user sees the live state of `claude` / `cursor-agent` whenever

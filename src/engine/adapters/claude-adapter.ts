@@ -29,6 +29,7 @@ import type {
   EngineAdapter,
   RunConversationInput,
   RunConversationResult,
+  StreamConversationInput,
   ReviewInput,
 } from '../types.js';
 import type { LlmClient } from '../../summarizer/campaign.js';
@@ -101,6 +102,21 @@ export function buildClaudeAdapter(deps: ClaudeAdapterDeps = {}): EngineAdapter 
           input.messages,
           input.systemPrompt ? { systemPrompt: input.systemPrompt } : {},
         );
+        return { text: turn.text, stderr: turn.stderr, sessionId: turn.sessionId };
+      } finally {
+        agent.dispose();
+      }
+    },
+    async streamConversation(input: StreamConversationInput): Promise<RunConversationResult> {
+      const agentOpts: ConstructorParameters<typeof ClaudeCodeAgent>[0] = { claudeBin };
+      if (input.cwd) agentOpts.cwd = input.cwd;
+      if (input.helmMcpUrl ?? helmMcpUrl) agentOpts.helmMcpUrl = input.helmMcpUrl ?? helmMcpUrl;
+      const agent = new ClaudeCodeAgent(agentOpts);
+      try {
+        const turn = await agent.streamConversation(input.messages, {
+          ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+          onDelta: input.onDelta,
+        });
         return { text: turn.text, stderr: turn.stderr, sessionId: turn.sessionId };
       } finally {
         agent.dispose();

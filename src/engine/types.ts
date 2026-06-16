@@ -63,6 +63,11 @@ export interface RunConversationInput {
   helmMcpUrl?: string;
 }
 
+export interface StreamConversationInput extends RunConversationInput {
+  /** Called with each incremental assistant text chunk as it streams in. */
+  onDelta: (text: string) => void;
+}
+
 export interface RunConversationResult {
   /** Latest assistant turn. */
   text: string;
@@ -98,6 +103,14 @@ export interface EngineAdapter {
    * then returns the latest assistant text + stderr.
    */
   runConversation(input: RunConversationInput): Promise<RunConversationResult>;
+
+  /**
+   * Optional streaming variant of runConversation — forwards assistant text
+   * token-by-token via `input.onDelta` as it arrives. Only engines whose CLI
+   * supports incremental output implement this (claude); others leave it
+   * undefined and the caller falls back to non-streaming.
+   */
+  streamConversation?(input: StreamConversationInput): Promise<RunConversationResult>;
 }
 
 export class EngineCapabilityUnsupportedError extends Error {

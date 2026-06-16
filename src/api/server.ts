@@ -97,6 +97,7 @@ import {
 import {
   getChatKnowledgePoint,
   setChatKnowledgePointStatus,
+  markPointsDepositedForTopic,
   resolveOrCreateTopic,
 } from '../storage/repos/chat-knowledge.js';
 import {
@@ -275,6 +276,16 @@ export interface HttpApiDeps {
   extractChatKnowledge?: (input: {
     hostSessionId: string;
   }) => Promise<{ inserted: number }>;
+  /**
+   * Topic-scoped one-shot deposit: re-read the whole chat and pull out EVERY
+   * durable point belonging to `topicName`, for the "把这条 chat 里所有 X 的
+   * 知识沉淀进 X" group action. Returns the points; the server writes each
+   * straight into the topic (no candidate step).
+   */
+  extractTopicKnowledge?: (input: {
+    hostSessionId: string;
+    topicName: string;
+  }) => Promise<Array<{ title: string; body: string; kind: string }>>;
   /**
    * Auto-propose ONE benchmark case from a freshly-accepted knowledge
    * chunk. Fired fire-and-forget on candidate/chat-knowledge accept; the
@@ -491,6 +502,59 @@ function classifyRoleTier(
     }
   }
   return sawTeam ? 'team' : 'personal';
+}
+
+/**
+ * Write one knowledge point straight into a topic: append the chunk via the
+ * role-library updater, then materialize it as a chat-captured file (files-
+ * as-truth, best-effort). Shared by the single-point accept handler and the
+ * topic-scoped bulk deposit so both land knowledge identically. Returns
+ * 'conflicts' (near-duplicate) without writing; the caller maps the status.
+ * Benchmark-case proposing + any candidate-status flip stay at the call site.
+ */
+async function depositDocumentToTopic(
+  deps: HttpApiDeps,
+  roleId: string,
+  doc: { title: string; body: string; kind: string; origin: string; sourceLabel: string },
+): Promise<
+  | { status: 'ok'; chunkIds: string[]; chunksAdded: number }
+  | { status: 'conflicts'; conflicts: unknown }
+> {
+  const result = await updateRoleLibrary(deps.db, {
+    roleId,
+    appendDocuments: [{
+      filename: doc.origin,
+      content: doc.body,
+      kind: doc.kind as never,
+      sourceKind: 'inline',
+      origin: doc.origin,
+      sourceLabel: doc.sourceLabel,
+      pointIdBase: slugifyPointId(doc.title, doc.origin.slice(0, 16)),
+    }],
+    embedFn: makePseudoEmbedFn(),
+  });
+  if (result.status === 'conflicts') {
+    return { status: 'conflicts', conflicts: result.conflicts };
+  }
+  // Files-as-truth: materialize each new chunk as chat-captured (best-effort).
+  const wikiRepo = deps.knowledgeRepoManager
+    ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
+    : undefined;
+  const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
+  if (wikiRepo && wikiUsername) {
+    for (const chunkId of result.chunkIds) {
+      try {
+        await deps.knowledgeRepoManager!.writeCapturedPoint({
+          repoId: wikiRepo.id, chunkId, username: wikiUsername,
+        });
+      } catch (err) {
+        deps.logger?.warn('wiki_capture_write_failed', {
+          data: { origin: doc.origin, chunkId, message: (err as Error).message },
+        });
+      }
+    }
+  }
+  return { status: 'ok', chunkIds: result.chunkIds, chunksAdded: result.chunksAdded };
 }
 
 export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): HttpApiHandle {
@@ -2158,6 +2222,66 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         } catch (err) { return internalError(res, err); }
       }
 
+      // Topic-scoped one-shot deposit: re-read the whole chat, extract EVERY
+      // point belonging to one topic, write each straight into it. Powers the
+      // "把这条 chat 里所有 X 的知识沉淀进 X" group action.
+      //   POST /api/conversations/:id/deposit-topic
+      //     body { targetRoleId? } | { newTopicName? }
+      const depositTopicMatch = url.pathname.match(
+        /^\/api\/conversations\/([^/]+)\/deposit-topic$/,
+      );
+      if (depositTopicMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        if (!deps.extractTopicKnowledge) {
+          return send(res, 503, { error: 'no_engine', message: 'No LLM engine wired.' });
+        }
+        const hostSessionId = decodeURIComponent(depositTopicMatch[1]!);
+        let body: { targetRoleId?: unknown; newTopicName?: unknown } = {};
+        if (ctx.body) {
+          try { body = JSON.parse(ctx.body) as typeof body; }
+          catch { return badRequest(res, 'invalid JSON body'); }
+        }
+        const now = new Date().toISOString();
+        const roleId = resolveOrCreateTopic(deps.db, {
+          targetRoleId: typeof body.targetRoleId === 'string' ? body.targetRoleId : null,
+          suggestedRoleId: null,
+          newTopicName: typeof body.newTopicName === 'string' ? body.newTopicName : null,
+          suggestedTopicName: null,
+          now,
+          fallbackSeed: hostSessionId,
+        });
+        if (!roleId) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
+        const topicName = getRoleRow(deps.db, roleId)?.name ?? roleId;
+        try {
+          const points = await deps.extractTopicKnowledge({ hostSessionId, topicName });
+          let deposited = 0;
+          let skipped = 0;
+          const newChunkIds: string[] = [];
+          for (const p of points) {
+            const r = await depositDocumentToTopic(deps, roleId, {
+              title: p.title,
+              body: p.body,
+              kind: p.kind,
+              origin: `deposit-${hostSessionId.slice(0, 8)}-${slugifyPointId(p.title, 'pt')}`,
+              sourceLabel: `Deposited from chat ${hostSessionId.slice(0, 8)}`,
+            });
+            // Near-duplicate points are silently skipped — already in the topic.
+            if (r.status === 'ok') { deposited += r.chunksAdded; newChunkIds.push(...r.chunkIds); }
+            else skipped += 1;
+          }
+          // Auto-propose a few benchmark cases for the freshest chunks (capped).
+          if (deps.proposeBenchmarkCase) {
+            for (const chunkId of newChunkIds.slice(0, 3)) {
+              void deps.proposeBenchmarkCase({ roleId, chunkId, event: 'candidate_accept' }).catch(() => {});
+            }
+          }
+          // The individually-suggested candidates for this topic are now
+          // represented in it — clear them so they stop showing as pending.
+          const cleared = markPointsDepositedForTopic(deps.db, hostSessionId, roleId, topicName, now);
+          return send(res, 200, { roleId, topicName, found: points.length, deposited, skipped, cleared });
+        } catch (err) { return internalError(res, err); }
+      }
+
       // v35: chat knowledge-point lifecycle.
       //   POST /api/chat-knowledge/:id/accept   body { targetRoleId?, newTopicName? }
       //   POST /api/chat-knowledge/:id/dismiss
@@ -2201,18 +2325,12 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         if (!roleId) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
 
         try {
-          const result = await updateRoleLibrary(deps.db, {
-            roleId,
-            appendDocuments: [{
-              filename: `ckp-${pointId}`,
-              content: point.body,
-              kind: point.kind,
-              sourceKind: 'inline',
-              origin: `ckp-${pointId}`,
-              sourceLabel: `Extracted from chat ${point.hostSessionId.slice(0, 8)}`,
-              pointIdBase: slugifyPointId(point.title, `ckp-${pointId.slice(0, 8)}`),
-            }],
-            embedFn: makePseudoEmbedFn(),
+          const result = await depositDocumentToTopic(deps, roleId, {
+            title: point.title,
+            body: point.body,
+            kind: point.kind,
+            origin: `ckp-${pointId}`,
+            sourceLabel: `Extracted from chat ${point.hostSessionId.slice(0, 8)}`,
           });
           if (result.status === 'conflicts') {
             return send(res, 409, {
@@ -2227,24 +2345,6 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           if (deps.proposeBenchmarkCase) {
             for (const chunkId of result.chunkIds.slice(0, 2)) {
               void deps.proposeBenchmarkCase({ roleId, chunkId, event: 'candidate_accept' }).catch(() => {});
-            }
-          }
-          // Files-as-truth: materialize as chat-captured (best-effort).
-          const wikiRepo = deps.knowledgeRepoManager
-            ? listKnowledgeRepos(deps.db, { status: 'active' }).find((r) => r.profile === 'llm-wiki')
-            : undefined;
-          const wikiUsername = deps.getConfig?.().knowledge.wikiUsername?.trim();
-          if (wikiRepo && wikiUsername) {
-            for (const chunkId of result.chunkIds) {
-              try {
-                await deps.knowledgeRepoManager!.writeCapturedPoint({
-                  repoId: wikiRepo.id, chunkId, username: wikiUsername,
-                });
-              } catch (err) {
-                deps.logger?.warn('wiki_capture_write_failed', {
-                  data: { pointId, chunkId, message: (err as Error).message },
-                });
-              }
             }
           }
           return send(res, 200, { pointId, status: 'accepted', roleId, chunksAdded: result.chunksAdded });

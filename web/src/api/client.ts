@@ -93,6 +93,21 @@ export const helmApi = {
       `/api/chat-knowledge/${encodeURIComponent(id)}/dismiss`,
     ),
 
+  /**
+   * One-shot topic deposit: re-read the whole chat and write EVERY point
+   * belonging to one topic straight into it ("把这条 chat 里所有 X 的知识
+   * 沉淀进 X"). Pass an existing topic id or a new-topic name.
+   */
+  depositTopicKnowledge: (
+    hostSessionId: string,
+    target: { targetRoleId?: string; newTopicName?: string },
+  ) =>
+    request<{ roleId: string; topicName: string; found: number; deposited: number; skipped: number }>(
+      'POST',
+      `/api/conversations/${encodeURIComponent(hostSessionId)}/deposit-topic`,
+      target,
+    ),
+
   scanHistory: (host: 'claude-code' | 'cursor' | 'codex' | 'all' = 'all') =>
     request<{ results: { host: string; imported: number; skipped: number; turns: number }[] }>(
       'POST',

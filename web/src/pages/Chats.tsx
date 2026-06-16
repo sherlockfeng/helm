@@ -632,7 +632,7 @@ function KnowledgeInSection({
 
 // ── v35: LLM knowledge points (the unified "可沉淀的知识" section) ──────────
 
-function KnowledgePointsSection({
+export function KnowledgePointsSection({
   hostSessionId, points, roles, onMutated,
 }: {
   hostSessionId: string;
@@ -678,22 +678,131 @@ function KnowledgePointsSection({
           还没有知识点。攒够新的对话内容会自动提取，或点「✨ 提取知识点」手动跑一次。
         </p>
       ) : (
-        <ul className="helm-conv-candidates">
-          {points.map((p) => (
-            <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} />
+        <div className="helm-conv-topic-groups">
+          {groupPointsByTopic(points, roles).map((g) => (
+            <TopicGroup
+              key={g.key}
+              group={g}
+              hostSessionId={hostSessionId}
+              roles={roles}
+              onMutated={onMutated}
+            />
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
 }
 
+/** A topic and the chat's pending points that suggest it. */
+interface TopicGroupModel {
+  key: string;
+  label: string;
+  /** Existing-topic id, when the suggestion resolved to one. */
+  targetRoleId?: string;
+  /** New-topic name, when the suggestion proposed a fresh topic. */
+  newTopicName?: string;
+  points: ChatKnowledgePoint[];
+}
+
+/**
+ * Aggregate points by their suggested topic so each topic shows once (the
+ * user's ask: don't list 服务容灾专家 twice). Existing-topic suggestions key
+ * by role id; new-topic suggestions key by proposed name. Groups keep
+ * first-appearance order so the list is stable across refetches.
+ */
+export function groupPointsByTopic(
+  points: ChatKnowledgePoint[],
+  roles: { id: string; name: string }[],
+): TopicGroupModel[] {
+  const byKey = new Map<string, TopicGroupModel>();
+  for (const p of points) {
+    if (p.suggestedRoleId) {
+      const key = `role:${p.suggestedRoleId}`;
+      let g = byKey.get(key);
+      if (!g) {
+        const label = roles.find((r) => r.id === p.suggestedRoleId)?.name ?? p.suggestedRoleId;
+        g = { key, label, targetRoleId: p.suggestedRoleId, points: [] };
+        byKey.set(key, g);
+      }
+      g.points.push(p);
+    } else {
+      const name = p.suggestedTopicName ?? '新 topic';
+      const key = `new:${name}`;
+      let g = byKey.get(key);
+      if (!g) {
+        g = { key, label: name, newTopicName: name, points: [] };
+        byKey.set(key, g);
+      }
+      g.points.push(p);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function TopicGroup({
+  group, hostSessionId, roles, onMutated,
+}: {
+  group: TopicGroupModel;
+  hostSessionId: string;
+  roles: { id: string; name: string }[];
+  onMutated: () => void;
+}): ReactElement {
+  const [depositing, setDepositing] = useState(false);
+  const isNew = !group.targetRoleId;
+
+  async function depositAll(): Promise<void> {
+    setDepositing(true);
+    try {
+      const target = group.targetRoleId
+        ? { targetRoleId: group.targetRoleId }
+        : { newTopicName: group.newTopicName ?? group.label };
+      const r = await helmApi.depositTopicKnowledge(hostSessionId, target);
+      if (r.deposited === 0) {
+        toast.message(`没有新增 —— 这条 chat 里没找到更多「${r.topicName}」的知识，或都已存在。`);
+      } else {
+        toast.success(`已把 ${r.deposited} 条「${r.topicName}」的知识沉淀进去`);
+      }
+      onMutated();
+    } catch (err) {
+      toast.error(`沉淀失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setDepositing(false); }
+  }
+
+  return (
+    <div className="helm-conv-topic-group">
+      <div className="helm-conv-topic-group-head">
+        <span className="helm-conv-topic-group-title">
+          {isNew ? <>新 topic「{group.label}」</> : <strong>{group.label}</strong>}
+          <span className="muted"> · {group.points.length} 条</span>
+        </span>
+        <button
+          type="button"
+          className="helm-conv-link-button"
+          disabled={depositing}
+          onClick={() => { void depositAll(); }}
+          title={`让 LLM 通读整条 chat，把所有「${group.label}」相关的知识都沉淀进这个 topic（可能比上面列出的更多）`}
+        >
+          {depositing ? '沉淀中…' : '⤵ 沉淀全部到此 topic'}
+        </button>
+      </div>
+      <ul className="helm-conv-candidates">
+        {group.points.map((p) => (
+          <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} hideSuggestion />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function KnowledgePointRow({
-  point, roles, onDecided,
+  point, roles, onDecided, hideSuggestion = false,
 }: {
   point: ChatKnowledgePoint;
   roles: { id: string; name: string }[];
   onDecided: () => void;
+  /** Drop the "建议归入 X" prefix when rendered under a topic group header. */
+  hideSuggestion?: boolean;
 }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -740,8 +849,11 @@ function KnowledgePointRow({
         {expanded && <div className="helm-conv-candidate-excerpt-full">{point.body}</div>}
         <div className="helm-conv-candidate-foot">
           <span className="muted">
-            建议归入 {isNew ? <>新 topic「{suggestedName}」</> : <strong>{suggestedName}</strong>}
-            {' · '}
+            {/* When grouped under a topic header the suggestion is redundant —
+                the group already names the topic. */}
+            {!hideSuggestion && (
+              <>建议归入 {isNew ? <>新 topic「{suggestedName}」</> : <strong>{suggestedName}</strong>}{' · '}</>
+            )}
             <button type="button" className="helm-conv-link-button" onClick={() => setExpanded((v) => !v)}>
               {expanded ? '收起' : '展开'}
             </button>

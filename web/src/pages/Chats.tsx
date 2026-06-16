@@ -697,6 +697,8 @@ function KnowledgePointRow({
 }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
   const isNew = !point.suggestedRoleId;
   const suggestedName = point.suggestedRoleId
     ? (roles.find((r) => r.id === point.suggestedRoleId)?.name ?? point.suggestedRoleId)
@@ -765,6 +767,31 @@ function KnowledgePointRow({
               items={roles.map((r) => ({ value: r.id, label: r.name }))}
               onValueChange={(rid) => { if (rid) void accept({ targetRoleId: rid }); }}
             />
+            {creating ? (
+              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value.slice(0, 60))}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && newName.trim()) void accept({ newTopicName: newName.trim() }); }}
+                  placeholder="新归类名称"
+                  style={{ fontSize: 12, padding: '2px 6px', width: 140 }}
+                />
+                <button type="button" className="helm-conv-link-button" disabled={busy || !newName.trim()}
+                  onClick={() => { if (newName.trim()) void accept({ newTopicName: newName.trim() }); }}>建并采纳</button>
+                <button type="button" className="helm-conv-link-button" onClick={() => { setCreating(false); setNewName(''); }}>取消</button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="helm-conv-link-button"
+                disabled={busy}
+                onClick={() => setCreating(true)}
+                title="采纳到一个你自定义命名的新归类（输入已存在的名会自动复用，不会重复新建）"
+              >
+                ＋ 新建归类…
+              </button>
+            )}
             <button
               type="button"
               className="helm-conv-link-button helm-conv-link-danger"

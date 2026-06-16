@@ -92,12 +92,11 @@ import {
   listRoles as listRolesRepo,
   listSourcesForRole,
   unarchiveChunk as unarchiveChunkRepo,
-  upsertRole as upsertRoleRepo,
 } from '../storage/repos/roles.js';
 import {
   getChatKnowledgePoint,
   setChatKnowledgePointStatus,
-  topicIdFromName,
+  resolveOrCreateTopic,
 } from '../storage/repos/chat-knowledge.js';
 import {
   bulkRejectCandidates,
@@ -2133,29 +2132,18 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           try { body = JSON.parse(ctx.body) as typeof body; }
           catch { return badRequest(res, 'invalid JSON body'); }
         }
-        let roleId = typeof body.targetRoleId === 'string' && body.targetRoleId
-          ? body.targetRoleId
-          : point.suggestedRoleId;
-        if (!roleId) {
-          const newName = (typeof body.newTopicName === 'string' && body.newTopicName.trim())
-            ? body.newTopicName.trim()
-            : point.suggestedTopicName;
-          if (!newName) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
-          // Create a plain (non-bindable) topic to hold the point. Use the
-          // CJK-friendly id slug so Chinese topic names get a meaningful id
-          // (helm 采集架构 → helm-采集架构) instead of collapsing to "helm".
-          const baseId = topicIdFromName(newName, `topic-${pointId.slice(0, 8)}`);
-          let id = baseId;
-          for (let n = 2; getRoleRow(deps.db, id); n += 1) {
-            if (n > 99) { id = `topic-${pointId.slice(0, 8)}`; break; }
-            id = `${baseId}-${n}`;
-          }
-          upsertRoleRepo(deps.db, {
-            id, name: newName, systemPrompt: '', isBuiltin: false,
-            bindable: false, createdAt: now,
-          });
-          roleId = id;
-        }
+        // Resolve the home topic: explicit id → suggested id → by NAME
+        // (typed newTopicName or suggested), reusing a same-name topic so
+        // repeated accepts into the same 归类 don't spawn duplicates.
+        const roleId = resolveOrCreateTopic(deps.db, {
+          targetRoleId: typeof body.targetRoleId === 'string' ? body.targetRoleId : null,
+          suggestedRoleId: point.suggestedRoleId,
+          newTopicName: typeof body.newTopicName === 'string' ? body.newTopicName : null,
+          suggestedTopicName: point.suggestedTopicName,
+          now,
+          fallbackSeed: pointId,
+        });
+        if (!roleId) return badRequest(res, 'no target topic (provide targetRoleId or newTopicName)');
 
         try {
           const result = await updateRoleLibrary(deps.db, {

@@ -117,5 +117,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: renderer-screenshots
-          path: tests/e2e/renderer/__screenshots__/
+          # __screenshots__ = per-page captures + visual diffs (for eyeballing
+          # failures). __baselines__ = the committed visual-regression baselines;
+          # uploaded too so freshly-seeded baselines can be downloaded and
+          # committed on the bootstrap run.
+          path: |
+            tests/e2e/renderer/__screenshots__/
+            tests/e2e/renderer/__baselines__/
           if-no-files-found: ignore

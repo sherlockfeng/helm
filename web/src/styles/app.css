@@ -1995,6 +1995,20 @@ button.helm-conv-unknown-chip.is-amber.is-selected {
   border-bottom: 1px solid var(--border);
 }
 .helm-conv-topic-group-title { font-size: 13px; }
+
+/* Inline near-duplicate prompt on a knowledge point (accept hit a 409). */
+.helm-conv-conflict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 2px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
 .helm-conv-candidate-row {
   display: flex;
   gap: 8px;

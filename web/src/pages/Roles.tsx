@@ -353,6 +353,73 @@ export function PromoteModal({ roleId, roleName, onClose }: {
   );
 }
 
+/**
+ * 配置人格: drafts an editable expert prompt from the topic's knowledge, then
+ * saves it + makes the topic bindable. Without this, 配置人格 left an "expert"
+ * with an empty system prompt.
+ */
+function PersonaModal({ roleId, roleName, onClose, onSaved }: {
+  roleId: string;
+  roleName: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [prompt, setPrompt] = useState('');
+  const [drafting, setDrafting] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const r = await helmApi.draftPersona(roleId);
+        if (live) setPrompt(r.prompt);
+      } catch (err) {
+        if (live) toast.error(`起草失败：${err instanceof ApiError ? err.message : String(err)}（可直接手写）`);
+      } finally {
+        if (live) setDrafting(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [roleId]);
+
+  async function save(): Promise<void> {
+    const p = prompt.trim();
+    if (!p) { toast.error('人格 prompt 不能为空'); return; }
+    setSaving(true);
+    try {
+      await helmApi.configurePersona(roleId, p);
+      toast.success(`已配置人格：${roleName}（现为专家）`);
+      onSaved();
+    } catch (err) {
+      toast.error(`配置失败：${err instanceof ApiError ? err.message : String(err)}`);
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent title={`配置人格 — ${roleName}`} width={640}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          根据该 topic 的知识起草了一段 expert prompt，确认或修改后保存。保存后它会成为可绑定的专家。
+        </p>
+        <textarea
+          value={prompt}
+          disabled={drafting || saving}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder={drafting ? '正在根据知识起草…' : '你是 … 专家，…'}
+          style={{ width: '100%', minHeight: 200, fontSize: 13, fontFamily: 'inherit', padding: 8 }}
+        />
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <Button onClick={() => { void save(); }} disabled={drafting || saving || !prompt.trim()}>
+            {saving ? '保存中…' : '保存并成为专家'}
+          </Button>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RoleDetail({ roleId, onTrained }: { roleId: string; onTrained: () => void }) {
   const detail = useApi(() => helmApi.role(roleId), [roleId]);
   const [training, setTraining] = useState(false);
@@ -946,6 +1013,7 @@ export function RoleActionsMenu({
   onUpdateViaChat,
   onPromote,
   onToggleBindable,
+  onConfigurePersona,
   onDelete,
   onRename,
   mergeTargets,
@@ -954,7 +1022,10 @@ export function RoleActionsMenu({
   role: RoleSummary;
   onUpdateViaChat: () => void;
   onPromote: () => void;
+  /** 卸下人格: expert → pure topic (a plain flag flip). */
   onToggleBindable: () => void;
+  /** 配置人格: pure topic → expert — opens the persona-draft flow. */
+  onConfigurePersona: () => void;
   onDelete: () => void;
   /** Rename the topic's display name (id stays the same). */
   onRename: (newName: string) => void;
@@ -1046,11 +1117,11 @@ export function RoleActionsMenu({
             </button>
           )}
           <button type="button" role="menuitem"
-            onClick={() => { onToggleBindable(); setOpen(false); }}
+            onClick={() => { if (isExpert) onToggleBindable(); else onConfigurePersona(); setOpen(false); }}
             title={isExpert
               ? '卸下人格：退回纯知识主题。检索不受影响，但不再可绑定、不再注入/定向捕获'
-              : '配置人格：给这个主题加上 system prompt，让它可绑定到对话、开场注入知识、定向捕获'}>
-            {isExpert ? '卸下人格' : '配置人格'}
+              : '配置人格：根据已有知识起草一段 expert prompt（可编辑），保存后成为可绑定专家'}>
+            {isExpert ? '卸下人格' : '配置人格…'}
           </button>
           {mergeTargets.length > 0 && (
             <button type="button" role="menuitem"
@@ -1089,6 +1160,7 @@ function RoleCard({
   onUpdateViaChat,
   onTrained,
   onToggleBindable,
+  onConfigurePersona,
   onPromote,
   onDelete,
   onRename,
@@ -1101,8 +1173,10 @@ function RoleCard({
   /** Phase 65: open the train modal in update-mode for this role. */
   onUpdateViaChat: () => void;
   onTrained: () => void;
-  /** PR-δ: flip Expert / Collection. */
+  /** PR-δ: flip Expert / Collection (卸下人格). */
   onToggleBindable: () => void;
+  /** 配置人格: open the persona-draft modal (page handles it). */
+  onConfigurePersona: () => void;
   /** PR-γ: open the promote-to-domains modal. */
   onPromote: () => void;
   /** Topics cleanup: delete this collection (confirm handled by page). */
@@ -1167,6 +1241,7 @@ function RoleCard({
             onPromote={onPromote}
             onToggleBindable={onToggleBindable}
             onDelete={onDelete}
+            onConfigurePersona={onConfigurePersona}
             onRename={onRename}
             mergeTargets={mergeTargets}
             onMerge={onMerge}
@@ -1194,6 +1269,7 @@ function RolesPageBase() {
   // PR-γ: promote modal target.
   const [promoteTarget, setPromoteTarget] = useState<{ roleId: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ roleId: string; name: string } | null>(null);
+  const [personaTarget, setPersonaTarget] = useState<{ roleId: string; name: string } | null>(null);
   // Topics merge: holds {from, to} while the confirm dialog is open.
   const [mergeTarget, setMergeTarget] = useState<
     { fromId: string; fromName: string; toId: string; toName: string } | null
@@ -1312,6 +1388,7 @@ function RolesPageBase() {
           onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
           onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
           onToggleBindable={() => { void toggleBindable(r); }}
+          onConfigurePersona={() => setPersonaTarget({ roleId: r.id, name: r.name })}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
           onRename={(name) => { void rename(r.id, name); }}
@@ -1335,6 +1412,7 @@ function RolesPageBase() {
           onToggle={() => setExpanded(expanded === r.id ? null : r.id)}
           onUpdateViaChat={() => setChatTarget({ mode: 'update', roleId: r.id, name: r.name })}
           onToggleBindable={() => { void toggleBindable(r); }}
+          onConfigurePersona={() => setPersonaTarget({ roleId: r.id, name: r.name })}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
           onRename={(name) => { void rename(r.id, name); }}
@@ -1374,6 +1452,15 @@ function RolesPageBase() {
           roleId={promoteTarget.roleId}
           roleName={promoteTarget.name}
           onClose={() => setPromoteTarget(null)}
+        />
+      )}
+
+      {personaTarget && (
+        <PersonaModal
+          roleId={personaTarget.roleId}
+          roleName={personaTarget.name}
+          onClose={() => setPersonaTarget(null)}
+          onSaved={() => { setPersonaTarget(null); reload(); }}
         />
       )}
 

@@ -26,7 +26,6 @@ import { PageHeader } from '../components/PageHeader.js';
 import { StatTile } from '../components/StatTile.js';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/Select.js';
-import { Combobox } from '../components/Combobox.js';
 import { CardSkeletonList } from '../components/Skeleton.js';
 import type { KnowledgeChunkKind, RoleSummary } from '../api/types.js';
 import {
@@ -931,6 +930,119 @@ function RoleCandidates({
   );
 }
 
+/**
+ * Compact per-role action menu. The card used to spray six buttons across
+ * a wrapping row (Update via chat / Contribute / 删除 / 合并… / 卸下人格 /
+ * Show) — visually noisy and language-mixed. Now only the expand toggle
+ * stays inline; everything else folds into a single ⋯ overflow menu so the
+ * row footprint shrinks to two small controls. Reuses the .helm-conv-overflow
+ * idiom from Chats.tsx (click-outside to close).
+ */
+function RoleActionsMenu({
+  role,
+  onUpdateViaChat,
+  onPromote,
+  onToggleBindable,
+  onDelete,
+  mergeTargets,
+  onMerge,
+}: {
+  role: RoleSummary;
+  onUpdateViaChat: () => void;
+  onPromote: () => void;
+  onToggleBindable: () => void;
+  onDelete: () => void;
+  mergeTargets: { value: string; label: string }[];
+  onMerge: (targetRoleId: string, targetName: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent): void {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setMergeOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // Built-ins are seeded from src: no edit/delete/merge actions apply, so the
+  // menu would be empty — don't render the trigger at all.
+  if (role.isBuiltin) return null;
+
+  const isExpert = role.bindable !== false;
+  const canContribute = role.tier !== 'team';
+
+  return (
+    <div ref={wrapRef} className="helm-conv-overflow">
+      <button
+        type="button"
+        className="helm-conv-overflow-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="更多操作"
+        onClick={() => { setOpen((v) => !v); setMergeOpen(false); }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div role="menu" className="helm-conv-overflow-menu">
+          {isExpert && (
+            <button type="button" role="menuitem"
+              onClick={() => { onUpdateViaChat(); setOpen(false); }}
+              title="通过对话补充知识或微调 system prompt —— 已有知识点保留">
+              通过对话更新
+            </button>
+          )}
+          {canContribute && (
+            <button type="button" role="menuitem"
+              onClick={() => { onPromote(); setOpen(false); }}
+              title="挑选碎片合并成一篇文档，开 MR Contribute 到 llm-wiki 的 domains/<域>/">
+              贡献到团队层…
+            </button>
+          )}
+          <button type="button" role="menuitem"
+            onClick={() => { onToggleBindable(); setOpen(false); }}
+            title={isExpert
+              ? '卸下人格：退回纯知识主题。检索不受影响，但不再可绑定、不再注入/定向捕获'
+              : '配置人格：给这个主题加上 system prompt，让它可绑定到对话、开场注入知识、定向捕获'}>
+            {isExpert ? '卸下人格' : '配置人格'}
+          </button>
+          {mergeTargets.length > 0 && (
+            <button type="button" role="menuitem"
+              onClick={() => setMergeOpen((v) => !v)}
+              title="把这个主题及其全部知识点并入另一个主题">
+              合并到… {mergeOpen ? '▾' : '▸'}
+            </button>
+          )}
+          {mergeOpen && mergeTargets.length > 0 && (
+            <div className="helm-role-merge-sublist">
+              {mergeTargets.map((t) => (
+                <button key={t.value} type="button" role="menuitem"
+                  onClick={() => { onMerge(t.value, t.label); setOpen(false); setMergeOpen(false); }}
+                  title={`并入「${t.label}」`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="helm-conv-overflow-divider" role="separator" />
+          <button type="button" role="menuitem" className="helm-conv-overflow-danger"
+            onClick={() => { onDelete(); setOpen(false); }}
+            title="删除这个 topic 及其全部知识点（不可恢复）">
+            删除
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RoleCard({
   role,
   expanded,
@@ -996,70 +1108,26 @@ function RoleCard({
               {role.pendingCandidateCount} new
             </span>
           )}
-          <ProposedCaseChip roleId={role.id} />
           {/* R-9: proposed-case count per role. Reads from the
               global notifications cache the App-level hook seeds so
               every row doesn't refetch independently. */}
-          {/* Phase 65: per-role "Update via chat" — opens the train modal
-              in update mode, telling the agent to call update_role (not
-              train_role) so existing chunks survive. Hidden on built-ins
-              because their prompts/chunks are seeded from src — overwriting
-              would make them drift from code. */}
-          {!role.isBuiltin && role.bindable !== false && (
-            <button
-              onClick={onUpdateViaChat}
-              title="Append knowledge or refine the system prompt — existing chunks stay."
-            >
-              Update via chat
-            </button>
-          )}
-          {/* Contribute = 升格到 domains/. Hidden for team-layer topics
-              (imported from domains/ or wiki/) — they're already there, so
-              promoting them back is a no-op. Only personal-layer knowledge
-              (chat-captured / entity buckets) is contributable. */}
-          {!role.isBuiltin && role.tier !== 'team' && (
-            <button
-              onClick={onPromote}
-              title="挑选碎片合并成一篇文档，开 MR Contribute 到 llm-wiki 的 domains/<域>/"
-            >
-              Contribute
-            </button>
-          )}
-          {!role.isBuiltin && (
-            <button
-              onClick={onDelete}
-              title="删除这个 topic 及其全部知识点（不可恢复）"
-              style={{ color: 'var(--danger)' }}
-            >
-              删除
-            </button>
-          )}
-          {!role.isBuiltin && mergeTargets.length > 0 && (
-            <Combobox
-              value=""
-              placeholder="合并到…"
-              items={mergeTargets}
-              emptyMessage="没有其它可合并的主题"
-              onValueChange={(targetId) => {
-                const t = mergeTargets.find((m) => m.value === targetId);
-                if (t) onMerge(t.value, t.label);
-              }}
-            />
-          )}
-          {!role.isBuiltin && (
-            <button
-              onClick={onToggleBindable}
-              title={role.bindable === false
-                ? '配置人格：给这个主题加上 system prompt，让它可绑定到对话、开场注入知识、定向捕获'
-                : '卸下人格：退回纯知识主题。检索不受影响，但不再可绑定、不再注入/定向捕获'}
-            >
-              {role.bindable === false ? '配置人格' : '卸下人格'}
-            </button>
-          )}
+          <ProposedCaseChip roleId={role.id} />
+          {/* Compact actions: expand toggle stays inline (most-used);
+              everything else (update / contribute / persona / merge /
+              delete) folds into the ⋯ overflow menu to shrink the row. */}
           <button
             onClick={onToggle}
             title={expanded ? '收起：隐藏知识点、来源与候选' : '展开：查看这个 topic 的知识点、来源与待采纳候选'}
-          >{expanded ? 'Hide' : 'Show'}</button>
+          >{expanded ? '收起' : '展开'}</button>
+          <RoleActionsMenu
+            role={role}
+            onUpdateViaChat={onUpdateViaChat}
+            onPromote={onPromote}
+            onToggleBindable={onToggleBindable}
+            onDelete={onDelete}
+            mergeTargets={mergeTargets}
+            onMerge={onMerge}
+          />
         </div>
       </div>
       {expanded && <RoleDetail roleId={role.id} onTrained={onTrained} />}

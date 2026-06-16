@@ -110,7 +110,7 @@ import {
   setCandidateStatus,
   updateCandidateText,
 } from '../storage/repos/knowledge-candidates.js';
-import { updateRole as updateRoleLibrary } from '../roles/library.js';
+import { updateRole as updateRoleLibrary, type ChunkConflict } from '../roles/library.js';
 import { makePseudoEmbedFn } from '../mcp/embed.js';
 import { slugifyPointId } from '../knowledge-repo/slug.js';
 import { queryKnowledge } from '../mcp/tools/query-knowledge.js';
@@ -522,7 +522,7 @@ async function depositDocumentToTopic(
   force = false,
 ): Promise<
   | { status: 'ok'; chunkIds: string[]; chunksAdded: number }
-  | { status: 'conflicts'; conflicts: unknown }
+  | { status: 'conflicts'; conflicts: ChunkConflict[] }
 > {
   const result = await updateRoleLibrary(deps.db, {
     roleId,
@@ -1045,6 +1045,37 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         // Not found OR a built-in (renameRole rejects builtins): 404 either way.
         if (!ok) return notFound(res);
         return send(res, 200, { roleId: renameRoleId, name });
+      }
+      //   POST /api/roles/:id/append-points  body { points: [{title,body,kind}] }
+      // Force-write a set of points the user confirmed past a near-duplicate
+      // warning (the "仍然写入" choice from a deposit-all conflict review).
+      const appendPointsMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/append-points$/);
+      if (appendPointsMatch) {
+        if (req.method !== 'POST') return methodNotAllowed(res);
+        const apRoleId = decodeURIComponent(appendPointsMatch[1]!);
+        if (!getRoleRow(deps.db, apRoleId)) return notFound(res);
+        let body: { points?: unknown } = {};
+        try { body = JSON.parse(ctx.body) as typeof body; }
+        catch { return badRequest(res, 'invalid JSON body'); }
+        const points = Array.isArray(body.points) ? body.points : null;
+        if (!points) return badRequest(res, 'points must be an array');
+        try {
+          let added = 0;
+          for (let i = 0; i < points.length; i++) {
+            const p = points[i] as { title?: unknown; body?: unknown; kind?: unknown };
+            const title = typeof p.title === 'string' ? p.title : '';
+            const pbody = typeof p.body === 'string' ? p.body : '';
+            if (!title || !pbody) continue;
+            const r = await depositDocumentToTopic(deps, apRoleId, {
+              title, body: pbody,
+              kind: typeof p.kind === 'string' ? p.kind : 'other',
+              origin: `force-${slugifyPointId(title, 'pt')}-${i}`,
+              sourceLabel: 'Added past near-duplicate confirmation',
+            }, true); // force: user already confirmed
+            if (r.status === 'ok') added += r.chunksAdded;
+          }
+          return send(res, 200, { roleId: apRoleId, added });
+        } catch (err) { return internalError(res, err); }
       }
       const roleTrainMatch = url.pathname.match(/^\/api\/roles\/([^/]+)\/train$/);
       if (roleTrainMatch) {
@@ -2275,8 +2306,13 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
         try {
           const points = await deps.extractTopicKnowledge({ hostSessionId, topicName });
           let deposited = 0;
-          let skipped = 0;
           const newChunkIds: string[] = [];
+          // Conflicts are NOT silently dropped — collect them (with the
+          // similar existing knowledge) so the user can confirm each.
+          const conflicts: Array<{
+            title: string; body: string; kind: string;
+            similarTo: { title: string; snippet: string; similarity: number } | null;
+          }> = [];
           for (const p of points) {
             const r = await depositDocumentToTopic(deps, roleId, {
               title: p.title,
@@ -2285,9 +2321,21 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
               origin: `deposit-${hostSessionId.slice(0, 8)}-${slugifyPointId(p.title, 'pt')}`,
               sourceLabel: `Deposited from chat ${hostSessionId.slice(0, 8)}`,
             });
-            // Near-duplicate points are silently skipped — already in the topic.
-            if (r.status === 'ok') { deposited += r.chunksAdded; newChunkIds.push(...r.chunkIds); }
-            else skipped += 1;
+            if (r.status === 'ok') {
+              deposited += r.chunksAdded;
+              newChunkIds.push(...r.chunkIds);
+            } else {
+              const c = r.conflicts[0];
+              conflicts.push({
+                title: p.title, body: p.body, kind: p.kind,
+                similarTo: c ? {
+                  title: (c.existingChunkText.split('\n').find((l) => l.trim()) ?? '')
+                    .replace(/^#+\s*/, '').trim().slice(0, 80),
+                  snippet: c.existingChunkText.trim().slice(0, 240),
+                  similarity: c.similarity,
+                } : null,
+              });
+            }
           }
           // Auto-propose a few benchmark cases for the freshest chunks (capped).
           if (deps.proposeBenchmarkCase) {
@@ -2298,7 +2346,7 @@ export function createHttpApi(deps: HttpApiDeps, options: HttpApiOptions = {}): 
           // The individually-suggested candidates for this topic are now
           // represented in it — clear them so they stop showing as pending.
           const cleared = markPointsDepositedForTopic(deps.db, hostSessionId, roleId, topicName, now);
-          return send(res, 200, { roleId, topicName, found: points.length, deposited, skipped, cleared });
+          return send(res, 200, { roleId, topicName, found: points.length, deposited, conflicts, cleared });
         } catch (err) { return internalError(res, err); }
       }
 

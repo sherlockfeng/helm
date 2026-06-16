@@ -1800,3 +1800,29 @@ describe('POST /api/chat-knowledge/:id/accept — near-duplicate force', () => {
     expect(chunks.c).toBe(2);
   });
 });
+
+describe('POST /api/roles/:id/append-points (force-write confirmed conflicts)', () => {
+  it('force-writes the given points into the topic', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('svc', '服务容灾专家', '', 0, ?)`).run(now);
+    const r = await fetchJson('/api/roles/svc/append-points', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ points: [
+        { title: 'A', body: 'recovery-* 响应头跨 IDC 转发出现', kind: 'glossary' },
+        { title: 'B', body: 'SSR 800ms 超时常量在 faasLatencyTimeout', kind: 'runbook' },
+      ] }),
+    });
+    expect(r.status).toBe(200);
+    expect((r.body as { added: number }).added).toBe(2);
+    const chunks = db.prepare(`SELECT COUNT(*) AS c FROM knowledge_chunks WHERE role_id='svc'`).get() as { c: number };
+    expect(chunks.c).toBe(2);
+  });
+
+  it('404s for an unknown role', async () => {
+    const r = await fetchJson('/api/roles/ghost/append-points', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ points: [{ title: 'A', body: 'x', kind: 'other' }] }),
+    });
+    expect(r.status).toBe(404);
+  });
+});

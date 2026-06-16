@@ -1683,10 +1683,12 @@ describe('POST /api/conversations/:id/deposit-topic', () => {
       db, registry,
       extractTopicKnowledge: async ({ topicName }) => {
         sawTopicName = topicName;
+        // Genuinely distinct points — near-identical bodies would trip the
+        // role-library near-duplicate guard and get skipped as conflicts.
         return [
-          { title: 'p-a', body: 'body-a', kind: 'spec' },
-          { title: 'p-b', body: 'body-b', kind: 'runbook' },
-          { title: 'p-c', body: 'body-c', kind: 'other' },
+          { title: 'recovery-500 诊断端点', body: 'reliability-recovery-500 返回 JSON：code / message / traceId 三个字段。', kind: 'spec' },
+          { title: 'recovery 响应头', body: 'recovery-* 响应头只在跨 IDC 转发时出现，网关本地不下发。', kind: 'glossary' },
+          { title: 'SSR 超时常量', body: 'SSR 800ms 默认超时常量定义在 faasLatencyTimeout，单位是毫秒。', kind: 'runbook' },
         ];
       },
     });

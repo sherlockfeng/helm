@@ -64,3 +64,58 @@ jobs:
 
       - name: Web build
         run: pnpm build:web
+
+  # Layer-3 UI e2e: launch the REAL bundled Electron app via Playwright,
+  # walk every primary page, assert nav structure + backend connectivity +
+  # no JS errors, run one interactive flow, and screenshot each page. This
+  # is the only suite that loads the actual compiled renderer, so it's what
+  # catches white-screens / dropped routes / broken pages that neither tsc
+  # nor the happy-dom component tests can see. Kept as a separate job so its
+  # ~slow Electron boot + native rebuild doesn't gate the fast feedback job,
+  # and its failures are isolated. Screenshots upload as an artifact for
+  # eyeballing CI failures without a local re-run.
+  renderer-e2e:
+    name: Renderer e2e (real Electron)
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Produces out/electron/main.cjs (the e2e ENTRY) + web/dist (the
+      # renderer loaded via file://).
+      - name: Build app
+        run: pnpm build
+
+      # electron-rebuilds better-sqlite3 to Electron's ABI, runs the
+      # renderer specs, then rebuilds back to Node's ABI.
+      - name: Renderer e2e
+        run: pnpm test:e2e:renderer
+
+      - name: Upload renderer screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-screenshots
+          path: tests/e2e/renderer/__screenshots__/
+          if-no-files-found: ignore

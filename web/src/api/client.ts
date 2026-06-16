@@ -687,6 +687,11 @@ export const helmApi = {
     request<{ roleId: string; bindable: boolean }>(
       'PATCH', `/api/roles/${encodeURIComponent(roleId)}/bindable`, { bindable },
     ),
+  // Rename a topic's display name (id unchanged).
+  renameRole: (roleId: string, name: string) =>
+    request<{ roleId: string; name: string }>(
+      'PATCH', `/api/roles/${encodeURIComponent(roleId)}/name`, { name },
+    ),
   // PR-β: candidate external-context cache.
   getCandidateContexts: (candidateIds: string[]) =>
     request<{ contexts: Record<string, CandidateExternalContext> }>(

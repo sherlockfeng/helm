@@ -947,6 +947,7 @@ export function RoleActionsMenu({
   onPromote,
   onToggleBindable,
   onDelete,
+  onRename,
   mergeTargets,
   onMerge,
 }: {
@@ -955,11 +956,15 @@ export function RoleActionsMenu({
   onPromote: () => void;
   onToggleBindable: () => void;
   onDelete: () => void;
+  /** Rename the topic's display name (id stays the same). */
+  onRename: (newName: string) => void;
   mergeTargets: { value: string; label: string }[];
   onMerge: (targetRoleId: string, targetName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [newName, setNewName] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -968,11 +973,20 @@ export function RoleActionsMenu({
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         setOpen(false);
         setMergeOpen(false);
+        setRenaming(false);
       }
     }
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  function submitRename(): void {
+    const n = newName.trim();
+    if (!n || n === role.name) { setRenaming(false); return; }
+    onRename(n);
+    setRenaming(false);
+    setOpen(false);
+  }
 
   // Built-ins are seeded from src: no edit/delete/merge actions apply, so the
   // menu would be empty — don't render the trigger at all.
@@ -995,6 +1009,28 @@ export function RoleActionsMenu({
       </button>
       {open && (
         <div role="menu" className="helm-conv-overflow-menu">
+          {renaming ? (
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '4px 6px' }}>
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value.slice(0, 80))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitRename();
+                  else if (e.key === 'Escape') setRenaming(false);
+                }}
+                placeholder="新名称"
+                style={{ fontSize: 12, padding: '2px 6px', width: 150 }}
+              />
+              <button type="button" className="helm-conv-link-button" onClick={submitRename}>保存</button>
+            </div>
+          ) : (
+            <button type="button" role="menuitem"
+              onClick={() => { setNewName(role.name); setRenaming(true); setMergeOpen(false); }}
+              title="改这个 topic 的显示名（id 不变，不影响已有文件/检索）">
+              重命名…
+            </button>
+          )}
           {isExpert && (
             <button type="button" role="menuitem"
               onClick={() => { onUpdateViaChat(); setOpen(false); }}
@@ -1055,6 +1091,7 @@ function RoleCard({
   onToggleBindable,
   onPromote,
   onDelete,
+  onRename,
   mergeTargets,
   onMerge,
 }: {
@@ -1070,6 +1107,8 @@ function RoleCard({
   onPromote: () => void;
   /** Topics cleanup: delete this collection (confirm handled by page). */
   onDelete: () => void;
+  /** Topics: rename the display name (page does the API call + reload). */
+  onRename: (newName: string) => void;
   /** Topics merge: other non-builtin topics this one can be folded into. */
   mergeTargets: { value: string; label: string }[];
   /** Topics merge: user picked a target; page opens the confirm dialog. */
@@ -1128,6 +1167,7 @@ function RoleCard({
             onPromote={onPromote}
             onToggleBindable={onToggleBindable}
             onDelete={onDelete}
+            onRename={onRename}
             mergeTargets={mergeTargets}
             onMerge={onMerge}
           />
@@ -1210,6 +1250,15 @@ function RolesPageBase() {
       toast.error(`切换失败: ${err instanceof ApiError ? err.message : String(err)}`);
     }
   };
+  const rename = async (roleId: string, name: string): Promise<void> => {
+    try {
+      await helmApi.renameRole(roleId, name);
+      toast.success(`已重命名为「${name}」`);
+      reload();
+    } catch (err) {
+      toast.error(`重命名失败: ${err instanceof ApiError ? err.message : String(err)}`);
+    }
+  };
   const pendingCandidates = allRoles.reduce(
     (acc, r) => acc + (r.pendingCandidateCount ?? 0),
     0,
@@ -1265,6 +1314,7 @@ function RolesPageBase() {
           onToggleBindable={() => { void toggleBindable(r); }}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
+          onRename={(name) => { void rename(r.id, name); }}
           mergeTargets={allRoles
             .filter((o) => o.id !== r.id)
             .map((o) => ({ value: o.id, label: o.name }))}
@@ -1287,6 +1337,7 @@ function RolesPageBase() {
           onToggleBindable={() => { void toggleBindable(r); }}
           onPromote={() => setPromoteTarget({ roleId: r.id, name: r.name })}
           onDelete={() => setDeleteTarget({ roleId: r.id, name: r.name })}
+          onRename={(name) => { void rename(r.id, name); }}
           mergeTargets={allRoles
             .filter((o) => o.id !== r.id)
             .map((o) => ({ value: o.id, label: o.name }))}

@@ -1666,6 +1666,8 @@ describe('POST /api/conversations/:id/deposit-topic', () => {
   it('re-extracts the topic, writes every point into it, and clears its pending candidates', async () => {
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('svc', '服务容灾专家', '', 0, ?)`).run(now);
+    // chat_knowledge_points FK → host_sessions; seed the session first.
+    db.prepare(`INSERT INTO host_sessions (id, host, first_seen_at, last_seen_at) VALUES ('s1', 'claude-code', ?, ?)`).run(now, now);
     // Two pending candidates that suggest this topic — should be cleared after deposit.
     insertChatKnowledgePoint(db, {
       id: 'p1', hostSessionId: 's1', title: 'recovery-500 body', body: '规格',

@@ -64,8 +64,8 @@ describe('mergeRole', () => {
 
     // benchmark case targeting A.
     db.prepare(`
-      INSERT INTO benchmark_case (id, name, question, expected_truth, proposed_at)
-      VALUES ('case1', 'c', 'q', 'truth', 0)
+      INSERT INTO benchmark_case (id, name, question, expected_truth, proposed_at, created_at, updated_at)
+      VALUES ('case1', 'c', 'q', 'truth', 0, 0, 0)
     `).run();
     db.prepare(`
       INSERT INTO benchmark_case_target_role (case_id, role_id) VALUES ('case1', 'A')

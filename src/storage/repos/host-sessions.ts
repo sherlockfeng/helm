@@ -356,6 +356,21 @@ export function closeStaleHostSessions(
 }
 
 /**
+ * Combined stale sweep: returns the ids about to be closed (so the caller can
+ * emit `session.closed` events / run a final knowledge sweep), then closes
+ * them. Used by the orchestrator's periodic sweep (not just on boot) so a chat
+ * whose terminal closed mid-run leaves the Active list without a restart.
+ */
+export function sweepStaleHostSessions(
+  db: Database.Database,
+  cutoffIso: string,
+): string[] {
+  const ids = listStaleActiveSessionIds(db, cutoffIso);
+  if (ids.length > 0) closeStaleHostSessions(db, cutoffIso);
+  return ids;
+}
+
+/**
  * Phase 36: hard-delete a host_session row. FK `ON DELETE CASCADE` on
  * `channel_bindings.host_session_id` (and its child message queue) takes
  * care of dependents in one shot — provided `PRAGMA foreign_keys=ON`,

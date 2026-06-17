@@ -94,6 +94,7 @@ import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants
 import {
   closeStaleHostSessions,
   listStaleActiveSessionIds,
+  sweepStaleHostSessions,
   getHostSession,
   setHostSessionDisplayName,
   setHostSessionFirstPrompt,
@@ -1259,6 +1260,23 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   }, REPO_SYNC_CRON_MS);
   repoSyncCron.unref?.();
 
+  // Periodic stale-session sweep. The boot prune above only runs at startup,
+  // so a chat whose terminal closed mid-run lingers as 'active' until the next
+  // restart. Re-run the same prune on a timer (same 24h cutoff) and emit
+  // session.closed so the Active list self-cleans without a restart.
+  const STALE_SWEEP_CRON_MS = 30 * 60 * 1000;
+  function runStaleSweep(): void {
+    const cutoff = new Date(
+      Date.now() - (deps.staleSessionCutoffMs ?? 24 * 60 * 60 * 1000),
+    ).toISOString();
+    const closed = sweepStaleHostSessions(deps.db, cutoff);
+    if (closed.length === 0) return;
+    for (const id of closed) events.emit({ type: 'session.closed', hostSessionId: id });
+    log.info('stale_session_sweep', { data: { count: closed.length, cutoff } });
+  }
+  const staleSweepCron: NodeJS.Timeout = setInterval(runStaleSweep, STALE_SWEEP_CRON_MS);
+  staleSweepCron.unref?.();
+
   // PR 5b: try to bootstrap a real Verification runner from
   // `~/.helm/benchmark/providers.json`. Failures (missing file →
   // null; malformed JSON / unresolvable env → caught + logged) leave
@@ -1715,6 +1733,7 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       // into our closed log files.
       setHybridSearchLogger(null);
       clearInterval(repoSyncCron);
+      clearInterval(staleSweepCron);
       await httpApi.stop();
       if (larkWiring) larkWiring.detach();
       if (larkChannel) await larkChannel.stop();

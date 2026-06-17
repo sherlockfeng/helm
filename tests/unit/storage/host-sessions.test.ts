@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addHostSessionRole,
   closeStaleHostSessions,
+  sweepStaleHostSessions,
   getHostSession,
   listActiveSessions,
   listSessions,
@@ -122,6 +123,18 @@ describe('host sessions', () => {
       upsertHostSession(db, makeSession({ id: 's1', lastSeenAt: fresh }));
       const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       expect(closeStaleHostSessions(db, cutoff)).toBe(0);
+    });
+
+    it('sweepStaleHostSessions returns the closed ids AND closes them (for periodic sweep)', () => {
+      upsertHostSession(db, makeSession({ id: 'old', lastSeenAt: '2025-01-01T00:00:00.000Z' }));
+      upsertHostSession(db, makeSession({ id: 'fresh', lastSeenAt: new Date().toISOString() }));
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const closed = sweepStaleHostSessions(db, cutoff);
+      expect(closed).toEqual(['old']); // ids returned so caller can emit session.closed
+      expect(getHostSession(db, 'old')?.status).toBe('closed');
+      expect(getHostSession(db, 'fresh')?.status).toBe('active');
+      // Idempotent: nothing left to close.
+      expect(sweepStaleHostSessions(db, cutoff)).toEqual([]);
     });
   });
 

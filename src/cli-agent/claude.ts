@@ -161,8 +161,11 @@ export class ClaudeCodeAgent {
       cwd: this.cwd,
       timeout: this.timeoutMs,
       maxBuffer: 16 * 1024 * 1024, // 16 MB — absorbs long agent traces
-      // Inherit env so claude finds its own auth / config.
-      env: process.env,
+      // Inherit env so claude finds its own auth / config. HELM_INTERNAL_LLM=1
+      // marks this as a helm-internal spawn so the user's globally-installed
+      // claude hook SKIPS reporting it — otherwise the role-trainer / assistant
+      // backend turns would show up as 1-turn "Active" conversations.
+      env: { ...process.env, HELM_INTERNAL_LLM: '1' },
     });
 
     return {
@@ -204,7 +207,11 @@ export class ClaudeCodeAgent {
     args.push(serializeTranscript(messages));
 
     return new Promise<ClaudeAgentTurnResult>((resolve, reject) => {
-      const child = this.spawn(this.claudeBin, args, { cwd: this.cwd, env: process.env });
+      // HELM_INTERNAL_LLM=1: see sendConversation — keeps the assistant's own
+      // backend spawns out of the user's captured conversation list.
+      const child = this.spawn(this.claudeBin, args, {
+        cwd: this.cwd, env: { ...process.env, HELM_INTERNAL_LLM: '1' },
+      });
       let acc = '';
       let resultText: string | null = null;
       let stderr = '';

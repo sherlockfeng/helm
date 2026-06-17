@@ -76,6 +76,19 @@ describe('ClaudeCodeAgent — sendConversation args', () => {
     agent.dispose();
   });
 
+  it('marks the spawn HELM_INTERNAL_LLM=1 so the hook skips reporting it as a conversation', async () => {
+    const stub = makeStubExec();
+    const agent = new ClaudeCodeAgent({
+      cwd: tmpHomeDir,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      exec: stub.exec as any,
+    });
+    await agent.sendConversation([{ role: 'user', content: 'hi' }]);
+    const opts = stub.spawns[0]!.options as { env?: Record<string, string> };
+    expect(opts.env?.['HELM_INTERNAL_LLM']).toBe('1');
+    agent.dispose();
+  });
+
   it('writes a tmp MCP-config file containing the helm SSE entry', async () => {
     const stub = makeStubExec();
     const agent = new ClaudeCodeAgent({

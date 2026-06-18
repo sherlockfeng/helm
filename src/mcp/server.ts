@@ -17,6 +17,7 @@ import * as z from 'zod';
 import type Database from 'better-sqlite3';
 
 import { getActiveChats } from './tools/get-active-chats.js';
+import { getConversationDetail } from '../api/conversation-detail.js';
 import { bindToRemoteChannel } from './tools/bind-to-remote-channel.js';
 import { listKnowledgeProviders } from './tools/list-knowledge-providers.js';
 import { proposeBenchmarkCase, updateBenchmarkCase } from './tools/benchmark-cases.js';
@@ -168,6 +169,36 @@ export function createMcpServer(
     description: 'List all currently-active Cursor chats so the agent can discover sibling sessions.',
     inputSchema: {},
   }, async () => jsonResult(getActiveChats(deps.db)));
+
+  server.registerTool('get_conversation', {
+    description:
+      'Read ONE imported conversation by its host session id — the id the user copies from a chat '
+      + 'in helm (the "复制会话引用" button), active OR closed. Use this whenever the user refers to '
+      + '"this/that conversation" or pastes a session reference, so you know exactly which one. '
+      + 'Returns host / cwd / status, the latest turns (truncated), and the pending knowledge points '
+      + 'extracted from it (with their suggested topics) — the material to reorganize / deposit.',
+    inputSchema: { hostSessionId: z.string(), maxTurns: z.number().optional() },
+  }, async ({ hostSessionId, maxTurns }) => {
+    const detail = getConversationDetail(deps.db, hostSessionId);
+    if (!detail) return errorResult(`no conversation with host session id: ${hostSessionId}`);
+    const trunc = (s: string, n = 600): string => (s.length <= n ? s : `${s.slice(0, n)}…`);
+    const turns = detail.turns.slice(-(maxTurns ?? 12)).map((t) => ({
+      user: trunc(t.userPrompt.text),
+      ...(t.assistantResponse ? { assistant: trunc(t.assistantResponse.text) } : {}),
+    }));
+    return jsonResult({
+      hostSessionId,
+      host: detail.session.host,
+      cwd: detail.session.cwd,
+      status: detail.session.status,
+      turnCount: detail.turns.length,
+      turns,
+      knowledgePoints: detail.knowledgePoints.map((p) => ({
+        title: p.title, kind: p.kind,
+        suggestedTopic: p.suggestedRoleId ?? p.suggestedTopicName ?? null,
+      })),
+    });
+  });
 
   if (legacyTools) server.registerTool('bind_to_remote_channel', {
     description:

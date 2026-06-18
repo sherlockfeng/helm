@@ -382,11 +382,18 @@ function ConversationDetailPane({
   }
 
   async function copySessionId(): Promise<void> {
+    // Copy a host-tagged, assistant-ready reference so you can paste it into
+    // the helm 助手 and it knows EXACTLY which conversation (and can read it
+    // via the get_conversation tool) — id alone doesn't say claude/cursor/codex.
+    const k = sourceKey(chat);
+    const hostName = k === 'claude-code' ? 'Claude Code'
+      : k === 'cursor' ? 'Cursor' : k === 'codex' ? 'Codex' : k;
+    const ref = `helm 会话 ${chat.id}（${hostName}${chat.cwd ? `，cwd: ${chat.cwd}` : ''}）`;
     try {
-      await navigator.clipboard.writeText(chat.id);
-      toast.success('Session ID copied');
+      await navigator.clipboard.writeText(ref);
+      toast.success('已复制会话引用，粘贴给 helm 助手即可');
     } catch {
-      toast.error('Copy failed');
+      toast.error('复制失败');
     }
   }
 
@@ -423,7 +430,14 @@ function ConversationDetailPane({
       {/* Single metadata line — session id + cwd + recency, all mono+tertiary.
           Eliminates the previous double-row (session above, cwd below) noise. */}
       <div className="helm-conv-meta-strip">
-        <span className="helm-conv-meta">session {shortId(chat.id, 18)}</span>
+        <button
+          type="button"
+          className="helm-conv-meta helm-conv-meta-copy"
+          onClick={() => { void copySessionId(); }}
+          title="点击复制会话引用（含 id + 来源），粘贴给 helm 助手就知道是这个对话"
+        >
+          session {shortId(chat.id, 18)} ⧉
+        </button>
         {chat.cwd && <><span className="helm-conv-meta-sep">·</span>
           <span className="helm-conv-meta">{chat.cwd}</span></>}
         <span className="helm-conv-meta-sep">·</span>

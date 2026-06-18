@@ -145,6 +145,12 @@ export class ClaudeCodeAgent {
     }
 
     const args: string[] = [
+      // Pre-approve helm's own MCP tools so the headless (`-p`) agent can call
+      // them WITHOUT a permission prompt — print mode can't render one, so an
+      // un-approved tool call just hangs "waiting for a popup that never comes".
+      // Placed first so its variadic value list ends at the next flag (--print)
+      // rather than swallowing the transcript positional arg.
+      '--allowedTools', 'mcp__helm',
       '--print',
       '--output-format', 'text',
       '--mcp-config', this.mcpConfigPath,
@@ -196,6 +202,9 @@ export class ClaudeCodeAgent {
     }
 
     const args: string[] = [
+      // See sendConversation: pre-approve helm's MCP tools so the streaming
+      // headless agent can call them without an unshowable permission prompt.
+      '--allowedTools', 'mcp__helm',
       '--print',
       '--output-format', 'stream-json',
       '--verbose',

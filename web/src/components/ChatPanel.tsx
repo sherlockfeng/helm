@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactElement } from 'react';
+import Markdown from 'react-markdown';
 import type { ChatMsg } from '../hooks/useAgentChat.js';
 
 /**
@@ -39,7 +40,13 @@ export function ChatPanel({
       <div className="helm-chat-messages" ref={listRef}>
         {messages.map((m, i) => (
           <div key={i} className={`helm-chat-msg helm-chat-msg-${m.role}`}>
-            {m.content || (showThinking && i === messages.length - 1 ? '思考中…' : '')}
+            {/* Assistant replies are markdown (bold / code / lists) — render them.
+                User turns stay literal so their text isn't reinterpreted. */}
+            {m.role === 'assistant'
+              ? (m.content
+                ? <div className="helm-chat-md"><Markdown>{m.content}</Markdown></div>
+                : (showThinking && i === messages.length - 1 ? '思考中…' : ''))
+              : m.content}
           </div>
         ))}
         {error && <div className="helm-chat-error">⚠️ {error}</div>}

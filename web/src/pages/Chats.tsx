@@ -83,6 +83,27 @@ function sourceLabel(key: string): string {
   return key.toUpperCase();
 }
 
+/**
+ * Host-tagged, assistant-ready conversation reference. Pasting this into the
+ * helm 助手 tells it exactly which conversation (id alone never says
+ * claude/cursor/codex) and the agent reads it via the get_conversation tool.
+ */
+export function buildSessionRef(chat: { id: string; host?: string; agentKind?: string; cwd?: string }): string {
+  const k = sourceKey(chat);
+  const hostName = k === 'claude-code' ? 'Claude Code'
+    : k === 'cursor' ? 'Cursor' : k === 'codex' ? 'Codex' : k;
+  return `helm 会话 ${chat.id}（${hostName}${chat.cwd ? `，cwd: ${chat.cwd}` : ''}）`;
+}
+
+async function copySessionRef(chat: { id: string; host?: string; agentKind?: string; cwd?: string }): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(buildSessionRef(chat));
+    toast.success('已复制会话引用，粘贴给 helm 助手即可');
+  } catch {
+    toast.error('复制失败');
+  }
+}
+
 const CHAT_FILTERS: { value: 'active' | 'all' | 'closed'; label: string; hint: string }[] = [
   { value: 'active', label: 'Active', hint: '正在进行的会话' },
   { value: 'all', label: '全部', hint: '进行中 + 已结束' },
@@ -261,6 +282,14 @@ function ChatRailRow({
           {sourceLabel(key)}
         </span>
         <span className="helm-rail-row-label">{chatLabel(chat)}</span>
+        <span
+          role="button"
+          tabIndex={0}
+          className="helm-rail-copy"
+          title="复制会话引用（粘给 helm 助手，它就知道是这个对话）"
+          onClick={(e) => { e.stopPropagation(); void copySessionRef(chat); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); void copySessionRef(chat); } }}
+        >⧉</span>
         {chat.status === 'closed' && (
           <span className="muted" style={{ fontSize: 10, marginLeft: 'auto' }} title="已结束的历史会话">已结束</span>
         )}
@@ -382,19 +411,7 @@ function ConversationDetailPane({
   }
 
   async function copySessionId(): Promise<void> {
-    // Copy a host-tagged, assistant-ready reference so you can paste it into
-    // the helm 助手 and it knows EXACTLY which conversation (and can read it
-    // via the get_conversation tool) — id alone doesn't say claude/cursor/codex.
-    const k = sourceKey(chat);
-    const hostName = k === 'claude-code' ? 'Claude Code'
-      : k === 'cursor' ? 'Cursor' : k === 'codex' ? 'Codex' : k;
-    const ref = `helm 会话 ${chat.id}（${hostName}${chat.cwd ? `，cwd: ${chat.cwd}` : ''}）`;
-    try {
-      await navigator.clipboard.writeText(ref);
-      toast.success('已复制会话引用，粘贴给 helm 助手即可');
-    } catch {
-      toast.error('复制失败');
-    }
+    await copySessionRef(chat);
   }
 
   const key = sourceKey(chat);

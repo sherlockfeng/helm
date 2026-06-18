@@ -47,6 +47,14 @@ const KnowledgeConfigSchema = z.object({
   // prefix args (e.g. "codebase git" → spawns `codebase git push …`). Local
   // only (~/.helm/config.json) — never committed to the public repo.
   gitPushCommand: z.string().optional(),
+  // Optional command for creating the MR/PR when contributing knowledge back,
+  // for git hosts whose CLI isn't gh/glab. Whitespace-split into binary +
+  // subcommand prefix; helm appends `--source <branch> --target <base>
+  // --title <t> --body <b>` and runs it in the pushed worktree (e.g.
+  // "<some-cli> mr create"). When set it takes precedence over gh/glab
+  // detection. Local only (~/.helm/config.json) — keeps internal tool names
+  // out of the public repo.
+  mrCommand: z.string().optional(),
 }).strict();
 
 const ServerConfigSchema = z.object({

@@ -12,8 +12,8 @@ import type { PrPlatformRunner } from './publish.js';
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export interface NodePrRunnerOptions {
-  /** Override command lookup ('gh' / 'glab' → custom path). */
-  resolveBinary?: (bin: 'gh' | 'glab') => string;
+  /** Override command lookup (e.g. 'gh' / 'glab' / a custom CLI → custom path). */
+  resolveBinary?: (bin: string) => string;
   timeoutMs?: number;
 }
 

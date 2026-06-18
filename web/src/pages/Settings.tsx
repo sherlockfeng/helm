@@ -628,6 +628,25 @@ function KnowledgeSection({
             style={{ width: 280 }}
           />
         </label>
+        <p className="muted" style={{ marginTop: 14, marginBottom: 6, fontSize: 12 }}>
+          MR 创建命令（可选）：托管平台不是 GitHub/GitLab（无 gh/glab）时，填一个能开 MR 的 CLI
+          （如 <code>codebase mr create</code>）。helm 会在已 push 的分支上追加
+          <code>--source/--target/--title/--body</code> 调用它。留空则按 gh/glab 自动识别。改动需重启。
+        </p>
+        <label className="helm-form-row">
+          <div className="muted">MR 创建命令</div>
+          <input
+            type="text"
+            placeholder="例如 codebase mr create（留空 = gh/glab）"
+            value={draft.knowledge.mrCommand ?? ''}
+            onChange={(e) => update((c) => {
+              const v = e.target.value.trim();
+              if (v) c.knowledge.mrCommand = v;
+              else delete c.knowledge.mrCommand;
+            })}
+            style={{ width: 280 }}
+          />
+        </label>
       </Card>
 
       <Card>

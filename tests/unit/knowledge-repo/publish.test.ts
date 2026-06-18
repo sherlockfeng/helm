@@ -13,6 +13,7 @@ import { KnowledgeRepoManager } from '../../../src/knowledge-repo/manager.js';
 import {
   PublishError,
   checkoutBranch,
+  createPullRequest,
   pickPlatform,
   pushBranch,
 } from '../../../src/knowledge-repo/publish.js';
@@ -104,11 +105,50 @@ describe('pickPlatform', () => {
     expect(pickPlatform('gitlab.com')).toBe('gitlab');
     expect(pickPlatform('gitlab.acme.internal')).toBe('gitlab');
   });
-  it('maps internal byted hosts → gitlab', () => {
-    expect(pickPlatform('code.byted.org')).toBe('gitlab');
+  it('returns null for non-github/gitlab hosts (they use a configured mrCommand)', () => {
+    // De-hardcoded: internal hosts no longer force gitlab/glab — keeps internal
+    // host names out of the repo and lets knowledge.mrCommand handle them.
+    expect(pickPlatform('git.internal.example')).toBeNull();
   });
   it('returns null for unknown hosts', () => {
     expect(pickPlatform('example.com')).toBeNull();
+  });
+});
+
+describe('createPullRequest with a custom mrCommand', () => {
+  it('runs the configured CLI with standard flags and scrapes the MR url', async () => {
+    const calls: Array<{ bin: string; args: readonly string[] }> = [];
+    const run: PrPlatformRunner = async (bin, args) => {
+      calls.push({ bin, args });
+      return { stdout: 'Created: https://git.internal.example/team/wiki/merge_requests/42\n', stderr: '', exitCode: 0 };
+    };
+    const res = await createPullRequest(run, {
+      cwd: '/wt',
+      custom: { bin: 'mr-cli', prefixArgs: ['mr', 'create'] },
+      title: 'feat: publish 3 files',
+      body: 'body text',
+      baseBranch: 'master',
+      headBranch: 'helm/captured/x',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.bin).toBe('mr-cli');
+    expect(calls[0]!.args).toEqual([
+      'mr', 'create',
+      '--source', 'helm/captured/x',
+      '--target', 'master',
+      '--title', 'feat: publish 3 files',
+      '--body', 'body text',
+    ]);
+    expect(res.url).toBe('https://git.internal.example/team/wiki/merge_requests/42');
+  });
+
+  it('throws a PublishError on a non-zero exit', async () => {
+    const run: PrPlatformRunner = async () => ({ stdout: '', stderr: 'not authenticated', exitCode: 1 });
+    await expect(createPullRequest(run, {
+      cwd: '/wt',
+      custom: { bin: 'mr-cli', prefixArgs: ['mr', 'create'] },
+      title: 't', body: 'b', baseBranch: 'master', headBranch: 'h',
+    })).rejects.toThrow(/mr-cli mr create failed/);
   });
 });
 

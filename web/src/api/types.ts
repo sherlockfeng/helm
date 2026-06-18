@@ -152,6 +152,9 @@ export interface HelmConfig {
     /** Optional override for the `git push` command when contributing back to a
      * repo (e.g. "codebase git"). Empty/absent = plain `git`. Needs a restart. */
     gitPushCommand?: string;
+    /** Optional MR-create command for hosts whose CLI isn't gh/glab (e.g.
+     * "codebase mr create"). Empty/absent = gh/glab auto-detect. Needs a restart. */
+    mrCommand?: string;
   };
   docFirst: { enforce: boolean };
   cursor: {

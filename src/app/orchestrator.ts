@@ -1221,10 +1221,18 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       return createNodeGitRunner({ command: bin, prefixArgs });
     })()
     : undefined;
+  // Optional MR-create command (knowledge.mrCommand) for hosts whose CLI isn't
+  // gh/glab. Whitespace-split into binary + subcommand prefix (e.g. the user's
+  // "<cli> mr create"); the manager appends --source/--target/--title/--body.
+  const mrCmd = (liveConfig.knowledge.mrCommand ?? '').trim();
+  const mrCommand = mrCmd.length > 0
+    ? (() => { const [bin, ...prefixArgs] = mrCmd.split(/\s+/); return { bin, prefixArgs }; })()
+    : undefined;
   const knowledgeRepoManager = new KnowledgeRepoManager({
     db: deps.db,
     git: createNodeGitRunner(),
     ...(pushRunner ? { gitPush: pushRunner } : {}),
+    ...(mrCommand ? { mrCommand } : {}),
     // PR 5.5d: gh / glab subprocess runner — best-effort. Publish
     // still pushes the branch when these CLIs are absent; the PR /
     // MR creation step is the only thing that no-ops.

@@ -527,6 +527,44 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     expect(seenByMain).not.toContain('push');
   });
 
+  it('creates the MR via a configured mrCommand when the host is not github/gitlab', async () => {
+    let worktreePath = '';
+    const git: GitRunner = async (args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        worktreePath = String(args[4]);
+        mkdirSync(worktreePath, { recursive: true });
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    const prCalls: Array<{ bin: string; args: readonly string[] }> = [];
+    const prRunner = async (bin: string, args: readonly string[]) => {
+      prCalls.push({ bin, args });
+      return { stdout: 'https://git.internal.example/x/wiki/merge_requests/7\n', stderr: '', exitCode: 0 };
+    };
+
+    const mgr = new KnowledgeRepoManager({
+      db, git, reposRoot, prRunner,
+      mrCommand: { bin: 'mr-cli', prefixArgs: ['mr', 'create'] },
+    });
+    // Non-github/gitlab host → pickPlatform null; only the mrCommand path applies.
+    const repo = await mgr.subscribe('https://git.internal.example/x/wiki');
+    mkdirSync(repo.localPath, { recursive: true });
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-mr','mr','sp',?)`).run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-mr','r-mr','mr.md','Mr','body',?,'public')
+    `).run(new Date().toISOString());
+
+    const result = await mgr.publish({ repoId: repo.id, pointIds: ['p-mr'], message: 'feat: x\n\nbody' });
+
+    expect(prCalls).toHaveLength(1);
+    expect(prCalls[0]!.bin).toBe('mr-cli');
+    expect(prCalls[0]!.args.slice(0, 2)).toEqual(['mr', 'create']);
+    expect(prCalls[0]!.args).toContain('--source');
+    expect(result.prUrl).toBe('https://git.internal.example/x/wiki/merge_requests/7');
+  });
+
   it('still removes the worktree when commit fails partway through', async () => {
     let worktreeAddSeen = false;
     let worktreeRemoveSeen = false;

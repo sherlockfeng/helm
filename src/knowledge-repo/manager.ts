@@ -63,6 +63,7 @@ import {
   pickPlatform,
   pushBranch,
   type CreatePrResult,
+  type CustomMrCommand,
   type PrPlatformRunner,
 } from './publish.js';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -84,6 +85,11 @@ export interface KnowledgeRepoManagerOptions {
    * wrapper CLI without affecting read-only clone/fetch.
    */
   gitPush?: GitRunner;
+  /**
+   * Optional MR-create command for hosts whose CLI isn't gh/glab
+   * (knowledge.mrCommand). When set, takes precedence over gh/glab detection.
+   */
+  mrCommand?: CustomMrCommand;
   /**
    * Root for cloned repos. Default `${HELM_HOME ?? ~/.helm}/repos`.
    * Tests inject a tmpdir so clones don't leak between runs.
@@ -241,6 +247,7 @@ export class KnowledgeRepoManager {
   private readonly lockTails = new Map<string, Promise<unknown>>();
 
   private readonly prRunner?: PrPlatformRunner;
+  private readonly mrCommand?: CustomMrCommand;
   private readonly logger?: Logger;
 
   constructor(opts: KnowledgeRepoManagerOptions) {
@@ -250,6 +257,7 @@ export class KnowledgeRepoManager {
     this.reposRoot = opts.reposRoot ?? defaultReposRoot();
     this.extraInternalHosts = opts.extraInternalHosts ?? [];
     if (opts.prRunner) this.prRunner = opts.prRunner;
+    if (opts.mrCommand) this.mrCommand = opts.mrCommand;
     if (opts.logger) this.logger = opts.logger;
   }
 
@@ -478,16 +486,17 @@ export class KnowledgeRepoManager {
           cwd: worktreePath, branch: branchName, setUpstream: true, force: true,
         });
 
-        // PR creation is best-effort: when the user hasn't installed gh
-        // / glab we still push the branch and let them open the PR by
-        // hand. The branch + commit are already on the remote.
+        // PR creation is best-effort: when the user hasn't installed gh /
+        // glab (or configured an mrCommand) we still push the branch and let
+        // them open the PR by hand. The branch + commit are already on the
+        // remote. A configured mrCommand wins over gh/glab host detection.
         if (this.prRunner) {
           try {
             const platform = pickPlatform(hostFromUrl(repo.url));
-            if (platform) {
+            if (this.mrCommand || platform) {
               const result: CreatePrResult = await createPullRequest(this.prRunner, {
                 cwd: worktreePath,
-                platform,
+                ...(this.mrCommand ? { custom: this.mrCommand } : { platform: platform! }),
                 title: firstLineOf(input.message),
                 body: bodyAfterFirstLine(input.message),
                 baseBranch: repo.branch,

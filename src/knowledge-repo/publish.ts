@@ -110,15 +110,27 @@ export async function pushBranch(
 // ── gh / glab subprocess wrappers ─────────────────────────────────────────
 
 export type PrPlatformRunner = (
-  binary: 'gh' | 'glab',
+  binary: string,
   args: readonly string[],
   cwd?: string,
 ) => Promise<GitRunResult>;
 
+/**
+ * A user-configured MR/PR command for hosts whose CLI isn't gh/glab
+ * (knowledge.mrCommand). `bin` + `prefixArgs` front the call; helm appends the
+ * standard `--source/--target/--title/--body` flags.
+ */
+export interface CustomMrCommand {
+  bin: string;
+  prefixArgs: readonly string[];
+}
+
 export interface CreatePrInput {
   cwd: string;
-  /** Either 'github' or 'gitlab'. We pick the matching CLI. */
-  platform: 'github' | 'gitlab';
+  /** Built-in platform. Omitted when `custom` is provided. */
+  platform?: 'github' | 'gitlab';
+  /** User-configured MR command; takes precedence over `platform`. */
+  custom?: CustomMrCommand;
   title: string;
   body: string;
   /** Branch the PR/MR will land into; defaults to the repo's default. */
@@ -138,6 +150,25 @@ export async function createPullRequest(
   run: PrPlatformRunner,
   input: CreatePrInput,
 ): Promise<CreatePrResult> {
+  // Custom command (knowledge.mrCommand) wins: append the standard flags and
+  // run the user's CLI. No internal tool name is baked into helm.
+  if (input.custom) {
+    const args = [
+      ...input.custom.prefixArgs,
+      '--source', input.headBranch,
+      ...(input.baseBranch ? ['--target', input.baseBranch] : []),
+      '--title', input.title,
+      '--body', input.body,
+    ];
+    const r = await run(input.custom.bin, args, input.cwd);
+    if (r.exitCode !== 0) {
+      throw new PublishError(
+        `${input.custom.bin} mr create failed: ${r.stderr.slice(0, 512)}`,
+        'pr', r.stderr,
+      );
+    }
+    return { url: extractAnyMrUrl(r.stdout) };
+  }
   if (input.platform === 'github') {
     const args = [
       'pr', 'create',
@@ -184,13 +215,23 @@ function extractGlabMrUrl(stdout: string): string {
   return m?.[1] ?? '';
 }
 
-/** Resolve which CLI binary to spawn given a parsed host. */
+/** Best-effort URL scrape for a custom MR CLI of unknown output format. */
+function extractAnyMrUrl(stdout: string): string {
+  return stdout.match(/(https?:\/\/\S+\/(?:merge_requests|pull|-\/merge_requests)\/\d+)/)?.[1]
+    ?? stdout.match(/(https?:\/\/\S+)/)?.[1]
+    ?? '';
+}
+
+/**
+ * Resolve which built-in CLI to spawn given a parsed host. Returns null for
+ * anything that isn't public github/gitlab — those hosts rely on a
+ * user-configured `knowledge.mrCommand` instead, which keeps internal host and
+ * tool names out of this public repo.
+ */
 export function pickPlatform(host: string): 'github' | 'gitlab' | null {
   const h = host.toLowerCase();
   if (h === 'github.com') return 'github';
   if (h === 'gitlab.com') return 'gitlab';
   if (h.startsWith('gitlab.')) return 'gitlab';
-  // Internal hosts (code.byted.org etc.) typically run gitlab too.
-  if (h.endsWith('.byted.org')) return 'gitlab';
   return null;
 }

@@ -444,8 +444,12 @@ export class KnowledgeRepoManager {
           ? { name: 'helm-anonymous', email: 'anonymous@helm.local' }
           : undefined;
         await addAndCommit(this.git, worktreePath, input.message, userOverride);
+        // Force: the branch is regenerated from base in this worktree, and the
+        // captured-publish branch name is deterministic (date + point-set hash),
+        // so a re-sync after a failed/partial attempt must overwrite the prior
+        // remote branch instead of being rejected as non-fast-forward.
         await pushBranch(this.git, {
-          cwd: worktreePath, branch: branchName, setUpstream: true,
+          cwd: worktreePath, branch: branchName, setUpstream: true, force: true,
         });
 
         // PR creation is best-effort: when the user hasn't installed gh

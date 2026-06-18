@@ -7,11 +7,13 @@ function makeStubSpawn() {
   const spawns: { bin: string; args: readonly string[]; options: unknown }[] = [];
   const spawn = (bin: string, args: readonly string[], options: unknown) => {
     spawns.push({ bin, args, options });
+    // Streams need setEncoding() — the runner calls it before subscribing.
+    const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {} });
     const child = new EventEmitter() as EventEmitter & {
       stdout: EventEmitter; stderr: EventEmitter; kill: () => void;
     };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
+    child.stdout = makeStream();
+    child.stderr = makeStream();
     child.kill = () => {};
     // Resolve on the next tick so the caller can attach listeners first.
     queueMicrotask(() => {

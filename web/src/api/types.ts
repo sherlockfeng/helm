@@ -149,6 +149,9 @@ export interface HelmConfig {
     /** Files-as-truth PR-2: <user> segment for chat-captured/ writes
      * into a subscribed llm-wiki repo. Empty/absent = DB-only promote. */
     wikiUsername?: string;
+    /** Optional override for the `git push` command when contributing back to a
+     * repo (e.g. "codebase git"). Empty/absent = plain `git`. Needs a restart. */
+    gitPushCommand?: string;
   };
   docFirst: { enforce: boolean };
   cursor: {

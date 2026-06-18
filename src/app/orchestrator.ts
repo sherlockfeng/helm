@@ -1210,9 +1210,21 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
   // column; this constructor cannot fail because we don't probe git
   // here. Production runs against the user's PATH; tests inject the
   // manager directly via deps when present.
+  // Optional push-command override (knowledge.gitPushCommand): route `git push`
+  // through a wrapper CLI when a direct push to the internal host is unreliable.
+  // Whitespace-split into binary + prefix args ("codebase git" → `codebase git
+  // push …`). Read at boot; changing it needs a helm restart.
+  const pushCmd = (liveConfig.knowledge.gitPushCommand ?? '').trim();
+  const pushRunner = pushCmd.length > 0
+    ? (() => {
+      const [bin, ...prefixArgs] = pushCmd.split(/\s+/);
+      return createNodeGitRunner({ command: bin, prefixArgs });
+    })()
+    : undefined;
   const knowledgeRepoManager = new KnowledgeRepoManager({
     db: deps.db,
     git: createNodeGitRunner(),
+    ...(pushRunner ? { gitPush: pushRunner } : {}),
     // PR 5.5d: gh / glab subprocess runner — best-effort. Publish
     // still pushes the branch when these CLIs are absent; the PR /
     // MR creation step is the only thing that no-ops.

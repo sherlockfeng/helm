@@ -610,6 +610,24 @@ function KnowledgeSection({
             style={{ width: 240 }}
           />
         </label>
+        <p className="muted" style={{ marginTop: 14, marginBottom: 6, fontSize: 12 }}>
+          Git push 命令（可选）：直接 push 到内网仓库不稳定时，可改用内网包装 CLI
+          （如 <code>codebase git</code>）来推。留空即用普通 <code>git</code>。改动需重启 helm。
+        </p>
+        <label className="helm-form-row">
+          <div className="muted">Git push 命令</div>
+          <input
+            type="text"
+            placeholder="例如 codebase git（留空 = git）"
+            value={draft.knowledge.gitPushCommand ?? ''}
+            onChange={(e) => update((c) => {
+              const v = e.target.value.trim();
+              if (v) c.knowledge.gitPushCommand = v;
+              else delete c.knowledge.gitPushCommand;
+            })}
+            style={{ width: 280 }}
+          />
+        </label>
       </Card>
 
       <Card>

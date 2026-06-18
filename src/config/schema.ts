@@ -39,6 +39,14 @@ const KnowledgeConfigSchema = z.object({
   // directory name lands in company-repo MRs, so it's user-entered
   // (Settings → Knowledge), not derived from git config.
   wikiUsername: z.string().optional(),
+  // Optional override for the command used to `git push` when contributing
+  // knowledge back to a subscribed repo. Defaults to plain `git`. Point this at
+  // an internal git wrapper (e.g. a company "codebase" CLI) when a direct
+  // `git push` to the internal host is unreliable or needs special auth. The
+  // string is whitespace-split: the first token is the binary, the rest are
+  // prefix args (e.g. "codebase git" → spawns `codebase git push …`). Local
+  // only (~/.helm/config.json) — never committed to the public repo.
+  gitPushCommand: z.string().optional(),
 }).strict();
 
 const ServerConfigSchema = z.object({

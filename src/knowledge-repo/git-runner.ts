@@ -20,6 +20,11 @@ export interface GitRunResult {
 export interface NodeGitRunnerOptions {
   /** `git` executable. Default `git`. */
   command?: string;
+  /**
+   * Args prepended to every invocation. Lets a wrapper binary front git —
+   * e.g. command `codebase` + prefixArgs `['git']` spawns `codebase git <args>`.
+   */
+  prefixArgs?: readonly string[];
   /** Per-call timeout (ms). Default 60s. */
   timeoutMs?: number;
   /** Env overrides; merged onto process.env. */
@@ -35,12 +40,13 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  */
 export function createNodeGitRunner(opts: NodeGitRunnerOptions = {}) {
   const command = opts.command ?? 'git';
+  const prefixArgs = opts.prefixArgs ?? [];
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return (args: readonly string[], cwd?: string): Promise<GitRunResult> =>
     new Promise<GitRunResult>((resolve) => {
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
-      const child = spawn(command, [...args], {
+      const child = spawn(command, [...prefixArgs, ...args], {
         cwd,
         env: { ...process.env, ...opts.env },
         // We want fully captured streams without an inherited TTY so

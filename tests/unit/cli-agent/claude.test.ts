@@ -69,6 +69,11 @@ describe('ClaudeCodeAgent — sendConversation args', () => {
     expect(args[args.indexOf('--output-format') + 1]).toBe('text');
     expect(args).toContain('--mcp-config');
     expect(args).toContain('--strict-mcp-config');
+    // Pre-approve helm's MCP tools so the headless agent isn't blocked on an
+    // unshowable permission prompt; the value must be followed by a flag (not
+    // the transcript) so it isn't swallowed.
+    expect(args).toContain('--allowedTools');
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__helm');
     // The transcript ("hi") MUST be the last arg so claude treats it as the
     // active prompt, not a flag.
     expect(args[args.length - 1]).toBe('hi');

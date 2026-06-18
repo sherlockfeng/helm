@@ -42,6 +42,22 @@ describe('ChatPanel', () => {
     expect(screen.getByText('思考中…')).toBeInTheDocument();
   });
 
+  it('renders assistant markdown (bold / inline code) as elements, user text literal', () => {
+    const { container } = render(
+      <ChatPanel
+        messages={[
+          { role: 'assistant', content: 'dr-platform 是 **对话**，调用 `list_roles`' },
+          { role: 'user', content: '**保持原样**' },
+        ]}
+        busy={false} error={null} onSend={vi.fn()}
+      />,
+    );
+    expect(container.querySelector('.helm-chat-md strong')?.textContent).toBe('对话');
+    expect(container.querySelector('.helm-chat-md code')?.textContent).toBe('list_roles');
+    // The user bubble keeps the literal asterisks (not parsed).
+    expect(screen.getByText('**保持原样**')).toBeInTheDocument();
+  });
+
   it('shows an error line', () => {
     render(<ChatPanel messages={MSGS} busy={false} error="引擎未配置" onSend={vi.fn()} />);
     expect(screen.getByText(/引擎未配置/)).toBeInTheDocument();

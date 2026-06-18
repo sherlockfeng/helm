@@ -7,6 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../../src/storage/migrations.js';
 import { upsertHostSession } from '../../../src/storage/repos/host-sessions.js';
+import { insertChatKnowledgePoint } from '../../../src/storage/repos/chat-knowledge.js';
 import { KnowledgeProviderRegistry } from '../../../src/knowledge/types.js';
 import { createMcpServer } from '../../../src/mcp/server.js';
 import { CursorAgentSpawner } from '../../../src/spawner/cursor-spawner.js';
@@ -104,6 +105,36 @@ describe('MCP server — tool registration', () => {
     expect(names).toContain('rename_role');
     expect(names).toContain('configure_persona');
     expect(names).toContain('merge_role');
+    expect(names).toContain('get_conversation');
+  });
+});
+
+describe('MCP server — get_conversation (Phase 3)', () => {
+  it('reads a conversation by host session id (host + status + knowledge points)', async () => {
+    await bootServer();
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at, cwd) VALUES ('sess-x','claude-code','active',?,?,'/proj')`).run(now, now);
+    // suggested_role_id has an FK → roles; seed the referenced role.
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('og','OG','',0,?)`).run(now);
+    insertChatKnowledgePoint(db, {
+      id: 'kp1', hostSessionId: 'sess-x', title: 'OG body schema', body: '规格',
+      kind: 'spec', suggestedRoleId: 'og', suggestedTopicName: null, createdAt: now,
+    });
+    const r = await client.callTool({ name: 'get_conversation', arguments: { hostSessionId: 'sess-x' } });
+    const body = parseJsonContent(r as never) as {
+      host: string; status: string; cwd: string;
+      knowledgePoints: Array<{ title: string; suggestedTopic: string | null }>;
+    };
+    expect(body.host).toBe('claude-code');
+    expect(body.status).toBe('active');
+    expect(body.cwd).toBe('/proj');
+    expect(body.knowledgePoints).toEqual([{ title: 'OG body schema', kind: 'spec', suggestedTopic: 'og' }]);
+  });
+
+  it('errors on an unknown session id', async () => {
+    await bootServer();
+    const r = await client.callTool({ name: 'get_conversation', arguments: { hostSessionId: 'ghost' } });
+    expect((r as { isError?: boolean }).isError).toBe(true);
   });
 });
 

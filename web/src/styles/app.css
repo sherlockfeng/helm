@@ -1687,6 +1687,16 @@ code, pre {
   padding: 6px 0 10px;
 }
 .helm-conv-meta-strip .helm-conv-meta { padding: 0; }
+/* Click-to-copy session reference chip (styled like the meta text). */
+button.helm-conv-meta-copy {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+button.helm-conv-meta-copy:hover { color: var(--accent); text-decoration: underline; }
 .helm-conv-meta-sep {
   color: var(--text-tertiary);
   font-size: 11px;

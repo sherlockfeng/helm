@@ -82,6 +82,18 @@ describe('checkoutBranch / pushBranch wrappers', () => {
     await pushBranch(run, { cwd: '/tmp', branch: 'x', setUpstream: true });
     expect(calls[0]).toEqual(['push', '--set-upstream', 'origin', 'x']);
   });
+
+  it('pushBranch force-updates when force is set (re-sync of a deterministic branch)', async () => {
+    const calls: Array<readonly string[]> = [];
+    const run: GitRunner = async (args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    await pushBranch(run, { cwd: '/tmp', branch: 'helm/captured/x', setUpstream: true, force: true });
+    // --force precedes --set-upstream so a previously-pushed branch is overwritten
+    // instead of being rejected as non-fast-forward.
+    expect(calls[0]).toEqual(['push', '--force', '--set-upstream', 'origin', 'helm/captured/x']);
+  });
 });
 
 describe('pickPlatform', () => {

@@ -76,6 +76,15 @@ export interface PushBranchInput {
   remote?: string;
   /** Set upstream tracking on the first push. */
   setUpstream?: boolean;
+  /**
+   * Force-update the remote branch. helm regenerates publish branches from the
+   * base ref in a fresh worktree on every sync, and the branch name is
+   * deterministic (date + hash of the point set). So re-syncing the same
+   * content targets a branch that may already exist remotely from a prior
+   * attempt — a plain push is then rejected as non-fast-forward. Forcing makes
+   * the local regeneration authoritative (it updates the same single MR).
+   */
+  force?: boolean;
 }
 
 export async function pushBranch(
@@ -85,6 +94,7 @@ export async function pushBranch(
   const remote = input.remote ?? 'origin';
   const args = [
     'push',
+    ...(input.force ? ['--force'] : []),
     ...(input.setUpstream ? ['--set-upstream'] : []),
     remote, input.branch,
   ];

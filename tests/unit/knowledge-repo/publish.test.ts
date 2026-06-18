@@ -305,7 +305,12 @@ describe('KnowledgeRepoManager.publish (R-0)', () => {
       stdout: 'https://code.byted.org/team/x/merge_requests/42\n',
       stderr: '', exitCode: 0,
     });
-    const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot, prRunner });
+    // The internal host isn't github/gitlab, so a configured mrCommand drives
+    // the MR-create step; the manager threads the runner's URL back.
+    const mgr = new KnowledgeRepoManager({
+      db, git: run, reposRoot, prRunner,
+      mrCommand: { bin: 'mr-cli', prefixArgs: ['mr', 'create'] },
+    });
     const result = await mgr.publish({
       repoId, pointIds: ['p-1'], message: 'p',
     });

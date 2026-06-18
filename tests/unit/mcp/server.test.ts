@@ -114,6 +114,8 @@ describe('MCP server — get_conversation (Phase 3)', () => {
     await bootServer();
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO host_sessions (id, host, status, first_seen_at, last_seen_at, cwd) VALUES ('sess-x','claude-code','active',?,?,'/proj')`).run(now, now);
+    // suggested_role_id has an FK → roles; seed the referenced role.
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, is_builtin, created_at) VALUES ('og','OG','',0,?)`).run(now);
     insertChatKnowledgePoint(db, {
       id: 'kp1', hostSessionId: 'sess-x', title: 'OG body schema', body: '规格',
       kind: 'spec', suggestedRoleId: 'og', suggestedTopicName: null, createdAt: now,

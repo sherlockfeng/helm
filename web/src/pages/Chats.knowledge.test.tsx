@@ -38,7 +38,7 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() },
 }));
 
-import { KnowledgePointsSection, groupPointsByTopic, seedReorganize } from './Chats.js';
+import { KnowledgePointsSection, groupPointsByTopic, seedReorganize, buildSessionRef } from './Chats.js';
 import type { ChatKnowledgePoint } from '../api/types.js';
 
 function pt(over: Partial<ChatKnowledgePoint> & { id: string }): ChatKnowledgePoint {
@@ -50,6 +50,19 @@ function pt(over: Partial<ChatKnowledgePoint> & { id: string }): ChatKnowledgePo
 }
 
 const ROLES = [{ id: 'svc', name: '服务容灾专家' }, { id: 'goofy', name: 'goofy_ssr' }];
+
+describe('buildSessionRef', () => {
+  it('tags the host (claude-code → Claude Code) and includes id + cwd', () => {
+    const ref = buildSessionRef({ id: 'sess-1', host: 'claude-code', cwd: '/proj' });
+    expect(ref).toContain('sess-1');
+    expect(ref).toContain('Claude Code');
+    expect(ref).toContain('/proj');
+  });
+  it('maps cursor / codex hosts', () => {
+    expect(buildSessionRef({ id: 'x', host: 'cursor' })).toContain('Cursor');
+    expect(buildSessionRef({ id: 'x', host: 'codex' })).toContain('Codex');
+  });
+});
 
 describe('seedReorganize', () => {
   it('names the chat + its suggested topics in the assistant seed', () => {

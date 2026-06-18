@@ -1697,6 +1697,19 @@ button.helm-conv-meta-copy {
   color: var(--text-tertiary);
 }
 button.helm-conv-meta-copy:hover { color: var(--accent); text-decoration: underline; }
+
+/* Per-row copy-session-reference icon in the chat rail (shows on row hover). */
+.helm-rail-copy {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.1s;
+}
+.helm-rail-row:hover .helm-rail-copy { opacity: 0.7; }
+.helm-rail-copy:hover { opacity: 1; color: var(--accent); }
+
 .helm-conv-meta-sep {
   color: var(--text-tertiary);
   font-size: 11px;

@@ -78,6 +78,13 @@ export interface KnowledgeRepoManagerOptions {
   /** System git wrapper. Defaults to createNodeGitRunner() in production. */
   git: GitRunner;
   /**
+   * Optional separate runner for `git push` (the only write to the remote).
+   * Defaults to `git`. Wired from `knowledge.gitPushCommand` so a user whose
+   * direct push to the internal host is unreliable can route pushes through a
+   * wrapper CLI without affecting read-only clone/fetch.
+   */
+  gitPush?: GitRunner;
+  /**
    * Root for cloned repos. Default `${HELM_HOME ?? ~/.helm}/repos`.
    * Tests inject a tmpdir so clones don't leak between runs.
    */
@@ -203,9 +210,27 @@ export class KnowledgeRepoManagerError extends Error {
   override readonly name = 'KnowledgeRepoManagerError';
 }
 
+/**
+ * Network-blip git errors that resolve on their own once connectivity returns
+ * (VPN reconnect, host reachable again). Repos that errored this way should be
+ * retried on a timer instead of staying stuck in `error` until a manual Fetch.
+ * Permanent failures (auth, R-0, bad ref) are deliberately NOT matched — those
+ * would just spin every tick.
+ */
+const TRANSIENT_GIT_ERROR_RE =
+  /broken pipe|connection (?:closed|reset|refused|timed out)|closed by remote host|could ?n['o]t resolve host(?:name)?|temporary failure in name resolution|name or service not known|network is unreachable|early eof|the remote end hung up|rpc failed|ssh: connect to host|operation timed out|failed to connect|timed out/i;
+
+export function isTransientGitError(message?: string | null): boolean {
+  return typeof message === 'string' && TRANSIENT_GIT_ERROR_RE.test(message);
+}
+
+/** How long to wait before re-fetching a repo stuck in a transient error. */
+const TRANSIENT_RETRY_MS = 5 * 60_000;
+
 export class KnowledgeRepoManager {
   private readonly db: Database.Database;
   private readonly git: GitRunner;
+  private readonly gitPush: GitRunner;
   private readonly reposRoot: string;
   private readonly extraInternalHosts: readonly string[];
   /**
@@ -221,6 +246,7 @@ export class KnowledgeRepoManager {
   constructor(opts: KnowledgeRepoManagerOptions) {
     this.db = opts.db;
     this.git = opts.git;
+    this.gitPush = opts.gitPush ?? opts.git;
     this.reposRoot = opts.reposRoot ?? defaultReposRoot();
     this.extraInternalHosts = opts.extraInternalHosts ?? [];
     if (opts.prRunner) this.prRunner = opts.prRunner;
@@ -448,7 +474,7 @@ export class KnowledgeRepoManager {
         // captured-publish branch name is deterministic (date + point-set hash),
         // so a re-sync after a failed/partial attempt must overwrite the prior
         // remote branch instead of being rejected as non-fast-forward.
-        await pushBranch(this.git, {
+        await pushBranch(this.gitPush, {
           cwd: worktreePath, branch: branchName, setUpstream: true, force: true,
         });
 
@@ -886,9 +912,19 @@ export class KnowledgeRepoManager {
    * dead remote can't starve the rest.
    */
   async syncDue(now: number = Date.now()): Promise<SyncSweepOutcome[]> {
-    const due = listKnowledgeRepos(this.db, { status: 'active' }).filter((r) => {
-      if (r.lastFetchedAt == null) return true;
-      return r.lastFetchedAt + r.syncIntervalMinutes * 60_000 <= now;
+    const due = listKnowledgeRepos(this.db, { status: 'all' }).filter((r) => {
+      if (r.status === 'active') {
+        if (r.lastFetchedAt == null) return true;
+        return r.lastFetchedAt + r.syncIntervalMinutes * 60_000 <= now;
+      }
+      // Auto-retry repos stuck in `error` ONLY when the failure looks like a
+      // transient network blip — a manual Fetch shouldn't be needed once the
+      // network recovers. Pace off updatedAt (when the error was recorded) so a
+      // dead-but-reachable remote isn't hammered every tick.
+      if (r.status === 'error' && isTransientGitError(r.lastError)) {
+        return r.updatedAt + TRANSIENT_RETRY_MS <= now;
+      }
+      return false;
     });
 
     const outcomes: SyncSweepOutcome[] = [];

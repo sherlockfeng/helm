@@ -16,7 +16,9 @@ import { runMigrations } from '../../../src/storage/migrations.js';
 import {
   KnowledgeRepoManager,
   KnowledgeRepoManagerError,
+  isTransientGitError,
 } from '../../../src/knowledge-repo/manager.js';
+import { createNodeGitRunner } from '../../../src/knowledge-repo/git-runner.js';
 import type { GitRunner } from '../../../src/knowledge-repo/git.js';
 import {
   getKnowledgeRepo,
@@ -492,6 +494,39 @@ describe('KnowledgeRepoManager.publish (R-2 worktree isolation)', () => {
     expect(cwdSeen['push']).not.toBe(repo.localPath);
   });
 
+  it('routes git push through the separate gitPush runner when provided', async () => {
+    let worktreePath = '';
+    const seenByMain: string[] = [];
+    const seenByPush: string[] = [];
+    const baseRunner = (sink: string[]): GitRunner => async (args) => {
+      const first = String(args[0]);
+      sink.push(first);
+      if (first === 'worktree' && args[1] === 'add') {
+        worktreePath = String(args[4]);
+        mkdirSync(worktreePath, { recursive: true });
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    const git = baseRunner(seenByMain);
+    const gitPush = baseRunner(seenByPush);
+
+    const mgr = new KnowledgeRepoManager({ db, git, gitPush, reposRoot });
+    const repo = await mgr.subscribe('https://github.com/org/pushrepo');
+    mkdirSync(repo.localPath, { recursive: true });
+    db.prepare(`INSERT INTO roles (id, name, system_prompt, created_at) VALUES ('r-push','push','sp',?)`).run(new Date().toISOString());
+    db.prepare(`
+      INSERT INTO knowledge_chunks
+        (id, role_id, source_file, title, chunk_text, created_at, visibility)
+      VALUES ('p-push','r-push','push.md','Push','body',?,'public')
+    `).run(new Date().toISOString());
+
+    await mgr.publish({ repoId: repo.id, pointIds: ['p-push'], message: 'm\n\nbody' });
+
+    // push went through gitPush, NOT the main git runner.
+    expect(seenByPush).toContain('push');
+    expect(seenByMain).not.toContain('push');
+  });
+
   it('still removes the worktree when commit fails partway through', async () => {
     let worktreeAddSeen = false;
     let worktreeRemoveSeen = false;
@@ -776,5 +811,78 @@ describe('KnowledgeRepoManager.syncDue (scheduled pull sweep)', () => {
     expect(outcomes.every((o) => o.error)).toBe(true);
     // Sweep didn't bail after the first failure.
     expect(outcomes.map((o) => o.repoId).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it('auto-retries a transient (network) error after a cooldown, but never a permanent one', async () => {
+    let transientPath = '';
+    let permanentPath = '';
+    const runner: GitRunner = async (args, cwd) => {
+      if (args[0] === 'clone') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args[0] === 'fetch') {
+        if (cwd === transientPath) {
+          return { stdout: '', stderr: 'Connection to code.byted.org closed by remote host. client_loop: send disconnect: Broken pipe', exitCode: 128 };
+        }
+        if (cwd === permanentPath) {
+          return { stdout: '', stderr: 'fatal: Authentication failed for repo', exitCode: 128 };
+        }
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'x\n', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    const mgr = new KnowledgeRepoManager({ db, git: runner, reposRoot });
+    const t = await mgr.subscribe('https://github.com/org/transient');
+    const p = await mgr.subscribe('https://github.com/org/permanent');
+    transientPath = t.localPath; permanentPath = p.localPath;
+    mkdirSync(t.localPath, { recursive: true });
+    mkdirSync(p.localPath, { recursive: true });
+
+    const t0 = Date.now();
+    const first = await mgr.syncDue();
+    expect(first.every((o) => o.error)).toBe(true);
+    expect(getKnowledgeRepo(db, t.id)!.status).toBe('error');
+    expect(getKnowledgeRepo(db, p.id)!.status).toBe('error');
+
+    // Within the cooldown: nothing retried (errored rows aren't immediately re-hit).
+    expect(await mgr.syncDue(t0 + 60_000)).toHaveLength(0);
+
+    // After the cooldown: ONLY the transient-error repo retries; the permanent
+    // (auth) error stays put because it won't fix itself.
+    const retried = await mgr.syncDue(t0 + 6 * 60_000);
+    expect(retried.map((o) => o.repoId)).toEqual([t.id]);
+  });
+});
+
+describe('isTransientGitError', () => {
+  it('matches network blips that resolve on their own', () => {
+    for (const m of [
+      'Connection to code.byted.org closed by remote host. client_loop: send disconnect: Broken pipe',
+      'ssh: Could not resolve hostname code.byted.org: nodename nor servname provided',
+      'fetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF',
+      'Connection timed out',
+      'kex_exchange_identification: read: Connection reset by peer',
+    ]) {
+      expect(isTransientGitError(m)).toBe(true);
+    }
+  });
+  it('does NOT match permanent failures', () => {
+    for (const m of [
+      'fatal: Authentication failed',
+      "R-0: 3 point(s) marked 'internal' cannot be published to a public repo",
+      'fatal: couldn\'t find remote ref refs/heads/missing',
+      undefined,
+      null,
+    ]) {
+      expect(isTransientGitError(m)).toBe(false);
+    }
+  });
+});
+
+describe('createNodeGitRunner prefixArgs (wrapper CLI support)', () => {
+  it('prepends prefix args so a wrapper binary can front git', async () => {
+    // `echo` stands in for a wrapper CLI; prefixArgs land before the call args.
+    const run = createNodeGitRunner({ command: 'echo', prefixArgs: ['git'] });
+    const r = await run(['push', 'origin', 'x']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe('git push origin x');
   });
 });

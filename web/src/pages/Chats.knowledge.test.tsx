@@ -118,7 +118,7 @@ describe('KnowledgePointsSection', () => {
     );
   }
 
-  it('shows a topic only once even with multiple points under it', () => {
+  it('shows a topic only once even with multiple points under it', async () => {
     renderSection([
       pt({ id: '1', suggestedRoleId: 'svc' }),
       pt({ id: '2', suggestedRoleId: 'svc' }),
@@ -126,9 +126,21 @@ describe('KnowledgePointsSection', () => {
     // One group header naming the topic + count, not two separate "服务容灾专家".
     expect(screen.getAllByText(/服务容灾专家/)).toHaveLength(1);
     expect(screen.getByText(/2 条/)).toBeInTheDocument();
-    // Both points still listed under it.
+    // Points are collapsed by default; expand the group to list them.
+    await userEvent.click(screen.getByRole('button', { name: /服务容灾专家/ }));
     expect(screen.getByText('t-1')).toBeInTheDocument();
     expect(screen.getByText('t-2')).toBeInTheDocument();
+  });
+
+  it('collapses the topic points by default and reveals them on click', async () => {
+    renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
+    // Collapsed: the group header shows, but the point title does not.
+    expect(screen.queryByText('t-1')).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: /服务容灾专家/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('t-1')).toBeInTheDocument();
   });
 
   it('one-click 沉淀全部 deposits the whole topic via the API', async () => {
@@ -158,6 +170,7 @@ describe('KnowledgePointsSection', () => {
       .mockResolvedValueOnce({ pointId: '1', status: 'accepted', roleId: 'svc' });
     renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
 
+    await userEvent.click(screen.getByRole('button', { name: /服务容灾专家/ }));
     await userEvent.click(screen.getByRole('button', { name: /采纳/ }));
     // Inline conflict prompt appears (no dead-end error).
     expect(await screen.findByText(/该 topic 里已有近似的知识/)).toBeInTheDocument();
@@ -173,6 +186,7 @@ describe('KnowledgePointsSection', () => {
     dismissKnowledgePoint.mockResolvedValue({ pointId: '1', status: 'dismissed' });
     renderSection([pt({ id: '1', suggestedRoleId: 'svc' })]);
 
+    await userEvent.click(screen.getByRole('button', { name: /服务容灾专家/ }));
     await userEvent.click(screen.getByRole('button', { name: /采纳/ }));
     await userEvent.click(await screen.findByRole('button', { name: '忽略' }));
     expect(dismissKnowledgePoint).toHaveBeenCalledWith('1');

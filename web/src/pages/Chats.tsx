@@ -813,6 +813,9 @@ function TopicGroup({
   onMutated: () => void;
 }): ReactElement {
   const [depositing, setDepositing] = useState(false);
+  // Points list is collapsed by default — the detail pane lists every topic's
+  // points otherwise, which buries the rest of the page. Click the header to open.
+  const [open, setOpen] = useState(false);
   // After a deposit, points that collided with existing knowledge land here
   // for the user to confirm (write anyway) or skip — never silently dropped.
   const [review, setReview] = useState<{
@@ -868,10 +871,19 @@ function TopicGroup({
   return (
     <div className="helm-conv-topic-group">
       <div className="helm-conv-topic-group-head">
-        <span className="helm-conv-topic-group-title">
-          {isNew ? <>新 topic「{group.label}」</> : <strong>{group.label}</strong>}
-          <span className="muted"> · {group.points.length} 条</span>
-        </span>
+        <button
+          type="button"
+          className="helm-conv-topic-group-toggle"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          title={open ? '收起这些知识点' : '展开这些知识点'}
+        >
+          <span className="helm-conv-turn-caret" aria-hidden>{open ? '▼' : '▶'}</span>
+          <span className="helm-conv-topic-group-title">
+            {isNew ? <>新 topic「{group.label}」</> : <strong>{group.label}</strong>}
+            <span className="muted"> · {group.points.length} 条</span>
+          </span>
+        </button>
         <button
           type="button"
           className="helm-conv-link-button"
@@ -907,11 +919,13 @@ function TopicGroup({
           </button>
         </div>
       )}
-      <ul className="helm-conv-candidates">
-        {group.points.map((p) => (
-          <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} hideSuggestion />
-        ))}
-      </ul>
+      {open && (
+        <ul className="helm-conv-candidates">
+          {group.points.map((p) => (
+            <KnowledgePointRow key={p.id} point={p} roles={roles} onDecided={onMutated} hideSuggestion />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -151,6 +151,11 @@ export class ClaudeCodeAgent {
       // Placed first so its variadic value list ends at the next flag (--print)
       // rather than swallowing the transcript positional arg.
       '--allowedTools', 'mcp__helm',
+      // Disable the user's personal Claude Code skills. The helm assistant acts
+      // ONLY through helm's MCP tools; loading the user's skills (security-review,
+      // pr-review-toilet-bot, …) just pollutes context — the model has been seen
+      // regurgitating skill descriptions instead of answering a knowledge question.
+      '--disable-slash-commands',
       '--print',
       '--output-format', 'text',
       '--mcp-config', this.mcpConfigPath,
@@ -205,6 +210,9 @@ export class ClaudeCodeAgent {
       // See sendConversation: pre-approve helm's MCP tools so the streaming
       // headless agent can call them without an unshowable permission prompt.
       '--allowedTools', 'mcp__helm',
+      // See sendConversation: disable the user's personal skills so they can't
+      // leak into the assistant's context / answers.
+      '--disable-slash-commands',
       '--print',
       '--output-format', 'stream-json',
       '--verbose',

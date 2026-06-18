@@ -74,6 +74,9 @@ describe('ClaudeCodeAgent — sendConversation args', () => {
     // the transcript) so it isn't swallowed.
     expect(args).toContain('--allowedTools');
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__helm');
+    // Disable the user's personal skills so they can't leak into the assistant's
+    // context (the model was seen dumping skill descriptions instead of answering).
+    expect(args).toContain('--disable-slash-commands');
     // The transcript ("hi") MUST be the last arg so claude treats it as the
     // active prompt, not a flag.
     expect(args[args.length - 1]).toBe('hi');

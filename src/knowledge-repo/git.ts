@@ -190,14 +190,22 @@ export async function listChangedFiles(
   fromRef: string,
   toRef: string,
 ): Promise<string[]> {
-  const r = await run(['diff', '--name-only', fromRef, toRef], cwd);
+  // core.quotePath=false: without it git octal-escapes non-ASCII paths (CJK
+  // topic dirs) and wraps them in quotes, so the returned strings never match
+  // the UTF-8 paths statusPorcelain reports — collision cleanup then misses
+  // them and the ff-only merge aborts on "untracked files would be overwritten".
+  const r = await run(['-c', 'core.quotePath=false', 'diff', '--name-only', fromRef, toRef], cwd);
   if (r.exitCode !== 0) {
     throw new GitCommandError(
       `git diff --name-only failed: ${r.stderr.slice(0, 512)}`,
       r.stderr, r.exitCode,
     );
   }
-  return r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  return r.stdout.split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    // Defensive unquote: quotePath=false still quotes genuinely special chars.
+    .map((l) => (l.startsWith('"') && l.endsWith('"') ? unquoteGitPath(l) : l));
 }
 
 export interface PorcelainEntry {

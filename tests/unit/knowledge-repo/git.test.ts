@@ -183,14 +183,30 @@ describe('revParseHead', () => {
 });
 
 describe('PR-3 helpers: listChangedFiles / statusPorcelain / showFileAtRef / mergeFfOnly', () => {
-  it('listChangedFiles builds the diff argv and splits non-empty lines', async () => {
+  it('listChangedFiles builds the diff argv (quotePath=false) and splits non-empty lines', async () => {
     const run = scriptedRunner([{
-      match: (args) => args[0] === 'diff',
+      match: (args) => args.includes('diff'),
       result: { stdout: 'a/x.md\n\nchat-captured/u/r/p.md\n' },
     }]);
     const files = await listChangedFiles(run, '/repo', 'HEAD', 'origin/main');
-    expect(run.calls[0]!.args).toEqual(['diff', '--name-only', 'HEAD', 'origin/main']);
+    // -c core.quotePath=false: so non-ASCII (CJK topic dir) paths come back as
+    // UTF-8 that matches statusPorcelain — otherwise collision cleanup misses
+    // them and the ff-only merge aborts.
+    expect(run.calls[0]!.args).toEqual(
+      ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD', 'origin/main'],
+    );
     expect(files).toEqual(['a/x.md', 'chat-captured/u/r/p.md']);
+  });
+
+  it('listChangedFiles keeps UTF-8 CJK paths intact and unquotes any quoted ones', async () => {
+    const run = scriptedRunner([{
+      match: (args) => args.includes('diff'),
+      // quotePath=false emits real UTF-8; a genuinely-special path stays quoted.
+      result: { stdout: 'chat-captured/heyunfeng.feng/og-网关与-decc-打标/cases/og-http-599.md\n"a/has\\"quote.md"\n' },
+    }]);
+    const files = await listChangedFiles(run, '/repo', 'HEAD', 'origin/master');
+    expect(files[0]).toBe('chat-captured/heyunfeng.feng/og-网关与-decc-打标/cases/og-http-599.md');
+    expect(files[1]).toBe('a/has"quote.md');
   });
 
   it('statusPorcelain uses -uall, scopes by pathspec and parses XY codes', async () => {

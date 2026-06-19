@@ -144,6 +144,41 @@ describe('files-as-truth PR-3', () => {
       expect(calls.every((a) => a[0] !== 'merge')).toBe(true);
     });
 
+    it('reconciles when HEAD is behind origin even if this fetch did not move the ref', async () => {
+      // Recovery path: a prior tree-sync failed (collision), so the ref is
+      // already at origin but HEAD is behind. A re-fetch sees moved=false; we
+      // must still reconcile, and the CJK-path collision must clear this time.
+      const repoId = makeRepo();
+      const rel = 'chat-captured/heyunfeng.feng/og-网关与-decc-打标/cases/og-http-599.md';
+      mkdirSync(join(cloneDir, rel, '..'), { recursive: true });
+      writeFileSync(join(cloneDir, rel), 'merged content', 'utf8');
+
+      const calls: Array<readonly string[]> = [];
+      const run: GitRunner = async (args) => {
+        calls.push(args);
+        const cmd = args[0] === '-c' ? args[2] : args[0];
+        if (cmd === 'rev-parse') {
+          // origin/<branch> unchanged across the fetch (moved=false); HEAD behind.
+          const target = args[args.length - 1];
+          return { stdout: (target === 'HEAD' ? 'aaa' : 'bbb') + '\n', stderr: '', exitCode: 0 };
+        }
+        if (cmd === 'fetch') return { stdout: '', stderr: '', exitCode: 0 };
+        if (cmd === 'diff') return { stdout: `${rel}\n`, stderr: '', exitCode: 0 };
+        if (cmd === 'status') return { stdout: `?? ${rel}\n`, stderr: '', exitCode: 0 };
+        if (cmd === 'show') return { stdout: 'merged content', stderr: '', exitCode: 0 };
+        if (cmd === 'merge') return { stdout: '', stderr: '', exitCode: 0 };
+        throw new Error(`unexpected git ${JSON.stringify(args)}`);
+      };
+      const mgr = new KnowledgeRepoManager({ db, git: run, reposRoot });
+      const outcome = await mgr.fetchNow(repoId);
+
+      expect(outcome.moved).toBe(false);   // the ref didn't advance this fetch
+      expect(outcome.treeSynced).toBe(true); // ...but we still reconciled
+      // The CJK-path untracked collision was cleared so ff-only could proceed.
+      expect(existsSync(join(cloneDir, rel))).toBe(false);
+      expect(calls.some((a) => a[0] === 'merge' && a[1] === '--ff-only')).toBe(true);
+    });
+
     it('reports treeSynced=false (status stays active) when the merge fails', async () => {
       const repoId = makeRepo();
       let revParseCount = 0;

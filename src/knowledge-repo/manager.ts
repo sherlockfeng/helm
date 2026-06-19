@@ -346,6 +346,12 @@ export class KnowledgeRepoManager {
         const outcome: FetchOutcome = {
           repoId, moved: result.moved, headSha: result.headSha,
         };
+        // Reconcile the working tree whenever it's BEHIND origin — not only
+        // when this fetch advanced the ref. A prior tree-sync that failed
+        // (e.g. a collision) leaves the ref already updated but HEAD behind;
+        // gating on `moved` alone would then never retry, stranding the clone.
+        const headRev = await this.git(['rev-parse', 'HEAD'], repo.localPath);
+        const behind = headRev.exitCode === 0 && headRev.stdout.trim() !== result.headSha;
         // PR-3: a fetch alone never changed what importNow reads — the
         // working tree stayed at clone-time state. Fast-forward it to
         // the fetched SHA so files-as-truth holds ("the working copy IS
@@ -353,7 +359,7 @@ export class KnowledgeRepoManager {
         // merge would overwrite are cleared first (git refuses
         // otherwise): identical content is just deleted, divergent
         // content is parked under .helm-backup/.
-        if (result.moved) {
+        if (result.moved || behind) {
           try {
             outcome.collisions = await this.clearMergeCollisions(repo);
             await mergeFfOnly(this.git, repo.localPath, `origin/${repo.branch}`);

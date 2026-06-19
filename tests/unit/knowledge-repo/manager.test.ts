@@ -180,9 +180,11 @@ describe('KnowledgeRepoManager.fetchNow', () => {
         result: { stdout: 'sha-old\n', exitCode: 0 } },
       // PR-3: moved=true now triggers a working-tree sync — collision
       // scan (diff + status, both empty here) and the ff-only merge.
-      { match: (args: readonly string[]) => args[0] === 'diff',
+      // Both are now prefixed with `-c core.quotePath=false`, so match by
+      // subcommand presence rather than args[0].
+      { match: (args: readonly string[]) => args.includes('diff'),
         result: { stdout: '', exitCode: 0 } },
-      { match: (args: readonly string[]) => args[0] === 'status',
+      { match: (args: readonly string[]) => args.includes('status'),
         result: { stdout: '', exitCode: 0 } },
       { match: (args: readonly string[]) => args[0] === 'merge',
         result: { exitCode: 0 } },

@@ -142,6 +142,24 @@ describe('createPullRequest with a custom mrCommand', () => {
     expect(res.url).toBe('https://git.internal.example/team/wiki/merge_requests/42');
   });
 
+  it('extracts only the MR url from a compact-JSON CLI payload (no whole-blob leak)', async () => {
+    // codebase mr create prints one compact JSON object; an avatar URL appears
+    // before the real MR URL. We must surface only the merge_requests URL.
+    const payload = JSON.stringify({
+      Author: { Avatar: 'https://cloudapi.bytedance.net/faas/services/ttb6pw/invoke/getEmployeeAvatar?username=heyunfeng.feng&size=150' },
+      Versions: [{ Id: '781715268183639', Number: 1 }],
+      ChangeMode: 'branch',
+      URL: 'https://code.byted.org/tiktok/llm-wiki/merge_requests/61',
+    });
+    const run: PrPlatformRunner = async () => ({ stdout: payload, stderr: '', exitCode: 0 });
+    const res = await createPullRequest(run, {
+      cwd: '/wt',
+      custom: { bin: 'mr-cli', prefixArgs: ['mr', 'create'] },
+      title: 't', body: 'b', baseBranch: 'master', headBranch: 'h',
+    });
+    expect(res.url).toBe('https://code.byted.org/tiktok/llm-wiki/merge_requests/61');
+  });
+
   it('throws a PublishError on a non-zero exit', async () => {
     const run: PrPlatformRunner = async () => ({ stdout: '', stderr: 'not authenticated', exitCode: 1 });
     await expect(createPullRequest(run, {

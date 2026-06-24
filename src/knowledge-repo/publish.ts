@@ -215,10 +215,35 @@ function extractGlabMrUrl(stdout: string): string {
   return m?.[1] ?? '';
 }
 
+// Matches an MR/PR URL. Char class excludes quotes/brackets so it stops at JSON
+// delimiters — a custom CLI often prints one compact JSON blob (no spaces), and
+// a greedy \S+ would swallow the whole thing up to the merge_requests segment.
+const MR_URL_RE = /https?:\/\/[^\s"'<>\\)]+\/(?:merge_requests|pull|-\/merge_requests)\/\d+/;
+
+/** Recursively find the first string value matching `re` in parsed JSON. */
+function findUrlInJson(value: unknown, re: RegExp): string | null {
+  if (typeof value === 'string') return value.match(re)?.[0] ?? null;
+  if (Array.isArray(value)) {
+    for (const v of value) { const hit = findUrlInJson(v, re); if (hit) return hit; }
+    return null;
+  }
+  if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) { const hit = findUrlInJson(v, re); if (hit) return hit; }
+    return null;
+  }
+  return null;
+}
+
 /** Best-effort URL scrape for a custom MR CLI of unknown output format. */
 function extractAnyMrUrl(stdout: string): string {
-  return stdout.match(/(https?:\/\/\S+\/(?:merge_requests|pull|-\/merge_requests)\/\d+)/)?.[1]
-    ?? stdout.match(/(https?:\/\/\S+)/)?.[1]
+  // Structured output (codebase / glab-style CLIs print JSON): pull the MR/PR
+  // URL field out so we don't surface the whole payload.
+  try {
+    const hit = findUrlInJson(JSON.parse(stdout.trim()), MR_URL_RE);
+    if (hit) return hit;
+  } catch { /* not JSON — fall through to regex */ }
+  return stdout.match(MR_URL_RE)?.[0]
+    ?? stdout.match(/https?:\/\/[^\s"'<>\\)]+/)?.[0]
     ?? '';
 }
 

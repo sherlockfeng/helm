@@ -124,6 +124,14 @@ export interface McpServerDeps {
    * server). Absent → merge still updates the index, files just aren't moved.
    */
   mergeCapturedFiles?: (fromRoleId: string, toRoleId: string) => Promise<void>;
+  /**
+   * Files-as-truth: after train_role / update_role write chunks to the DB,
+   * materialize the role's DB-only chunks as chat-captured/<user>/<role>/*.md
+   * so they appear in personal-tier sync instead of living only in the index.
+   * Orchestrator pre-binds this (owns KnowledgeRepoManager + wikiUsername).
+   * Returns the number of files written. Absent → chunks stay DB-only.
+   */
+  captureRoleToWiki?: (roleId: string) => Promise<number>;
 }
 
 export interface McpServerInfo {
@@ -461,9 +469,13 @@ export function createMcpServer(
     },
   }, async ({ roleId, name, documents, baseSystemPrompt }) => {
     const role = await trainRole(deps.db, { roleId, name, documents, baseSystemPrompt, embedFn });
+    // Files-as-truth: persist the new chunks as chat-captured/<user>/<role>/*.md
+    // so they show in personal-tier sync (not DB-only). Best-effort.
+    const wikiFilesWritten = (await deps.captureRoleToWiki?.(role.id)) ?? 0;
     return jsonResult({
       roleId: role.id, name: role.name,
       chunksIndexed: getChunksForRole(deps.db, role.id).length,
+      wikiFilesWritten,
     });
   });
 
@@ -526,12 +538,15 @@ export function createMcpServer(
             + 'existingChunkId, then update_role with force=true).',
         });
       }
+      // Files-as-truth: materialize the appended chunks as chat-captured files.
+      const wikiFilesWritten = (await deps.captureRoleToWiki?.(result.role.id)) ?? 0;
       return jsonResult({
         status: 'applied',
         roleId: result.role.id,
         name: result.role.name,
         chunksAdded: result.chunksAdded,
         totalChunks: getChunksForRole(deps.db, result.role.id).length,
+        wikiFilesWritten,
       });
     } catch (err) {
       return errorResult((err as Error).message);

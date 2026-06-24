@@ -139,6 +139,9 @@ import type {
 } from '../bridge/protocol.js';
 import { buildVerificationRunner } from '../verification/bootstrap.js';
 import { KnowledgeRepoManager } from '../knowledge-repo/manager.js';
+import { captureUnbackedRoleChunks } from '../knowledge-repo/capture-chunks.js';
+import { listKnowledgeRepos } from '../storage/repos/knowledge-repo.js';
+import { listRoles } from '../storage/repos/roles.js';
 import { moveCapturedFilesForMergeBestEffort } from '../knowledge-repo/merge-files.js';
 import { createNodeGitRunner } from '../knowledge-repo/git-runner.js';
 import { createNodePrRunner } from '../knowledge-repo/pr-runner.js';
@@ -1134,6 +1137,28 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     });
   }
 
+  // Files-as-truth: materialize a role's DB-only chunks (e.g. created via the
+  // MCP train_role/update_role path from a coding agent) as chat-captured
+  // files-as-truth so they show in personal-tier sync. Resolves the llm-wiki
+  // repo + wikiUsername at call time. Closure over knowledgeRepoManager (built
+  // below) — fine since callers run after construction.
+  async function captureRoleToWiki(roleId: string): Promise<number> {
+    const repo = listKnowledgeRepos(deps.db, { status: 'active' })
+      .find((r) => r.profile === 'llm-wiki');
+    const username = liveConfig.knowledge.wikiUsername?.trim();
+    if (!repo || !username) return 0;
+    return captureUnbackedRoleChunks({
+      db: deps.db,
+      manager: knowledgeRepoManager,
+      repoId: repo.id,
+      repoLocalPath: repo.localPath,
+      username,
+      roleId,
+      onError: (chunkId, message) =>
+        log.warn('wiki_capture_write_failed', { data: { roleId, chunkId, message } }),
+    });
+  }
+
   // Phase 45: MCP HTTP/SSE factory. Builds a fresh McpServer per SSE
   // connection, reusing the orchestrator's already-built knowledge registry
   // + workflow engine. Spawner / LLM client read liveConfig at factory
@@ -1202,6 +1227,9 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
           }),
         });
       },
+      // Files-as-truth: after train_role/update_role writes DB chunks, also
+      // materialize them as chat-captured files so they sync at the personal tier.
+      captureRoleToWiki,
     });
   }
 
@@ -1279,6 +1307,25 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
     void runRepoSyncSweep();
   }, REPO_SYNC_CRON_MS);
   repoSyncCron.unref?.();
+
+  // Files-as-truth backfill (one-shot, boot, best-effort): topics created via
+  // the MCP train_role/update_role path historically wrote chunks to the DB
+  // only — no chat-captured file — so they never appeared in personal-tier
+  // sync and weren't persisted as files. Materialize any such DB-only chunks
+  // now. Idempotent: chunks already backed by a file (chat-captured or an
+  // imported team-tier doc) are skipped, so it converges after one run.
+  void (async () => {
+    try {
+      const repo = listKnowledgeRepos(deps.db, { status: 'active' })
+        .find((r) => r.profile === 'llm-wiki');
+      if (!repo || !liveConfig.knowledge.wikiUsername?.trim()) return;
+      let total = 0;
+      for (const role of listRoles(deps.db)) total += await captureRoleToWiki(role.id);
+      if (total > 0) log.info('wiki_capture_backfill', { data: { filesWritten: total } });
+    } catch (err) {
+      log.warn('wiki_capture_backfill_failed', { data: { message: (err as Error).message } });
+    }
+  })();
 
   // Periodic stale-session sweep. The boot prune above only runs at startup,
   // so a chat whose terminal closed mid-run lingers as 'active' until the next

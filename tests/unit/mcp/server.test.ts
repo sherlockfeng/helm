@@ -20,9 +20,12 @@ let client: Client;
 
 async function bootServer(
   knowledge?: KnowledgeProviderRegistry,
-  extra?: { spawner?: CursorAgentSpawner },
+  extra?: { spawner?: CursorAgentSpawner; captureRoleToWiki?: (roleId: string) => Promise<number> },
 ): Promise<void> {
-  server = createMcpServer({ db, knowledge, spawner: extra?.spawner });
+  server = createMcpServer({
+    db, knowledge, spawner: extra?.spawner,
+    ...(extra?.captureRoleToWiki ? { captureRoleToWiki: extra.captureRoleToWiki } : {}),
+  });
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test-client', version: '0.0.0' });
   await Promise.all([
@@ -182,6 +185,24 @@ describe('MCP server — topic-structure tools (Phase 2)', () => {
 
     const same = await client.callTool({ name: 'merge_role', arguments: { fromRoleId: 'b', toRoleId: 'b' } });
     expect((same as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it('train_role materializes the new chunks as files-as-truth via captureRoleToWiki', async () => {
+    const captured: string[] = [];
+    await bootServer(undefined, {
+      captureRoleToWiki: async (roleId) => { captured.push(roleId); return 3; },
+    });
+    const r = await client.callTool({
+      name: 'train_role',
+      arguments: {
+        roleId: 'ttp-proxy-expert', name: 'TTP Proxy 专家',
+        documents: [{ filename: 'overview.md', content: 'TTP Proxy 架构总览' }],
+      },
+    });
+    // The DB-only chunks were handed to the files-as-truth writer, and the
+    // count is reported back so the agent knows they'll sync at the personal tier.
+    expect(captured).toEqual(['ttp-proxy-expert']);
+    expect((parseJsonContent(r as never) as { wikiFilesWritten: number }).wikiFilesWritten).toBe(3);
   });
 });
 

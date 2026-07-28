@@ -287,6 +287,43 @@ Cursor hooks 仍写到 `~/.cursor/hooks.json`，由 installer 模块管理。
 
 由 Cursor 为每个 hook 事件 spawn 一个短命 Node 进程，执行 `bin/helm-hook.mjs`。它的职责：
 
+#### 7.2.1 hook 命令的解释器：`$HELM_HOME/bin/helm-hook-node`
+
+host 配置里写的**不是** node 的绝对路径，而是 helm 自己生成的启动器：
+
+```
+'/Users/me/.helm/bin/helm-hook-node' '/path/bin/helm-hook-claude.mjs' --event 'Stop'
+```
+
+原因是两难：
+
+- 写安装时的 `process.execPath`（旧实现）→ 把"当时那个 node"固化进用户配置。
+  homebrew 升级 / nvm 换版本 / 从打包 app 安装（此时 execPath 是 Electron 二进制而非 node）
+  之后，每次 hook 触发都 `No such file or directory`，helm 静默停止采集，而且噪音会盖住真错误。
+  手改也没用——安装器按 marker 重写，下次启动就覆盖回去。
+- 写裸 `node` → macOS GUI 启动（Dock / Spotlight）的 host 进程可能没有用户 shell PATH，解析不到。
+
+启动器把解析推迟到**运行时**，由便宜到贵依次尝试，并缓存结果：
+
+1. `$HELM_HOOK_NODE`（显式覆盖）
+2. `$HELM_HOME/cache/hook-node-path`（上次命中，每次重新校验）
+3. `command -v node`（终端启动：PATH 在）
+4. 版本管理器 / 系统目录（GUI 启动：没有 PATH，直接扫盘）
+   nvm（含 `alias/default` 的部分版本号如 `22.18`）、volta、mise、asdf、fnm、
+   `/opt/homebrew`、`/usr/local`、`/usr/bin`
+5. `$SHELL -lc 'command -v node'`（兜底：走用户 profile）
+
+候选必须**存在 + 可执行 + `--version` 真能答**（悬空 shim 不算），且优先 major ≥ 20
+（`package.json` engines）；只有全机器都没有更新的才退而求其次。一个都没有时，
+启动器输出 host 的中性响应并 `exit 0`——helm 退化为"不采集"，绝不把 host 弄坏；
+诊断写 `$HELM_HOME/logs/hook-launcher.log`，绝不写 stdout（stdout 是 hook 响应）。
+
+启动器每次安装重新生成；host 配置里只有它的路径，所以用户换 node 版本不需要动配置。
+**自愈**：app 启动时若发现已安装的 helm hook 命令不是走启动器（旧版本写的绝对
+node 路径、用户手改的裸 `node`），就地重写为启动器形式——只改已经装了的 event，
+不会替没开启的用户装 hook。见 `src/host/hook-launcher.ts`、
+`repairClaudeCodeHookCommands()` / `repairCursorHookCommands()`。
+
 1. 读 stdin 中 Cursor 给的 hook payload JSON
 2. 通过 bridge socket 把请求发给桌面 app 主进程
 3. 把主进程返回的 JSON 写到 stdout 给 Cursor

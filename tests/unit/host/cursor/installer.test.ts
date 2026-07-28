@@ -7,21 +7,37 @@ import {
   defaultHookBinPath,
   installCursorHooks,
   readHooksConfig,
+  repairCursorHookCommands,
   uninstallCursorHooks,
 } from '../../../../src/host/cursor/installer.js';
+import { hookLauncherPath } from '../../../../src/host/hook-launcher.js';
 
 let tmpDir: string;
 let hooksPath: string;
+let helmHome: string;
+let previousHelmHome: string | undefined;
 const HOOK_BIN = '/abs/path/to/helm-hook';
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'helm-installer-'));
   hooksPath = join(tmpDir, 'hooks.json');
+  // Keep the generated launcher out of the developer's real ~/.helm.
+  helmHome = join(tmpDir, '.helm');
+  previousHelmHome = process.env['HELM_HOME'];
+  process.env['HELM_HOME'] = helmHome;
 });
 
 afterEach(() => {
+  if (previousHelmHome === undefined) delete process.env['HELM_HOME'];
+  else process.env['HELM_HOME'] = previousHelmHome;
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+/** The helm command wired onto `event`. */
+function helmCommand(event: string): string {
+  const entries = (readHooks()['hooks'] as Record<string, Array<{ command: string }>>)[event]!;
+  return entries.find((e) => e.command.includes('helm-hook'))!.command;
+}
 
 function readHooks(): Record<string, unknown> {
   return JSON.parse(readFileSync(hooksPath, 'utf8'));
@@ -178,5 +194,79 @@ describe('defaultHookBinPath (Phase 33)', () => {
 
   it('attack: empty env (no override, no PATH) still returns a string, never throws', () => {
     expect(() => defaultHookBinPath({})).not.toThrow();
+  });
+});
+
+
+/**
+ * Same regression as the Claude installer: `process.execPath` baked into the
+ * command dies with the node that installed it. See src/host/hook-launcher.ts.
+ */
+describe('cursor hook command interpreter', () => {
+  it('does NOT bake the installing process node path into any command', () => {
+    installCursorHooks({ hooksPath }, HOOK_BIN);
+    for (const event of ALL_CURSOR_EVENTS) {
+      expect(helmCommand(event)).not.toContain(process.execPath);
+      expect(helmCommand(event)).toContain(hookLauncherPath(helmHome));
+    }
+  });
+
+  it('keeps the per-event extras (preToolUse matcher, stop loop_limit)', () => {
+    installCursorHooks({ hooksPath }, HOOK_BIN);
+    const hooks = readHooks()['hooks'] as Record<string, Array<Record<string, unknown>>>;
+    expect(hooks['preToolUse']![0]!['matcher']).toBeTruthy();
+    expect(hooks['stop']![0]!['loop_limit']).toBeNull();
+  });
+
+  it('re-install is byte-identical — a working config is never churned', () => {
+    installCursorHooks({ hooksPath }, HOOK_BIN);
+    const first = readFileSync(hooksPath, 'utf8');
+    installCursorHooks({ hooksPath }, HOOK_BIN);
+    expect(readFileSync(hooksPath, 'utf8')).toBe(first);
+  });
+});
+
+describe('repairCursorHookCommands', () => {
+  it('rewrites a dead absolute node path to go through the launcher', () => {
+    writeFileSync(hooksPath, JSON.stringify({
+      version: 1,
+      hooks: {
+        stop: [{ command: `'/opt/homebrew/Cellar/node/26.0.0/bin/node' '${HOOK_BIN}' --event 'stop'` }],
+      },
+    }, null, 2));
+    expect(repairCursorHookCommands({ hooksPath }, HOOK_BIN).repaired).toBe(true);
+    expect(helmCommand('stop')).toContain(hookLauncherPath(helmHome));
+  });
+
+  it('is a no-op on a current config, and never installs for a user with none', () => {
+    expect(repairCursorHookCommands({ hooksPath }, HOOK_BIN).repaired).toBe(false);
+    installCursorHooks({ hooksPath }, HOOK_BIN);
+    const before = readFileSync(hooksPath, 'utf8');
+    expect(repairCursorHookCommands({ hooksPath }, HOOK_BIN).repaired).toBe(false);
+    expect(readFileSync(hooksPath, 'utf8')).toBe(before);
+  });
+
+  it('leaves foreign hooks alone and does not widen the event set', () => {
+    writeFileSync(hooksPath, JSON.stringify({
+      version: 1,
+      hooks: {
+        stop: [
+          { command: '/usr/local/bin/other-tool' },
+          { command: `'/dead/node' '${HOOK_BIN}' --event 'stop'` },
+        ],
+      },
+    }, null, 2));
+    repairCursorHookCommands({ hooksPath }, HOOK_BIN);
+    const cfg = readHooks()['hooks'] as Record<string, Array<{ command: string }>>;
+    expect(cfg['stop']!.map((e) => e.command)).toContain('/usr/local/bin/other-tool');
+    expect(Object.keys(cfg)).toEqual(['stop']);
+  });
+
+  it('malformed hooks.json: reports, does not throw, does not clobber', () => {
+    writeFileSync(hooksPath, 'not json {');
+    const r = repairCursorHookCommands({ hooksPath }, HOOK_BIN);
+    expect(r.repaired).toBe(false);
+    expect(r.reason).toContain('unreadable');
+    expect(readFileSync(hooksPath, 'utf8')).toBe('not json {');
   });
 });

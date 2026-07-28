@@ -79,6 +79,10 @@ export async function bootE2e(options: BootE2eOptions = {}): Promise<E2eHarness>
     httpPort: 0,
     waitPollMs: 500,
     approvalTimeoutMs: 2000,
+    // Booting must never rewrite the developer's real ~/.claude/settings.json
+    // or ~/.cursor/hooks.json. Specs that exercise the repair call it
+    // directly against a tmp config.
+    repairHooksOnBoot: false,
     ...options.deps,
   });
   await app.start();

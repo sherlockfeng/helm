@@ -84,11 +84,13 @@ import {
   installCursorHooks as installCursorHooksFn,
   uninstallCursorHooks as uninstallCursorHooksFn,
   readHooksConfig as readCursorHooksConfig,
+  repairCursorHookCommands,
 } from '../host/cursor/installer.js';
 import {
   installClaudeCodeHooks as installClaudeHooksFn,
   uninstallClaudeCodeHooks as uninstallClaudeHooksFn,
   isClaudeCodeHooksInstalled,
+  repairClaudeCodeHookCommands,
 } from '../host/claude-code/installer.js';
 import { DEFAULT_TIMEOUTS, PATHS, SESSION_CONTEXT_MAX_BYTES } from '../constants.js';
 import {
@@ -164,6 +166,13 @@ export interface HelmAppDeps {
    * exercise the prune deterministically.
    */
   staleSessionCutoffMs?: number;
+  /**
+   * Rewrite host hook commands left behind by older helm builds (absolute
+   * node path → helm launcher) on boot. Defaults to true in production;
+   * tests set it false so a boot never edits the developer's real
+   * `~/.claude/settings.json` / `~/.cursor/hooks.json`.
+   */
+  repairHooksOnBoot?: boolean;
   /**
    * PR 6 (auto-trigger): optional Verification runner. When provided,
    * the API layer enqueues affected cases after a candidate is
@@ -1760,6 +1769,34 @@ export function createHelmApp(deps: HelmAppDeps): HelmAppHandle {
       await httpApi.start();
       log.info('http_api_started', { data: { port: httpApi.port() } });
       // Phase 80 (PR B): start the mirror runner. Installs the trigger
+
+      // Hook self-heal: installs written by older helm builds baked the
+      // installing process's absolute node path into the host config. When
+      // that node is upgraded or uninstalled every hook invocation dies with
+      // "No such file or directory" — helm stops observing, and the noise
+      // masks real errors in the agent's output. Rewrite those commands to
+      // go through helm's launcher, which resolves node at run time.
+      // Best-effort: never blocks boot, never installs for a user who hasn't
+      // opted in (only rewrites hooks that are already there).
+      if (deps.repairHooksOnBoot !== false) {
+        try {
+          for (const [agent, repair] of [
+            ['claude-code', repairClaudeCodeHookCommands],
+            ['cursor', repairCursorHookCommands],
+          ] as const) {
+            const result = repair();
+            if (result.repaired) {
+              log.info('boot_hook_command_repaired', {
+                data: { agent, reason: result.reason ?? null },
+              });
+            }
+          }
+        } catch (err) {
+          log.warn('boot_hook_command_repair_failed', {
+            data: { message: (err as Error).message },
+          });
+        }
+      }
 
       // R-18 wire-up: auto-register helm's MCP server in the agent's
       // config when the user opted in via Settings › Engines. Runs

@@ -81,9 +81,14 @@ set -u
 
 # A GUI-launched host can hand us an environment with an empty PATH — which
 # would take /bin/mkdir, /usr/bin/date and friends with it. Guarantee the
-# system dirs (plus the two usual package-manager bins) are searchable, while
-# keeping whatever the user's PATH had in front.
-PATH="\${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+# system dirs are searchable, keeping whatever the host gave us in front.
+#
+# The host's ORIGINAL PATH is kept separately: it is the evidence for "this
+# host was launched from a terminal, so the user's own node is on PATH". Node
+# lookup must use that, not the floor we just added, or the floor would decide
+# which node runs and quietly outrank the version manager the user installed.
+ORIGINAL_PATH="\${PATH:-}"
+PATH="\${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 HELM_HOME_DIR="\${HELM_HOME:-$HOME/.helm}"
@@ -142,8 +147,9 @@ helm_scan() {
   helm_try "\${HELM_HOOK_NODE:-}"
   helm_try "$(helm_first_line "$CACHE_FILE")"
 
-  # Terminal launch: the host inherited the user's PATH.
-  helm_try "$(command -v node 2>/dev/null)"
+  # Terminal launch: the host inherited the user's PATH. Subshell so the
+  # lookup sees only the host's PATH, not the utility floor above.
+  helm_try "$(PATH="$ORIGINAL_PATH"; command -v node 2>/dev/null)"
 
   # GUI launch (Dock / Spotlight): no user PATH. Probe where node lives.
   helm_try "$NVM_ROOT/current/bin/node"

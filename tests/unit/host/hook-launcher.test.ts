@@ -100,6 +100,11 @@ function guiEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     // specs. Production keeps benefiting from that default; the specs must
     // not depend on it.
     PATH: join(tmpDir, 'empty-bin'),
+    // Likewise SHELL: leaving it out does NOT disable the login-shell
+    // fallback — bash fills SHELL in from the user's login shell, so the
+    // probe would run the CI machine's profile and resolve whatever node
+    // that puts on PATH. Specs that want the fallback set it explicitly.
+    SHELL: '/nonexistent/sh',
     ...overrides,
   };
 }
@@ -236,6 +241,20 @@ describe('hook launcher node resolution', () => {
     const r = runLauncher(guiEnv(), ['--event', 'Stop']);
     expect(r.status).toBe(0);
     expect(readFileSync(join(helmHome, 'cache', 'hook-node-path'), 'utf8').trim()).toBe(system);
+  });
+
+  it('last resort: asks the login shell, which sources the user profile', () => {
+    // The nvm-only setup that nothing on disk reveals: node lives wherever
+    // the user's profile puts it, and only their shell knows.
+    const profileNode = join(tmpDir, 'profile-only', 'node');
+    fakeNode(profileNode, 'v22.18.0');
+    const fakeShell = join(tmpDir, 'fake-login-shell');
+    writeFileSync(fakeShell, `#!/bin/sh\nprintf '%s\\n' '${profileNode}'\n`, 'utf8');
+    chmodSync(fakeShell, 0o755);
+
+    const r = runLauncher(guiEnv({ SHELL: fakeShell }), ['--event', 'Stop']);
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(helmHome, 'cache', 'hook-node-path'), 'utf8').trim()).toBe(profileNode);
   });
 
   it('HELM_HOOK_NODE overrides everything', () => {

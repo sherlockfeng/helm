@@ -93,6 +93,13 @@ function guiEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     HELM_HOME: helmHome,
     NVM_DIR: join(tmpDir, '.nvm'),
     HELM_HOOK_PROBE_ROOT: join(tmpDir, 'sandbox-root'),
+    // An empty search path, spelled out. Passing NO PATH doesn't mean "no
+    // PATH": macOS /bin/sh substitutes a default (/usr/local/bin, /usr/bin,
+    // …) that the script can't tell apart from one the host set, so a
+    // machine with node in one of those dirs would silently decide these
+    // specs. Production keeps benefiting from that default; the specs must
+    // not depend on it.
+    PATH: join(tmpDir, 'empty-bin'),
     ...overrides,
   };
 }
@@ -292,9 +299,11 @@ describe('hook launcher — attack cases', () => {
       .toContain('no usable node found');
   });
 
-  it('survives a completely empty environment (no PATH: mkdir/date/sort unavailable)', () => {
-    // env -i style. Everything the script needs beyond builtins must come
-    // from the PATH floor it sets itself.
+  it('survives a completely empty environment (env -i: mkdir/date/sort must still work)', () => {
+    // Everything the script needs beyond shell builtins has to come from the
+    // PATH floor it sets itself. Which node wins here is deliberately NOT
+    // asserted: with PATH unset, the shell substitutes its own default, so
+    // the answer depends on the machine. That it runs at all is the point.
     fakeNode(join(tmpDir, '.nvm', 'versions', 'node', 'v22.18.0', 'bin', 'node'), 'v22.18.0');
     const r = runLauncher({
       HOME: tmpDir,
@@ -303,7 +312,8 @@ describe('hook launcher — attack cases', () => {
       HELM_HOOK_PROBE_ROOT: join(tmpDir, 'sandbox-root'),
     }, ['--event', 'Stop']);
     expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ node: process.execPath });
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
+    expect(readFileSync(join(helmHome, 'cache', 'hook-node-path'), 'utf8').trim()).not.toBe('');
   });
 
   it('an unwritable HELM_HOME (no cache, no log) still runs the hook', () => {

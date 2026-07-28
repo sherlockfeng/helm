@@ -12,6 +12,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { HOOK_MARKER, PATHS } from '../../constants.js';
+import { hookInterpreterPrefix, shellQuote as quote } from '../hook-launcher.js';
 import type { HostInstallOptions, HostInstallResult } from '../types.js';
 
 /** Cursor hook events that map to host_approval_request (intercept points). */
@@ -46,17 +47,17 @@ interface HooksConfig {
 interface InstallContext {
   hooksPath: string;
   hookBinPath: string;
+  interpreter: string;
   events: readonly string[];
   timeoutSeconds: number;
 }
 
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function hookCommand(hookBinPath: string, event: string): string {
-  // Use absolute Node binary path so PATH lookup never matters from Cursor's spawn env.
-  return `${quote(process.execPath)} ${quote(hookBinPath)} --event ${quote(event)}`;
+function hookCommand(ctx: InstallContext, event: string): string {
+  // helm's own launcher, NOT process.execPath: Cursor's spawn env may lack
+  // the user's PATH (GUI launch), but an absolute node path baked in at
+  // install time dies the next time that node is upgraded or removed. See
+  // src/host/hook-launcher.ts.
+  return `${ctx.interpreter} ${quote(ctx.hookBinPath)} --event ${quote(event)}`;
 }
 
 export function readHooksConfig(hooksPath: string): HooksConfig {
@@ -101,7 +102,7 @@ function removeHelmFromEvent(config: HooksConfig, event: string): void {
 
 function desiredHook(ctx: InstallContext, event: string): HookEntry {
   const hook: HookEntry = {
-    command: hookCommand(ctx.hookBinPath, event),
+    command: hookCommand(ctx, event),
     timeout: ctx.timeoutSeconds,
     failClosed: false,
   };
@@ -163,12 +164,18 @@ function resolveRepoHookBin(): string | null {
   return null;
 }
 
-export function installCursorHooks(options: HostInstallOptions = {}, hookBinPath?: string): HostInstallResult {
+export function installCursorHooks(
+  options: HostInstallOptions = {},
+  hookBinPath?: string,
+  helmHome?: string,
+): HostInstallResult {
   const hooksPath = options.hooksPath ?? PATHS.cursorHooks;
   const events = options.events?.length ? options.events : (ALL_CURSOR_EVENTS as readonly string[]);
   const ctx: InstallContext = {
     hooksPath,
     hookBinPath: hookBinPath ?? defaultHookBinPath(),
+    // Writes/refreshes $HELM_HOME/bin/helm-hook-node as a side effect.
+    interpreter: hookInterpreterPrefix(helmHome),
     events,
     timeoutSeconds: options.timeoutSeconds ?? 86_400,
   };
@@ -181,6 +188,39 @@ export function installCursorHooks(options: HostInstallOptions = {}, hookBinPath
   }
   writeHooksConfig(config, hooksPath);
   return { hooksPath, events: [...events] };
+}
+
+/**
+ * Cursor twin of `repairClaudeCodeHookCommands` — see that function for the
+ * full story. Rewrites helm hook entries whose command still starts with an
+ * absolute node path (written by older helm builds) so they go through the
+ * launcher instead. No-op when nothing is installed or everything is current.
+ */
+export function repairCursorHookCommands(
+  options: HostInstallOptions = {},
+  hookBinPath?: string,
+  helmHome?: string,
+): { repaired: boolean; reason?: string } {
+  const hooksPath = options.hooksPath ?? PATHS.cursorHooks;
+  if (!existsSync(hooksPath)) return { repaired: false };
+  let config: HooksConfig;
+  try { config = readHooksConfig(hooksPath); }
+  catch (err) { return { repaired: false, reason: `unreadable: ${(err as Error).message}` }; }
+
+  const prefix = hookInterpreterPrefix(helmHome);
+  const staleEvents = Object.entries(config.hooks)
+    .filter(([, entries]) => Array.isArray(entries)
+      && entries.some((e) => isHelmHook(e) && !e.command.startsWith(`${prefix} `)))
+    .map(([event]) => event);
+  if (staleEvents.length === 0) return { repaired: false };
+
+  // Only the events already wired — a repair must not widen the install.
+  installCursorHooks(
+    { ...options, hooksPath, events: options.events ?? staleEvents },
+    hookBinPath,
+    helmHome,
+  );
+  return { repaired: true, reason: `stale interpreter on: ${staleEvents.join(', ')}` };
 }
 
 export function uninstallCursorHooks(options: HostInstallOptions = {}): HostInstallResult {

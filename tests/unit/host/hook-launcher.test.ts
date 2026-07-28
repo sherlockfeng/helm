@@ -77,10 +77,24 @@ function runLauncher(env: NodeJS.ProcessEnv, args: string[] = []): RunResult {
   }
 }
 
-/** GUI launch: no PATH, no SHELL — the environment Claude Code hands a hook
- *  when it was itself started from the Dock. */
+/**
+ * GUI launch: no PATH, no SHELL — the environment Claude Code hands a hook
+ * when it was itself started from the Dock.
+ *
+ * HELM_HOOK_PROBE_ROOT sandboxes the machine-wide candidates (/opt/homebrew,
+ * /usr/local, /usr) under the tmp dir. Without it these specs would depend on
+ * whether the machine running them happens to have node installed there —
+ * CI does, most dev macs don't, and "no node anywhere" would quietly become
+ * "node found" on one of them.
+ */
 function guiEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { HOME: tmpDir, HELM_HOME: helmHome, NVM_DIR: join(tmpDir, '.nvm'), ...overrides };
+  return {
+    HOME: tmpDir,
+    HELM_HOME: helmHome,
+    NVM_DIR: join(tmpDir, '.nvm'),
+    HELM_HOOK_PROBE_ROOT: join(tmpDir, 'sandbox-root'),
+    ...overrides,
+  };
 }
 
 describe('hook launcher generation', () => {
@@ -102,6 +116,14 @@ describe('hook launcher generation', () => {
     const body = readFileSync(launcher, 'utf8');
     expect(body).not.toMatch(/^\s*local\s/m);
     expect(body).not.toMatch(/\[\[/);
+  });
+
+  it('probes the real machine-wide install dirs (the sandbox prefix is empty by default)', () => {
+    const body = readFileSync(launcher, 'utf8');
+    for (const dir of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
+      expect(body).toContain(dir);
+    }
+    expect(body).toContain('PROBE_ROOT="${HELM_HOOK_PROBE_ROOT:-}"');
   });
 
   it('never bakes in the running process node path (that is the bug being fixed)', () => {
@@ -190,6 +212,25 @@ describe('hook launcher node resolution', () => {
       .toContain('v16.20.2');
   });
 
+  it('a version-manager node outranks a system node in the sandbox root', () => {
+    // The user installed nvm on purpose; an incidental /usr/bin/node shouldn't
+    // win just because it sits earlier in the candidate list.
+    fakeNode(join(tmpDir, 'sandbox-root', 'usr', 'bin', 'node'), 'v22.0.0');
+    fakeNode(join(tmpDir, '.nvm', 'versions', 'node', 'v22.18.0', 'bin', 'node'), 'v22.18.0');
+
+    runLauncher(guiEnv(), ['--event', 'Stop']);
+    expect(readFileSync(join(helmHome, 'cache', 'hook-node-path'), 'utf8'))
+      .toContain(join('.nvm', 'versions', 'node', 'v22.18.0'));
+  });
+
+  it('falls back to the system node when no version manager has one', () => {
+    const system = join(tmpDir, 'sandbox-root', 'opt', 'homebrew', 'bin', 'node');
+    fakeNode(system, 'v24.0.0');
+    const r = runLauncher(guiEnv(), ['--event', 'Stop']);
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(helmHome, 'cache', 'hook-node-path'), 'utf8').trim()).toBe(system);
+  });
+
   it('HELM_HOOK_NODE overrides everything', () => {
     fakeNode(join(tmpDir, '.nvm', 'versions', 'node', 'v22.18.0', 'bin', 'node'), 'v22.18.0');
     const override = join(tmpDir, 'custom', 'node');
@@ -255,7 +296,12 @@ describe('hook launcher — attack cases', () => {
     // env -i style. Everything the script needs beyond builtins must come
     // from the PATH floor it sets itself.
     fakeNode(join(tmpDir, '.nvm', 'versions', 'node', 'v22.18.0', 'bin', 'node'), 'v22.18.0');
-    const r = runLauncher({ HOME: tmpDir, HELM_HOME: helmHome, NVM_DIR: join(tmpDir, '.nvm') }, ['--event', 'Stop']);
+    const r = runLauncher({
+      HOME: tmpDir,
+      HELM_HOME: helmHome,
+      NVM_DIR: join(tmpDir, '.nvm'),
+      HELM_HOOK_PROBE_ROOT: join(tmpDir, 'sandbox-root'),
+    }, ['--event', 'Stop']);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({ node: process.execPath });
   });

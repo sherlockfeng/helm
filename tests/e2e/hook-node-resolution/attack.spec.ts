@@ -200,6 +200,10 @@ describe('hook-node-resolution attack', () => {
       NVM_DIR: join(barrenHome, '.nvm'),
       PATH: join(barrenHome, 'nothing'),
       SHELL: '/nonexistent/sh',
+      // Sandbox the machine-wide candidates too, otherwise this spec means
+      // "the CI runner has no /opt/homebrew/bin/node", which is not a thing
+      // we control.
+      HELM_HOOK_PROBE_ROOT: join(barrenHome, 'sandbox-root'),
       HELM_HOME: helmHome,
       HELM_BRIDGE_SOCKET: harness.socketPath,
     });

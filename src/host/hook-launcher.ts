@@ -89,6 +89,10 @@ export PATH
 HELM_HOME_DIR="\${HELM_HOME:-$HOME/.helm}"
 CACHE_FILE="$HELM_HOME_DIR/cache/hook-node-path"
 NVM_ROOT="\${NVM_DIR:-$HOME/.nvm}"
+# Prefix for the machine-wide candidates (/opt/homebrew, /usr/local, /usr).
+# Empty in production; tests point it at a sandbox so a node that happens to
+# be installed on the test machine can't decide the outcome.
+PROBE_ROOT="\${HELM_HOOK_PROBE_ROOT:-}"
 NODE=""
 MIN_MAJOR=0
 
@@ -156,20 +160,22 @@ helm_scan() {
     done
   fi
 
+  # Any other nvm-managed version, newest first. Still a version manager the
+  # user actively installed, so it outranks whatever system node happens to
+  # be lying around.
+  for _v in $(helm_nvm_versions); do
+    helm_try "$NVM_ROOT/versions/node/$_v/bin/node"
+  done
+
   for _c in "$HOME/.volta/bin/node" \\
             "$HOME/.local/share/mise/shims/node" \\
             "$HOME/.asdf/shims/node" \\
             "$HOME/.local/share/fnm/aliases/default/bin/node" \\
             "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \\
-            /opt/homebrew/bin/node \\
-            /usr/local/bin/node \\
-            /usr/bin/node; do
+            "$PROBE_ROOT/opt/homebrew/bin/node" \\
+            "$PROBE_ROOT/usr/local/bin/node" \\
+            "$PROBE_ROOT/usr/bin/node"; do
     helm_try "$_c"
-  done
-
-  # Any nvm-managed version at all, newest first, rather than giving up.
-  for _v in $(helm_nvm_versions); do
-    helm_try "$NVM_ROOT/versions/node/$_v/bin/node"
   done
 }
 
